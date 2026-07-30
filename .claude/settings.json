@@ -1,14 +1,13 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "Stop": [
       {
-        "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "statusMessage": "Running Biome...",
-            "timeout": 30,
-            "command": "jq -r '.tool_response.filePath // .tool_input.file_path' | { read -r f; case \"$f\" in *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.json|*.jsonc) bunx biome check --write \"$f\";; esac; } 2>/dev/null || true"
+            "statusMessage": "Running CI gate...",
+            "timeout": 180,
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/ci-gate.sh\""
           }
         ]
       }
