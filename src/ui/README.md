@@ -5,11 +5,14 @@ paints to a terminal instead of the DOM. `Box` is flexbox (via Yoga), `Text` is 
 that may contain strings, and hooks like `useInput` replace DOM events.
 
 ```bash
-bun run ui        # launch
-bun run ui:dev    # launch with hot reload
+bun run ui              # launch
+bun run ui:dev          # launch with hot reload
+bun run ui --tab 2      # open on a given tab
 ```
 
-Needs a real TTY — `bun run ui | cat` exits with a message instead of crashing inside `useInput`.
+The entry point lives at `src/cli.tsx` (see `src/cli/`), which parses flags and renders `App`;
+this directory is the component library it renders. Needs a real TTY — `bun run ui | cat` exits
+with a message instead of crashing inside `useInput`.
 
 ## Keys
 
@@ -25,7 +28,6 @@ Needs a real TTY — `bun run ui | cat` exits with a message instead of crashing
 ## Layout
 
 ```
-cli.tsx           entry: TTY guard + render(<App />)
 App.tsx           shell: tabs, global keys, status bar
 theme.ts          shared colors
 components/       Tabs, StatusBar, SelectList, ProgressBar, Spinner

@@ -1,4 +1,4 @@
-export { App } from "./App.tsx";
+export { App, TAB_LABELS } from "./App.tsx";
 export { ProgressBar } from "./components/ProgressBar.tsx";
 export type { SelectItem } from "./components/SelectList.tsx";
 export { SelectList } from "./components/SelectList.tsx";

@@ -1,14 +1,18 @@
 {
   "name": "typescript-test",
+  "version": "0.1.0",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
+  "bin": {
+    "typescript-test": "./src/cli.tsx"
+  },
   "scripts": {
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
-    "ui": "bun src/ui/cli.tsx",
-    "ui:dev": "bun --watch src/ui/cli.tsx",
+    "ui": "bun src/cli.tsx",
+    "ui:dev": "bun --watch src/cli.tsx",
     "build": "bun build src/index.ts --outdir dist --target bun --minify --sourcemap",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
