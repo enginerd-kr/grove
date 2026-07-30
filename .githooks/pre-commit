@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+# Runs Biome (format + safe lint fixes + import sorting) on staged files.
+#
+# Enabled by `git config core.hooksPath .githooks`, which the package.json
+# "prepare" script runs automatically on `bun install`. To check it is active:
+#   git config core.hooksPath   ->  .githooks
+#
+# Caveat: if a file has BOTH staged and unstaged changes, Biome rewrites the
+# working-tree copy and the `git add` below stages those unstaged changes too.
+# Stage the whole file, or commit with --no-verify and fix up manually.
+set -e
+
+# Prefer the local binary: git hooks launched from GUI clients often have a
+# minimal PATH that does not include bun.
+# Held as a word-split command prefix, not a shell function: xargs spawns a new
+# process and cannot see functions.
+if [ -x "./node_modules/.bin/biome" ]; then
+  BIOME="./node_modules/.bin/biome"
+elif command -v bunx >/dev/null 2>&1; then
+  BIOME="bunx biome"
+else
+  echo "pre-commit: biome not found - run 'bun install' first" >&2
+  exit 1
+fi
+
+# -z keeps paths with spaces intact; ACMR skips deletions.
+staged=$(git diff --cached --name-only --diff-filter=ACMR -z |
+  tr '\0' '\n' |
+  grep -E '\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc)$' || true)
+
+[ -z "$staged" ] && exit 0
+
+# A non-zero exit here (unfixable lint error) aborts the commit via `set -e`.
+# shellcheck disable=SC2086  # $BIOME is an intentional command prefix
+printf '%s\n' "$staged" | tr '\n' '\0' | xargs -0 $BIOME check --write --no-errors-on-unmatched
+
+# Re-stage whatever Biome rewrote.
+printf '%s\n' "$staged" | tr '\n' '\0' | xargs -0 git add

@@ -1,0 +1,23 @@
+{
+  "name": "typescript-test",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun --minify --sourcemap",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "ci": "biome ci . && tsc --noEmit && bun test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.6",
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
