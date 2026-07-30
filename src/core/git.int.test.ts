@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { WtError } from "./errors.ts";
-import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
+import { gitOutput, gitSucceeds, runGit, runGitOrThrow, traceGit } from "./git.ts";
 import { withTempRepo } from "./test-utils.ts";
 
 // The fixture builds a real repository on disk; `Bun.spawn` and `file://` remotes
@@ -62,6 +62,41 @@ onPosix(
       expect(lines.length).toBeGreaterThan(1);
       expect(lines.some((line) => line.includes("Receiving objects"))).toBe(true);
       expect(lines.every((line) => !line.includes("\r"))).toBe(true);
+    });
+  },
+  20_000,
+);
+
+// What `--verbose` is for: the calls nobody prints otherwise, including the
+// ones that fail on purpose and are never reported anywhere else.
+onPosix(
+  "tracing records every command, its exit code, and how long it took",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const lines: string[] = [];
+      const bare = join(work, "bare.git");
+
+      traceGit((line) => lines.push(line));
+      try {
+        await runGitOrThrow(["clone", "--bare", originUrl, bare], { cwd: work });
+        await gitSucceeds(["rev-parse", "--verify", "--quiet", "refs/heads/nope"], { cwd: bare });
+      } finally {
+        // A module-level sink outlives the test that installed it, and a stray
+        // one would push this file's lines into the next file's array.
+        traceGit(undefined);
+      }
+
+      expect(lines).toHaveLength(2);
+      // Pasteable: `-C <dir>` is how you re-run it by hand from anywhere.
+      expect(lines[0]).toContain(`git -C ${work} clone --bare`);
+      expect(lines[0]).toMatch(/→ ok, \d+ms$/);
+      // A failure that is not an error — the branch `gitSucceeds` hides.
+      expect(lines[1]).toContain("rev-parse --verify --quiet refs/heads/nope");
+      expect(lines[1]).toMatch(/→ exit \d+, \d+ms$/);
+
+      // And nothing is recorded once the sink is gone.
+      await gitSucceeds(["rev-parse", "--git-dir"], { cwd: bare });
+      expect(lines).toHaveLength(2);
     });
   },
   20_000,

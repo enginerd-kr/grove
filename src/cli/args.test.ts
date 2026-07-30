@@ -83,13 +83,33 @@ test("aliases resolve to the canonical command", () => {
 test("global options are read alongside a command's own", () => {
   const parsed = parseCliArgs(["list", "--json", "--verbose", "-C", "/work/repo"]);
 
-  expect(parsed).toHaveProperty("global", { repo: "/work/repo", json: true, verbose: true });
+  expect(parsed).toHaveProperty("global", {
+    repo: "/work/repo",
+    json: true,
+    verbose: true,
+    headless: false,
+  });
 });
 
 test("global options default to off", () => {
   const parsed = parseCliArgs(["list"]);
 
-  expect(parsed).toHaveProperty("global", { repo: undefined, json: false, verbose: false });
+  expect(parsed).toHaveProperty("global", {
+    repo: undefined,
+    json: false,
+    verbose: false,
+    headless: false,
+  });
+});
+
+// Drawing is the default and has no flag of its own; `--headless` is the only
+// thing that opts out of it.
+test("--headless is the one way out of the display", () => {
+  expect(parseCliArgs(["--headless", "sync", "--all"])).toHaveProperty("global.headless", true);
+  expect(parseCliArgs(["sync", "--headless"])).toHaveProperty("global.headless", true);
+  expect(parseCliArgs(["list"])).toHaveProperty("global.headless", false);
+  // Nothing named `--ui` exists to type by mistake and have quietly accepted.
+  expect(parseCliArgs(["list", "--ui"]).kind).toBe("error");
 });
 
 test("a missing required argument is a usage error carrying that command's help", () => {
@@ -136,7 +156,12 @@ test("global flags work on either side of the command", () => {
   const after = parseCliArgs(["list", "-C", "/work/repo", "--json"]);
 
   expect(before).toEqual(after);
-  expect(before).toHaveProperty("global", { repo: "/work/repo", json: true, verbose: false });
+  expect(before).toHaveProperty("global", {
+    repo: "/work/repo",
+    json: true,
+    verbose: false,
+    headless: false,
+  });
 });
 
 test("a leading flag's value is not mistaken for the command", () => {
@@ -149,6 +174,7 @@ test("a leading flag's value is not mistaken for the command", () => {
     repo: "repo",
     json: false,
     verbose: false,
+    headless: false,
   });
 });
 
@@ -164,8 +190,23 @@ test("an unknown flag before the command is still rejected", () => {
   expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: wt <command>"));
 });
 
+// A bare `wt` is not a question about the commands; it is someone opening the
+// tool. The screen answers that, and the usage rides along for the terminal-less
+// case the entry point falls back to.
+test("a bare invocation asks for the app, not the help", () => {
+  const parsed = parseCliArgs([]);
+
+  expect(parsed.kind).toBe("app");
+  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: wt <command>"));
+  expect(parsed).toHaveProperty("global.headless", false);
+
+  // Global flags still land, so `wt -C ~/work/repo` opens that repository and
+  // `wt --headless` is the way to ask for the old behaviour.
+  expect(parseCliArgs(["-C", "/work/repo"])).toHaveProperty("global.repo", "/work/repo");
+  expect(parseCliArgs(["--headless"])).toHaveProperty("global.headless", true);
+});
+
 test("--help answers at every level", () => {
-  expect(parseCliArgs([]).kind).toBe("text");
   expect(parseCliArgs(["--help"]).kind).toBe("text");
   expect(parseCliArgs(["help"]).kind).toBe("text");
 

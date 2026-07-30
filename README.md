@@ -33,12 +33,16 @@ it means from the directory you ran it in.
 ## Commands
 
 ```bash
+wt                       # open the worktrees, and run any of the below by keystroke
 wt clone <url> [dir]     # bare-clone a repo and check out its default branch
 wt add <branch>          # give a branch a worktree (tracking or creating it)
 wt list                  # what is here, what state it is in, where you are
 wt remove <target>       # delete a worktree
 wt sync [target]         # fetch, then bring worktrees up to date
 ```
+
+`wt` on its own is the app; `wt <command>` is the same thing headless, for a script or a
+pipeline. See [The app](#the-app).
 
 `wt <command> --help` lists a command's own options. A worked example:
 
@@ -86,6 +90,45 @@ Every check runs before anything is executed. A dirty worktree is skipped withou
 touched, and a rebase that conflicts is rolled back by default — pass `--no-abort` to leave it
 in place and resolve it by hand.
 
+## The app
+
+Typing `wt` with no arguments opens the worktrees as a full-screen app, and every command above
+is a keystroke:
+
+```
+wt ~/work/repo                                                     3 worktrees
+────────────────────────────────────────────────────────────────────────────────
+▸ * main        main        clean
+    feat/login  feat/login  2 ahead
+    fix/crash   fix/crash   dirty
+
+
+────────────────────────────────────────────────────────────────────────────────
+✓ fetched
+✓ feat/login rebased
+2 up-to-date, 1 rebased
+↑↓ move · a add · r remove · s sync · S sync all · R refresh · q quit
+```
+
+`*` is the worktree you started from, `▸` the one the keys act on. `a` prompts for a branch
+name; `r` asks before deleting anything; `s` syncs the selected worktree and `S` syncs them all.
+Progress is drawn in place — the same spinner and clone percentage a command line gets — and a
+refusal ("worktree is dirty") lands on the screen instead of ending the session.
+
+It runs in the terminal's alternate screen, so quitting hands the terminal back exactly as it
+was found. The layout is measured against the window: the keys sit on the last row whatever the
+height, the list takes what is left and scrolls when there are more worktrees than rows, and a
+resize redraws to fit.
+
+The app runs the same `core/commands` the CLI does, minus the destructive spellings: no
+`--force`, no `--delete-branch`. Those stay on the command line, where they have to be typed
+out on purpose.
+
+It needs a terminal on both ends. Piped, redirected, or with `--headless`, a bare `wt` prints
+the usage and exits 0, so `wt | head` and `wt > usage.txt` still mean what they used to. Run
+outside a managed repository it fails the way `wt list` does — exit 3, with `wt clone` as the
+suggestion.
+
 ## Output and exit codes
 
 **stdout is data, stderr is progress.** `wt list --json | jq` works while a spinner is on
@@ -108,8 +151,51 @@ stderr.
 They are distinct so a wrapper script can tell "the worktree was dirty" from "the remote was
 unreachable" without grepping stderr.
 
-On a terminal, progress is drawn with Ink — a spinner, and a percentage bar during a clone.
-Under a pipe, in CI, with `--json`, or with `NO_COLOR` set, it degrades to plain lines.
+### The display, and `--headless`
+
+Progress is drawn with Ink — a spinner, and a percentage bar during a clone. That is the
+default everywhere, with no environment sniffing behind it: there is nothing to detect wrong,
+and no flag to remember for the case where the guess would have gone the other way.
+
+Without a terminal the display does not become noise. Ink stops repainting and each line is
+written once as its step settles, so a pipe or a CI log gets exactly this, incrementally and
+with no escape sequences in it:
+
+```
+✓ cloned
+✓ fetched refs
+· repo is ready
+```
+
+What a pipe loses is only what a pipe cannot use: the spinner, the percentage bar, and the
+`ctrl+c cancel` hint.
+
+`--headless` opts out of the display altogether and logs plain lines instead — one when a step
+starts and one when it ends, which is what a transcript read a week later wants:
+
+```bash
+wt sync --all --headless
+#  · fetching
+#  ✓ fetched
+#  · syncing feat/login
+#  ✓ feat/login already up to date
+```
+
+Either way, drawing happens on stderr and results on stdout, so `wt list --json | jq` and
+`wt clone <url> | tee log` both work.
+
+### Seeing what git was asked to do
+
+`--verbose` logs one line per git call, on stderr, as each finishes:
+
+```
+· git -C ~/work/repo/.bare rev-parse --verify --quiet refs/heads/feat/login → exit 1, 9ms
+· git -C ~/work/repo/.bare worktree add --track -b feat/login ../feat/login origin/feat/login → ok, 64ms
+```
+
+The `-C` form is what you would paste into a shell to run the same thing by hand. Logging on
+completion rather than on start is what makes the exit code available — the `rev-parse` above
+"failing" is how `wt` asks whether a branch exists, and nothing else would ever show you that.
 
 ## Scripts
 
@@ -143,7 +229,7 @@ src/
     exit-codes.ts      WtErrorCode -> exit code, as a total switch
     run.ts             dispatch, and how results are printed
   core/                knows nothing about argv, stdout, or Ink
-    git.ts             the only place that spawns a process
+    git.ts             the only place that spawns a process, and `--verbose`'s trace
     errors.ts          WtError, and classifying git's stderr
     layout.ts          pure path and naming rules
     discover.ts        which repository a command means
@@ -152,8 +238,11 @@ src/
     commands/          clone, add, list, remove, sync
   report/
     reporter.ts        the Reporter interface, and the plain implementation
+    lines.ts           the line store both drawn reporters share
     ink-reporter.tsx   the terminal one — see src/ui/README.md
-  ui/                  the components it draws with
+  ui/
+    components/        Spinner, ProgressBar, StatusBar, StepRow
+    app/               the interactive screen a bare `wt` opens
 ```
 
 ## Tests

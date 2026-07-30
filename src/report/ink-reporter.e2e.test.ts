@@ -48,6 +48,26 @@ onPosix(
   40_000,
 );
 
+// The other direction, and the reason `--headless` exists: a terminal is not a
+// request for a display, only the default answer when nobody gave one.
+onPosix(
+  "--headless logs plain lines on a terminal that would otherwise be drawn on",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const ui = start({ args: ["--headless", "clone", originUrl, "repo"], cwd: work });
+
+      expect(await ui.exited).toBe(0);
+
+      const frame = ui.frame();
+      // Both reporters say this; only one says it as a line that stays put.
+      expect(frame).toContain("✓ cloned");
+      // The status bar is drawn, never logged, so its absence is the display's.
+      expect(frame).not.toContain("ctrl+c cancel");
+    });
+  },
+  40_000,
+);
+
 // The failure this catches: a reporter that leaves Ink mounted, or one that
 // writes results into a frame the render loop is about to erase.
 onPosix(

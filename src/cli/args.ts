@@ -24,6 +24,8 @@ export type GlobalOptions = {
   readonly repo?: string;
   readonly json: boolean;
   readonly verbose: boolean;
+  /** `--headless`: log progress as plain lines rather than drawing it. */
+  readonly headless: boolean;
 };
 
 export type WtCommand =
@@ -57,6 +59,13 @@ export type WtCommand =
 
 export type CliCommand =
   | { readonly kind: "run"; readonly command: WtCommand; readonly global: GlobalOptions }
+  /**
+   * A bare `wt`: open the interactive screen.
+   *
+   * `usage` travels with it because the screen needs a terminal — piped, or
+   * `--headless`, the entry point prints this instead.
+   */
+  | { readonly kind: "app"; readonly global: GlobalOptions; readonly usage: string }
   /** Write to stdout and exit 0: any flavour of `--help`, and `--version`. */
   | { readonly kind: "text"; readonly output: string }
   /** Write to stderr and exit 2. `usage` is the relevant help, when there is one. */
@@ -236,9 +245,21 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
 
   const [head, ...rest] = afterGlobals;
 
-  // A bare invocation shows the usage rather than erroring: someone typing the
-  // binary's name is asking what it does.
-  if (head === undefined) return text(formatGlobalHelp());
+  // A bare invocation opens the screen rather than erroring: someone typing the
+  // binary's name is asking what is here, and that is a question the list
+  // answers better than a menu of commands does.
+  if (head === undefined) {
+    return {
+      kind: "app",
+      global: {
+        repo: str(leadingValues, "repo"),
+        json: bool(leadingValues, "json"),
+        verbose: bool(leadingValues, "verbose"),
+        headless: bool(leadingValues, "headless"),
+      },
+      usage: formatGlobalHelp(),
+    };
+  }
 
   if (head === "help") {
     const target = rest[0];
@@ -305,6 +326,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
       repo: str(global, "repo"),
       json: bool(global, "json"),
       verbose: bool(global, "verbose"),
+      headless: bool(global, "headless"),
     },
   };
 }

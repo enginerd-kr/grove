@@ -64,6 +64,49 @@ export function killRunningGit(signal: NodeJS.Signals = "SIGTERM"): void {
   }
 }
 
+/**
+ * Where `--verbose` sends its record of what git was asked to do.
+ *
+ * A module-level sink rather than an option threaded through every call: this
+ * is the same shape as `running` above, and for the same reason — the fact
+ * being recorded belongs to the spawn, not to the caller, and a `GitOptions`
+ * field would be one more thing each of forty call sites could forget.
+ */
+let trace: ((line: string) => void) | undefined;
+
+/** Installs the sink, or removes it when given `undefined`. */
+export function traceGit(sink: ((line: string) => void) | undefined): void {
+  trace = sink;
+}
+
+/** Shell quoting, only where a word would otherwise not survive being pasted back. */
+function quote(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : JSON.stringify(arg);
+}
+
+/**
+ * One line per command, written when it finishes rather than when it starts.
+ *
+ * Finishing is when the interesting half is known — the exit code that
+ * `gitSucceeds` quietly branches on, and how long the call took. It also keeps
+ * each line self-contained, which start/finish pairs would not be: some of
+ * these run concurrently and their pairs would interleave.
+ *
+ * The `-C` form is deliberate — it is the command you can paste into a shell to
+ * see the same thing, modulo the pinned environment above.
+ */
+function traceCommand(
+  args: readonly string[],
+  cwd: string | undefined,
+  result: GitResult,
+  ms: number,
+): void {
+  const where = cwd === undefined ? [] : ["-C", quote(cwd)];
+  const outcome = result.code === 0 ? "ok" : `exit ${result.code}`;
+
+  trace?.(`git ${[...where, ...args.map(quote)].join(" ")} → ${outcome}, ${Math.round(ms)}ms`);
+}
+
 async function drain(
   stream: ReadableStream<Uint8Array> | undefined,
   onLine?: (line: string) => void,
@@ -104,6 +147,7 @@ export async function runGit(
   args: readonly string[],
   { cwd, onStderrLine, env }: GitOptions = {},
 ): Promise<GitResult> {
+  const startedAt = performance.now();
   const child = Bun.spawn(["git", ...args], {
     cwd,
     env: { ...process.env, ...PINNED_ENV, ...env },
@@ -124,7 +168,10 @@ export async function runGit(
       child.exited,
     ]);
 
-    return { code, stdout, stderr };
+    const result = { code, stdout, stderr };
+    if (trace) traceCommand(args, cwd, result, performance.now() - startedAt);
+
+    return result;
   } finally {
     running.delete(child);
   }

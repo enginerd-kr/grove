@@ -43,7 +43,8 @@ export const GLOBAL_FLAGS: readonly FlagSpec[] = [
     summary: "operate on the repo at <path> instead of discovering one",
   },
   { name: "json", type: "boolean", summary: "print results as JSON on stdout" },
-  { name: "verbose", type: "boolean", summary: "report every git command as it runs" },
+  { name: "verbose", type: "boolean", summary: "log every git command, its exit code, and timing" },
+  { name: "headless", type: "boolean", summary: "log progress as plain lines instead of drawing" },
   { name: "version", short: "v", type: "boolean", summary: "print the version and exit" },
   { name: "help", short: "h", type: "boolean", summary: "show this help and exit" },
 ];

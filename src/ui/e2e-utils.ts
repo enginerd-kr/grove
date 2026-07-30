@@ -20,6 +20,13 @@ export type UiSession = {
   readonly resize: (cols: number, rows: number) => void;
   /** Everything received since the last `clear()`, ANSI stripped. */
   readonly frame: () => string;
+  /**
+   * The same bytes, escape sequences intact.
+   *
+   * For the handful of assertions that are *about* the escapes — entering and
+   * leaving the alternate screen is a sequence and nothing else.
+   */
+  readonly raw: () => string;
   /** Drops buffered output so the next repaint can be read on its own. */
   readonly clear: () => void;
   readonly waitForFrame: (
@@ -157,6 +164,7 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
 
   return {
     press: write,
+    raw: () => buffer,
     resize: (nextCols, nextRows) => {
       proc.terminal?.resize(nextCols, nextRows);
     },

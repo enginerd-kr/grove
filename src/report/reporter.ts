@@ -42,9 +42,10 @@ const defaultWriters: Writers = {
 /**
  * One line when a step starts, one when it ends.
  *
- * No cursor tricks, no colour, no spinner: this is what runs when the output is
- * a pipe, a log file, or a CI transcript, and all three want plain lines that
- * survive being read a week later.
+ * No cursor tricks, no colour, no spinner. Drawing is what `wt` does by
+ * default, so this runs only when `--headless` asks for it — for a log file, a
+ * CI transcript, or anything else that wants plain lines that survive being
+ * read a week later.
  */
 export function createPlainReporter(writers: Writers = defaultWriters): Reporter {
   const line = (prefix: string, text: string) => {
@@ -81,28 +82,4 @@ export function createPlainReporter(writers: Writers = defaultWriters): Reporter
     out: (text) => writers.out(text.endsWith("\n") ? text : `${text}\n`),
     close: async () => {},
   };
-}
-
-type ReporterEnvironment = {
-  readonly isStderrTty: boolean;
-  readonly json: boolean;
-  readonly env: Readonly<Record<string, string | undefined>>;
-};
-
-/**
- * Whether to draw or to log.
- *
- * `--json` forces plain output even on a terminal: a human asking for machine
- * output is usually piping it somewhere, and a redraw loop competing with the
- * consumer helps nobody. `CI` is honoured because build logs capture every
- * escape sequence a spinner emits.
- */
-export function prefersPlainReporter({ isStderrTty, json, env }: ReporterEnvironment): boolean {
-  if (!isStderrTty) return true;
-  if (json) return true;
-  if (env.NO_COLOR !== undefined && env.NO_COLOR !== "") return true;
-  // `is-in-ci`'s convention, which Ink follows: the string "false" opts out.
-  if (env.CI !== undefined && env.CI !== "" && env.CI !== "false") return true;
-
-  return false;
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { createPlainReporter, prefersPlainReporter, type Writers } from "./reporter.ts";
+import { createPlainReporter, type Writers } from "./reporter.ts";
 
 function capture(): Writers & { readonly stdout: string[]; readonly stderr: string[] } {
   const stdout: string[] = [];
@@ -70,25 +70,4 @@ test("update renames the step without printing a line of its own", () => {
   step.succeed();
 
   expect(writers.stderr).toEqual(["· fetching\n", "✓ fetching origin\n"]);
-});
-
-test("plain output is chosen whenever redrawing would be wrong", () => {
-  const tty = { isStderrTty: true, json: false, env: {} };
-
-  expect(prefersPlainReporter(tty)).toBe(false);
-  expect(prefersPlainReporter({ ...tty, isStderrTty: false })).toBe(true);
-  // Someone asking for JSON is piping it somewhere; a redraw loop competing
-  // with the consumer helps nobody.
-  expect(prefersPlainReporter({ ...tty, json: true })).toBe(true);
-  expect(prefersPlainReporter({ ...tty, env: { NO_COLOR: "1" } })).toBe(true);
-  expect(prefersPlainReporter({ ...tty, env: { CI: "true" } })).toBe(true);
-});
-
-// Ink's own `is-in-ci` treats the string "false" as an opt-out, and the PTY
-// tests depend on that to run under a CI runner.
-test("CI=false is an opt-out, not the presence of CI", () => {
-  expect(prefersPlainReporter({ isStderrTty: true, json: false, env: { CI: "false" } })).toBe(
-    false,
-  );
-  expect(prefersPlainReporter({ isStderrTty: true, json: false, env: { CI: "" } })).toBe(false);
 });

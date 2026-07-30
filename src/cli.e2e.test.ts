@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
 import { version } from "../package.json";
+import { withTempRepo } from "./core/test-utils.ts";
 import { runCli } from "./ui/e2e-utils.ts";
 
 /**
@@ -81,6 +83,57 @@ onPosix(
     expect(stdout).toBe("");
   },
   20_000,
+);
+
+/**
+ * The status bar is what tells the two reporters apart from outside.
+ *
+ * Only the drawn one renders it — so its absence from a `--headless` run is the
+ * display being gone rather than merely quiet.
+ */
+const DRAWN = "cancel";
+
+onPosix(
+  "the display is the default, and --headless is what turns it off",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      // No flags, no terminal: the reporter is still Ink, because nothing asked
+      // for anything else.
+      const cloned = await runCli(["clone", originUrl, "repo"], { cwd: work });
+      expect(cloned.exitCode).toBe(0);
+      expect(cloned.stderr).toContain("cloned");
+      // Drawn on stderr, result on stdout — the rule the display lives inside.
+      expect(cloned.stdout.trim()).toBe("repo/main\tmain");
+
+      const main = join(work, "repo", "main");
+
+      const headless = await runCli(["add", "feat/login", "--headless"], { cwd: main });
+      expect(headless.exitCode).toBe(0);
+      expect(headless.stderr).toContain("✓ added feat/login");
+      expect(headless.stderr).not.toContain(DRAWN);
+      expect(headless.stdout.trim()).toBe("../feat/login\tfeat/login");
+    });
+  },
+  60_000,
+);
+
+onPosix(
+  "--verbose reports the git commands on stderr, leaving stdout parseable",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const { exitCode, stdout, stderr } = await runCli(["--verbose", "clone", originUrl, "repo"], {
+        cwd: work,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("git -C");
+      expect(stderr).toContain("clone --bare --progress");
+      // The reason it goes to stderr at all: `--verbose` is a debugging aid, and
+      // a pipeline turned on to debug must survive being debugged.
+      expect(stdout.trim()).toBe("repo/main\tmain");
+    });
+  },
+  60_000,
 );
 
 onPosix(
