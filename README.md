@@ -14,6 +14,8 @@ bun install
 | ------------------- | ---------------------------------------------- |
 | `bun dev`           | Run `src/index.ts` with hot reload (`--watch`) |
 | `bun start`         | Run `src/index.ts` once                        |
+| `bun run ui`        | Launch the Ink terminal app (`src/ui`)         |
+| `bun run ui:dev`    | Same, with hot reload                          |
 | `bun run build`     | Bundle to `dist/` (minified + sourcemap)       |
 | `bun run typecheck` | Type check with `tsc --noEmit`                 |
 | `bun test`          | Run `*.test.ts` via `bun:test`                 |
@@ -53,6 +55,7 @@ src/
   index.ts       entry point
   greet.ts       example module
   greet.test.ts  example test
+  ui/            Ink terminal app — see src/ui/README.md
 ```
 
 ## Notes
