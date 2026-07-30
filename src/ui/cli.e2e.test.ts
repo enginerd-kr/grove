@@ -38,8 +38,7 @@ onPosix(
     expect(frame).toContain("1 Counter");
     expect(frame).toContain("q quit");
 
-    ui.press("q");
-    expect(await ui.exited).toBe(0);
+    expect(await ui.pressUntilExit("q")).toBe(0);
   },
   20_000,
 );
@@ -64,16 +63,16 @@ onPosix(
     // Clearing first means the next repaint is read on its own, so the
     // absence of "Count 0" proves the counter is gone rather than scrolled off.
     ui.clear();
-    ui.press("2");
-    const tasks = await ui.waitForFrame((f) => f.includes("2/5 done"));
+    const tasks = await ui.pressUntil("2", (f) => f.includes("2/5 done"));
     expect(tasks).toContain("space toggle");
     expect(tasks).not.toContain("Count 0");
 
     ui.clear();
-    ui.press("1");
-    await ui.waitForFrame((f) => f.includes("Count 0"));
+    await ui.pressUntil("1", (f) => f.includes("Count 0"));
 
     // Arrow keys as the terminal actually sends them, not Ink's `key` object.
+    // Plain `press` here: the tab switches above prove raw mode is live, and a
+    // resent arrow would count twice.
     ui.clear();
     ui.press(keys.right);
     ui.press(keys.right);
