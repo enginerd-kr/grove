@@ -19,7 +19,8 @@ onPosix(
   async () => {
     const help = await runCli(["--help"]);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain("Usage:");
+    expect(help.stdout).toContain("Usage: wt <command>");
+    expect(help.stdout).toContain("clone");
     expect(help.stderr).toBe("");
 
     const versionRun = await runCli(["--version"]);
@@ -43,15 +44,40 @@ onPosix(
 );
 
 onPosix(
-  "exits 2 on a bad flag, pointing at --help",
+  "a usage error exits 2 and keeps stdout clean",
   async () => {
-    const { exitCode, stdout, stderr } = await runCli(["--nope"]);
+    const { exitCode, stdout, stderr } = await runCli(["add"]);
 
     expect(exitCode).toBe(2);
-    expect(stderr).toContain("--help");
-    // Errors must not pollute the data stream: `wt list --json | jq` depends on
-    // stdout carrying nothing but results.
+    expect(stderr).toContain("branch name");
+    // `wt list --json | jq` depends on stdout carrying nothing but results, so
+    // even a failure must not write there.
     expect(stdout).toBe("");
+  },
+  20_000,
+);
+
+onPosix(
+  "an unknown command exits 2 and lists the real ones",
+  async () => {
+    const { exitCode, stderr } = await runCli(["wroktree"]);
+
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("unknown command");
+    expect(stderr).toContain("clone");
+  },
+  20_000,
+);
+
+// Every command still throws; this pins the contract that an unfinished feature
+// reports as a bug in the tool (1) rather than as something the user did wrong.
+onPosix(
+  "an unimplemented command exits 1, not 2",
+  async () => {
+    const { exitCode, stderr } = await runCli(["list"]);
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("not implemented");
   },
   20_000,
 );

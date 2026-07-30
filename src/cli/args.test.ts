@@ -1,19 +1,159 @@
 import { expect, test } from "bun:test";
 import { version } from "../../package.json";
-import { BIN_NAME, formatHelp, parseCliArgs } from "./args.ts";
+import type { CliCommand, WtCommand } from "./args.ts";
+import { parseCliArgs } from "./args.ts";
+import { BIN_NAME, SUBCOMMANDS } from "./help.ts";
 
-/**
- * Interim coverage. The subcommand rewrite replaces most of this, but the two
- * properties asserted here outlive it: parsing never prints or exits, and the
- * flags that answer without a terminal keep answering.
- */
+/** Asserts the parse succeeded and hands back the command, so tests stay flat. */
+function run(argv: readonly string[]): WtCommand {
+  const parsed = parseCliArgs(argv);
+  if (parsed.kind !== "run") {
+    throw new Error(`expected a run command, got ${parsed.kind}: ${describe(parsed)}`);
+  }
 
-test("--help and a bare invocation both yield the usage text", () => {
-  expect(parseCliArgs(["--help"])).toEqual({ kind: "text", output: formatHelp() });
-  expect(parseCliArgs(["-h"])).toEqual({ kind: "text", output: formatHelp() });
-  // No subcommands to dispatch yet, so a bare run is a request for usage rather
-  // than a mistake — which is how it will keep behaving once they exist.
-  expect(parseCliArgs([])).toEqual({ kind: "text", output: formatHelp() });
+  return parsed.command;
+}
+
+function describe(parsed: CliCommand): string {
+  return parsed.kind === "run"
+    ? parsed.command.name
+    : ((parsed as { message?: string }).message ?? "");
+}
+
+test("clone takes a URL and an optional directory", () => {
+  expect(run(["clone", "https://example.com/repo.git"])).toEqual({
+    name: "clone",
+    url: "https://example.com/repo.git",
+    dir: undefined,
+    branch: undefined,
+  });
+  expect(run(["clone", "https://example.com/repo.git", "work", "--branch", "trunk"])).toEqual({
+    name: "clone",
+    url: "https://example.com/repo.git",
+    dir: "work",
+    branch: "trunk",
+  });
+});
+
+test("add defaults to fetching and not pushing", () => {
+  expect(run(["add", "feat/login"])).toEqual({
+    name: "add",
+    branch: "feat/login",
+    from: undefined,
+    dir: undefined,
+    fetch: true,
+    push: false,
+  });
+});
+
+// `--no-fetch` is a declared flag rather than a negation of `--fetch`, because
+// parseArgs has no notion of negatable booleans to lean on.
+test("--no-fetch and --no-abort invert the defaults they name", () => {
+  expect(run(["add", "x", "--no-fetch"])).toHaveProperty("fetch", false);
+  expect(run(["sync", "--no-abort"])).toHaveProperty("abortOnConflict", false);
+  expect(run(["sync"])).toHaveProperty("abortOnConflict", true);
+});
+
+test("sync's target is optional and --all is separate", () => {
+  expect(run(["sync"])).toEqual({
+    name: "sync",
+    target: undefined,
+    all: false,
+    abortOnConflict: true,
+  });
+  expect(run(["sync", "--all"])).toHaveProperty("all", true);
+  expect(run(["sync", "feat/login"])).toHaveProperty("target", "feat/login");
+});
+
+test("remove exposes both destructive flags separately", () => {
+  expect(run(["remove", "feat/login", "--force", "--delete-branch"])).toEqual({
+    name: "remove",
+    target: "feat/login",
+    force: true,
+    deleteBranch: true,
+  });
+});
+
+test("aliases resolve to the canonical command", () => {
+  expect(run(["ls"]).name).toBe("list");
+  expect(run(["rm", "x"]).name).toBe("remove");
+  expect(run(["init", "url"]).name).toBe("clone");
+});
+
+test("global options are read alongside a command's own", () => {
+  const parsed = parseCliArgs(["list", "--json", "--verbose", "-C", "/work/repo"]);
+
+  expect(parsed).toHaveProperty("global", { repo: "/work/repo", json: true, verbose: true });
+});
+
+test("global options default to off", () => {
+  const parsed = parseCliArgs(["list"]);
+
+  expect(parsed).toHaveProperty("global", { repo: undefined, json: false, verbose: false });
+});
+
+test("a missing required argument is a usage error carrying that command's help", () => {
+  for (const argv of [["clone"], ["add"], ["remove"]]) {
+    const parsed = parseCliArgs(argv);
+
+    expect(parsed.kind).toBe("error");
+    // The help attached must be the subcommand's, not the global one — the user
+    // is already in the right command and needs its arguments, not a menu.
+    expect(parsed).toHaveProperty("usage", expect.stringContaining(`${BIN_NAME} ${argv[0]}`));
+  }
+});
+
+test("extra positionals are rejected rather than ignored", () => {
+  expect(parseCliArgs(["list", "surplus"]).kind).toBe("error");
+  expect(parseCliArgs(["add", "a", "b"]).kind).toBe("error");
+  expect(parseCliArgs(["clone", "url", "dir", "extra"]).kind).toBe("error");
+});
+
+test("an unknown command names the ones that exist", () => {
+  const parsed = parseCliArgs(["wroktree"]);
+
+  expect(parsed.kind).toBe("error");
+  for (const spec of SUBCOMMANDS) {
+    expect(parsed).toHaveProperty("message", expect.stringContaining(spec.name));
+  }
+});
+
+test("a misspelled flag is an error, never a positional", () => {
+  // The failure mode this prevents: `--froom main` silently becoming a second
+  // argument and the command doing something plausible but wrong.
+  expect(parseCliArgs(["add", "x", "--froom", "main"]).kind).toBe("error");
+  expect(parseCliArgs(["list", "--jsno"]).kind).toBe("error");
+});
+
+test("-- keeps a dash-leading branch name reachable", () => {
+  expect(run(["add", "--", "-weird-branch"])).toHaveProperty("branch", "-weird-branch");
+});
+
+test("a flag before the command is rejected with the global help", () => {
+  const parsed = parseCliArgs(["--json", "list"]);
+
+  expect(parsed.kind).toBe("error");
+  expect(parsed).toHaveProperty("message", expect.stringContaining("--json"));
+});
+
+test("--help answers at every level", () => {
+  expect(parseCliArgs([]).kind).toBe("text");
+  expect(parseCliArgs(["--help"]).kind).toBe("text");
+  expect(parseCliArgs(["help"]).kind).toBe("text");
+
+  const forAdd = parseCliArgs(["help", "add"]);
+  expect(forAdd).toEqual({ kind: "text", output: expect.stringContaining("--no-fetch") });
+  expect(parseCliArgs(["add", "--help"])).toEqual(forAdd);
+});
+
+// Someone who got the arguments wrong is exactly who needs the usage text.
+test("--help wins over a missing argument", () => {
+  expect(parseCliArgs(["clone", "--help"]).kind).toBe("text");
+  expect(parseCliArgs(["remove", "-h"]).kind).toBe("text");
+});
+
+test("help for an unknown command is an error, not a blank page", () => {
+  expect(parseCliArgs(["help", "nope"]).kind).toBe("error");
 });
 
 test("--version reports the package version", () => {
@@ -21,29 +161,22 @@ test("--version reports the package version", () => {
   expect(parseCliArgs(["-v"])).toEqual({ kind: "text", output: version });
 });
 
-test("--help wins over --version", () => {
-  expect(parseCliArgs(["--help", "--version"])).toEqual({ kind: "text", output: formatHelp() });
-});
+test("every command in the table parses without a special case", () => {
+  // Guards the declarative table against gaining an entry that `buildCommand`
+  // has no arm for, which would otherwise only show up at runtime.
+  const sample: Record<string, readonly string[]> = {
+    clone: ["clone", "url"],
+    add: ["add", "branch"],
+    list: ["list"],
+    remove: ["remove", "target"],
+    sync: ["sync"],
+  };
 
-test("rejects unknown flags and stray positionals", () => {
-  // A typo must not be silently swallowed as an argument.
-  expect(parseCliArgs(["--nope"]).kind).toBe("error");
-  expect(parseCliArgs(["-x"]).kind).toBe("error");
-  // Loosens once subcommands land; until then a positional has nowhere to go.
-  expect(parseCliArgs(["extra"]).kind).toBe("error");
-});
-
-test("the help text names the binary and every flag it accepts", () => {
-  const help = formatHelp();
-
-  expect(help).toContain(BIN_NAME);
-  expect(help).toContain("--version");
-  expect(help).toContain("--help");
-});
-
-test("errors carry a message rather than throwing", () => {
-  const command = parseCliArgs(["--nope"]);
-
-  expect(command.kind).toBe("error");
-  expect(command).toHaveProperty("message", expect.stringContaining("--nope"));
+  for (const spec of SUBCOMMANDS) {
+    const argv = sample[spec.name];
+    expect(argv, `no sample argv for "${spec.name}"`).toBeDefined();
+    // Compared this way round so the wide `spec.name` is the expected value;
+    // `run(...).name` is the narrow union and would reject it as an argument.
+    expect(spec.name).toBe(run(argv ?? []).name);
+  }
 });

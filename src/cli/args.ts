@@ -1,62 +1,235 @@
 import { parseArgs } from "node:util";
 import { version } from "../../package.json";
+import type { FlagSpec, SubcommandSpec } from "./help.ts";
+import {
+  BIN_NAME,
+  findSubcommand,
+  formatGlobalHelp,
+  formatSubcommandHelp,
+  GLOBAL_FLAGS,
+  SUBCOMMANDS,
+} from "./help.ts";
 
 /**
  * Argument parsing, kept apart from the process it drives.
  *
  * Returning a description of what to do — rather than printing and exiting in
- * place — is what makes every branch testable without spawning anything.
- *
- * Interim shape: the tabbed demo this used to drive is gone and the worktree
- * subcommands have not landed yet, so `--help` and `--version` are the whole
- * surface. The `kind: "run"` variant returns when there is a command to run.
+ * place — is what makes every branch testable without spawning anything. For
+ * the same reason nothing here reads `process`: the invocation directory is
+ * injected by the entry point, so a test can pretend to run anywhere.
  */
+
+export type GlobalOptions = {
+  /** `-C/--repo`: skip discovery and use this directory. */
+  readonly repo?: string;
+  readonly json: boolean;
+  readonly verbose: boolean;
+};
+
+export type WtCommand =
+  | {
+      readonly name: "clone";
+      readonly url: string;
+      readonly dir?: string;
+      readonly branch?: string;
+    }
+  | {
+      readonly name: "add";
+      readonly branch: string;
+      readonly from?: string;
+      readonly dir?: string;
+      readonly fetch: boolean;
+      readonly push: boolean;
+    }
+  | { readonly name: "list" }
+  | {
+      readonly name: "remove";
+      readonly target: string;
+      readonly force: boolean;
+      readonly deleteBranch: boolean;
+    }
+  | {
+      readonly name: "sync";
+      readonly target?: string;
+      readonly all: boolean;
+      readonly abortOnConflict: boolean;
+    };
+
 export type CliCommand =
-  /** Write to stdout and exit 0: `--help`, `--version`, and a bare invocation. */
+  | { readonly kind: "run"; readonly command: WtCommand; readonly global: GlobalOptions }
+  /** Write to stdout and exit 0: any flavour of `--help`, and `--version`. */
   | { readonly kind: "text"; readonly output: string }
-  /** Write to stderr and exit 2. */
-  | { readonly kind: "error"; readonly message: string };
+  /** Write to stderr and exit 2. `usage` is the relevant help, when there is one. */
+  | { readonly kind: "error"; readonly message: string; readonly usage?: string };
 
-const OPTIONS = {
-  version: { type: "boolean", short: "v" },
-  help: { type: "boolean", short: "h" },
-} as const;
+export { BIN_NAME };
 
-export const BIN_NAME = "typescript-test";
+type ParsedValues = Record<string, string | boolean | undefined>;
 
-export function formatHelp(): string {
-  return [
-    `Usage: ${BIN_NAME} [options]`,
-    "",
-    "A git worktree manager. Subcommands are still being built.",
-    "",
-    "Options:",
-    "  -v, --version    print the version and exit",
-    "  -h, --help       show this help and exit",
-  ].join("\n");
+function optionsFor(flags: readonly FlagSpec[]) {
+  const config: Record<string, { type: "string" | "boolean"; short?: string }> = {};
+
+  for (const flag of flags) {
+    config[flag.name] = flag.short ? { type: flag.type, short: flag.short } : { type: flag.type };
+  }
+
+  return config;
+}
+
+function text(output: string): CliCommand {
+  return { kind: "text", output };
+}
+
+function unknownSubcommand(name: string): CliCommand {
+  return {
+    kind: "error",
+    message: `unknown command ${JSON.stringify(name)}. Expected one of: ${SUBCOMMANDS.map(
+      (spec) => spec.name,
+    ).join(", ")}`,
+    usage: formatGlobalHelp(),
+  };
+}
+
+function usageError(spec: SubcommandSpec, message: string): CliCommand {
+  return { kind: "error", message, usage: formatSubcommandHelp(spec) };
+}
+
+function str(values: ParsedValues, key: string): string | undefined {
+  const value = values[key];
+
+  return typeof value === "string" ? value : undefined;
+}
+
+function bool(values: ParsedValues, key: string): boolean {
+  return values[key] === true;
+}
+
+function buildCommand(
+  spec: SubcommandSpec,
+  values: ParsedValues,
+  positionals: readonly string[],
+): CliCommand | WtCommand {
+  // The usage strings in `help.ts` are the contract; these checks enforce the
+  // same arity so a typo lands as "wrong number of arguments" rather than as a
+  // branch named after a flag the user misspelled.
+  const [first, second] = positionals;
+
+  switch (spec.name) {
+    case "clone": {
+      if (first === undefined) return usageError(spec, `${spec.name} needs a repository URL`);
+      return { name: "clone", url: first, dir: second, branch: str(values, "branch") };
+    }
+    case "add": {
+      if (first === undefined) return usageError(spec, `${spec.name} needs a branch name`);
+      return {
+        name: "add",
+        branch: first,
+        from: str(values, "from"),
+        dir: str(values, "dir"),
+        fetch: !bool(values, "no-fetch"),
+        push: bool(values, "push"),
+      };
+    }
+    case "list":
+      return { name: "list" };
+    case "remove": {
+      if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to remove`);
+      return {
+        name: "remove",
+        target: first,
+        force: bool(values, "force"),
+        deleteBranch: bool(values, "delete-branch"),
+      };
+    }
+    case "sync":
+      return {
+        name: "sync",
+        target: first,
+        all: bool(values, "all"),
+        abortOnConflict: !bool(values, "no-abort"),
+      };
+    default:
+      // Unreachable while `SUBCOMMANDS` and this switch agree; a new entry in
+      // the table without a case here surfaces as a usage error, not a crash.
+      return unknownSubcommand(spec.name);
+  }
+}
+
+/** How many positionals the usage line promises, read straight off `spec.args`. */
+function maxPositionals(args: string): number {
+  return args.split(/\s+/).filter((token) => token.length > 0).length;
 }
 
 export function parseCliArgs(argv: readonly string[]): CliCommand {
-  let values: { version?: boolean; help?: boolean };
+  const [head, ...rest] = argv;
+
+  // A bare invocation shows the usage rather than erroring: someone typing the
+  // binary's name is asking what it does.
+  if (head === undefined) return text(formatGlobalHelp());
+  if (head === "--help" || head === "-h") return text(formatGlobalHelp());
+  if (head === "--version" || head === "-v") return text(version);
+
+  if (head === "help") {
+    const target = rest[0];
+    if (target === undefined) return text(formatGlobalHelp());
+
+    const spec = findSubcommand(target);
+    return spec ? text(formatSubcommandHelp(spec)) : unknownSubcommand(target);
+  }
+
+  if (head.startsWith("-")) {
+    return {
+      kind: "error",
+      message: `expected a command before ${JSON.stringify(head)}`,
+      usage: formatGlobalHelp(),
+    };
+  }
+
+  const spec = findSubcommand(head);
+  if (!spec) return unknownSubcommand(head);
+
+  let values: ParsedValues;
+  let positionals: string[];
 
   try {
-    // `strict` rejects unknown flags; refusing positionals keeps a typo from
-    // being read as an argument. Both loosen in the subcommand rewrite.
-    ({ values } = parseArgs({
-      args: [...argv],
-      options: OPTIONS,
-      allowPositionals: false,
+    // Positionals are allowed now — a subcommand's arguments are positionals —
+    // so `strict` is what stops a misspelled flag from being silently accepted
+    // as a branch name. `--` still works, which is how a branch called `-x`
+    // stays reachable.
+    ({ values, positionals } = parseArgs({
+      args: [...rest],
+      options: optionsFor([...spec.flags, ...GLOBAL_FLAGS]),
+      allowPositionals: true,
       strict: true,
     }));
   } catch (error) {
-    return { kind: "error", message: error instanceof Error ? error.message : String(error) };
+    return usageError(spec, error instanceof Error ? error.message : String(error));
   }
 
-  // Checked first so `--help --version` still explains itself.
-  if (values.help) return { kind: "text", output: formatHelp() };
-  if (values.version) return { kind: "text", output: version };
+  // Checked before arity so `wt add --help` explains itself instead of
+  // complaining about the branch name it is missing.
+  if (bool(values, "help")) return text(formatSubcommandHelp(spec));
+  if (bool(values, "version")) return text(version);
 
-  // No subcommands to dispatch to yet, so a bare run shows the help rather than
-  // erroring — which is what it will keep doing once they exist.
-  return { kind: "text", output: formatHelp() };
+  const max = maxPositionals(spec.args);
+  if (positionals.length > max) {
+    const extra = positionals.slice(max).map((value) => JSON.stringify(value));
+    return usageError(
+      spec,
+      `${spec.name} takes ${max} argument(s); unexpected ${extra.join(", ")}`,
+    );
+  }
+
+  const built = buildCommand(spec, values, positionals);
+  if ("kind" in built) return built;
+
+  return {
+    kind: "run",
+    command: built,
+    global: {
+      repo: str(values, "repo"),
+      json: bool(values, "json"),
+      verbose: bool(values, "verbose"),
+    },
+  };
 }
