@@ -21,8 +21,11 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          # Keep in sync with the Bun used locally.
-          bun-version: 1.2.16
+          # Keep in sync with the Bun used locally. The floor is 1.3.5, which
+          # added the PTY behind Bun.spawn({ terminal }); on anything older the
+          # option is ignored, the child gets no terminal, and the end-to-end
+          # tests in src/ui fail on the TTY guard rather than on a real defect.
+          bun-version: 1.3.14
 
       - name: Install
         run: bun install --frozen-lockfile
