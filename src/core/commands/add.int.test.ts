@@ -10,7 +10,7 @@ import { withTempRepo } from "../test-utils.ts";
 import { listWorktrees } from "../worktrees.ts";
 import { addWorktree } from "./add.ts";
 import { cloneRepo } from "./clone.ts";
-import { contains, describeState, listWorktreeSummaries } from "./list.ts";
+import { describeState, listWorktreeSummaries } from "./list.ts";
 
 const onPosix = test.skipIf(process.platform === "win32");
 
@@ -47,7 +47,7 @@ onPosix(
       );
 
       expect(result.source).toBe("remote");
-      expect(result.path).toBe(join(repo.root, "feat-login"));
+      expect(result.path).toBe(join(repo.root, "feat/login"));
       expect(await pathExists(join(result.path, "login.txt"))).toBe(true);
       // Tracking is the part a wrong refspec would have quietly lost.
       expect(
@@ -206,7 +206,7 @@ onPosix(
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const repo = await cloned(work, originUrl);
-      await mkdir(join(repo.root, "feat-login"), { recursive: true });
+      await mkdir(join(repo.root, "feat/login"), { recursive: true });
 
       const error = await expectError(
         addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent()),
@@ -214,6 +214,87 @@ onPosix(
 
       expect(error.code).toBe("state-conflict");
       expect(error.hint).toContain("--dir");
+    });
+  },
+  30_000,
+);
+
+// The tree on disk mirrors the tree in refs/heads, which is the whole point of
+// nesting: `feat/` groups the branches that share the prefix.
+onPosix(
+  "branches sharing a prefix land in one folder",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const repo = await cloned(work, originUrl);
+
+      const login = await addWorktree(
+        repo,
+        { branch: "feat/login", fetch: true, push: false },
+        silent(),
+      );
+      const search = await addWorktree(
+        repo,
+        { branch: "feat/search", fetch: true, push: false },
+        silent(),
+      );
+
+      expect(login.path).toBe(join(repo.root, "feat", "login"));
+      expect(search.path).toBe(join(repo.root, "feat", "search"));
+      expect(await pathExists(join(repo.root, "feat"))).toBe(true);
+
+      const summaries = await listWorktreeSummaries(repo, work);
+      // The `dir` column is the whole relative path, not a basename — otherwise
+      // two branches both read as "login" and "search" with no context.
+      expect(summaries.map((s) => s.dir).toSorted()).toEqual(["feat/login", "feat/search", "main"]);
+    });
+  },
+  30_000,
+);
+
+onPosix(
+  "a deeply nested branch nests just as deeply",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const repo = await cloned(work, originUrl);
+
+      const result = await addWorktree(
+        repo,
+        { branch: "team/api/feat/thing", fetch: true, push: false },
+        silent(),
+      );
+
+      expect(result.path).toBe(join(repo.root, "team", "api", "feat", "thing"));
+      // git creates the intermediate directories itself; nothing here mkdirs.
+      expect(await pathExists(join(result.path, "README.md"))).toBe(true);
+    });
+  },
+  30_000,
+);
+
+// git allows one worktree inside another and the result is quietly broken: the
+// outer one reports the inner one's files as untracked, and `git clean` there
+// deletes someone's work. Branches cannot reach this (git forbids `feat` and
+// `feat/x` as a ref D/F conflict), but --dir can.
+onPosix(
+  "refuses a worktree that would nest inside another",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const repo = await cloned(work, originUrl);
+      await addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent());
+
+      const swallowing = await expectError(
+        addWorktree(repo, { branch: "other", dir: "feat", fetch: false, push: false }, silent()),
+      );
+      expect(swallowing.code).toBe("state-conflict");
+
+      const swallowed = await expectError(
+        addWorktree(
+          repo,
+          { branch: "other", dir: "feat/login/inner", fetch: false, push: false },
+          silent(),
+        ),
+      );
+      expect(swallowed.code).toBe("state-conflict");
     });
   },
   30_000,
@@ -280,7 +361,7 @@ onPosix(
       expect(summaries.map((s) => s.branch)).toEqual(["main", "feat/login"]);
       expect(summaries[0]).toMatchObject({ isDefault: true, dirty: false, current: false });
       expect(summaries[1]).toMatchObject({
-        dir: "feat-login",
+        dir: "feat/login",
         dirty: true,
         current: true,
         upstream: "origin/feat/login",
@@ -311,12 +392,3 @@ onPosix(
   },
   30_000,
 );
-
-test("contains matches a directory but not a sibling with a shared prefix", () => {
-  // The bug a string prefix would introduce: `/work/repo/main-old` reported as
-  // being inside `/work/repo/main`.
-  expect(contains("/work/repo/main", "/work/repo/main")).toBe(true);
-  expect(contains("/work/repo/main", "/work/repo/main/src/deep")).toBe(true);
-  expect(contains("/work/repo/main", "/work/repo/main-old")).toBe(false);
-  expect(contains("/work/repo/main", "/work/repo")).toBe(false);
-});

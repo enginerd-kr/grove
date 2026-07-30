@@ -1,11 +1,18 @@
-import { basename } from "node:path";
+import { rmdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch } from "../branches.ts";
 import { WtError } from "../errors.ts";
+import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
-import type { RepoPaths } from "../layout.ts";
-import { listWorktrees, resolveTarget, statusOf, type WorktreeRecord } from "../worktrees.ts";
-import { contains } from "./list.ts";
+import { contains, type RepoPaths } from "../layout.ts";
+import {
+  listWorktrees,
+  resolveTarget,
+  statusOf,
+  type WorktreeRecord,
+  worktreeDir,
+} from "../worktrees.ts";
 
 /**
  * `wt remove` — delete a worktree, after establishing that you meant it.
@@ -37,11 +44,12 @@ export async function removeWorktree(
   reporter: Reporter,
 ): Promise<RemoveResult> {
   const worktrees = await listWorktrees(repo.bare);
-  const target = resolveTarget(options.target, worktrees, cwd);
+  const target = resolveTarget(options.target, worktrees, { root: repo.root, cwd });
+  const dir = worktreeDir(repo.root, target.path);
 
-  await refuseUnsafe(repo, cwd, target, worktrees, options);
+  await refuseUnsafe(repo, cwd, target, dir, worktrees, options);
 
-  const step = reporter.step(`removing ${basename(target.path)}`);
+  const step = reporter.step(`removing ${dir}`);
   try {
     await runGitOrThrow(
       ["worktree", "remove", ...(options.force ? ["--force"] : []), target.path],
@@ -50,9 +58,10 @@ export async function removeWorktree(
     // Clears the administrative files git leaves behind, so a later `add` of the
     // same directory name is not refused by a record of the one just deleted.
     await runGitOrThrow(["worktree", "prune"], { cwd: repo.bare });
-    step.succeed(`removed ${basename(target.path)}`);
+    await pruneEmptyParents(repo.root, target.path);
+    step.succeed(`removed ${dir}`);
   } catch (error) {
-    step.fail(`could not remove ${basename(target.path)}`);
+    step.fail(`could not remove ${dir}`);
     throw error;
   }
 
@@ -74,6 +83,7 @@ async function refuseUnsafe(
   repo: RepoPaths,
   cwd: string,
   target: WorktreeRecord,
+  dir: string,
   worktrees: readonly WorktreeRecord[],
   options: RemoveOptions,
 ): Promise<void> {
@@ -87,7 +97,7 @@ async function refuseUnsafe(
   }
 
   if (target.locked !== undefined) {
-    throw new WtError("refused", `${basename(target.path)} is locked`, {
+    throw new WtError("refused", `${dir} is locked`, {
       hint: `unlock it first: git -C ${repo.bare} worktree unlock ${target.path}`,
       details: target.locked.length > 0 ? [target.locked] : [],
     });
@@ -95,7 +105,7 @@ async function refuseUnsafe(
 
   if (!options.force) {
     if (worktrees.length === 1) {
-      throw new WtError("refused", `${basename(target.path)} is the only worktree`, {
+      throw new WtError("refused", `${dir} is the only worktree`, {
         hint: "pass --force if you really want an empty repository",
       });
     }
@@ -108,11 +118,39 @@ async function refuseUnsafe(
 
     const status = await statusOf(target.path);
     if (status.dirty) {
-      throw new WtError("refused", `${basename(target.path)} has uncommitted changes`, {
+      throw new WtError("refused", `${dir} has uncommitted changes`, {
         hint: "commit or stash them, or pass --force to discard them",
         details: status.changed.slice(0, 5),
       });
     }
+  }
+}
+
+/**
+ * Removes the directories a nested worktree leaves behind.
+ *
+ * `feat/test` lives inside `feat/`, and git removes only the worktree itself —
+ * so deleting the last branch under a prefix would leave an empty `feat/`
+ * forever, and those accumulate into exactly the clutter the nesting was
+ * supposed to organise away.
+ *
+ * Walks up to, but never including, the repo root, and stops the moment a
+ * directory is not empty: anything in there is someone's, not ours.
+ */
+async function pruneEmptyParents(root: string, removed: string): Promise<void> {
+  let current = dirname(removed);
+
+  while (current !== root && contains(root, current)) {
+    if (!(await isEmptyOrMissing(current))) return;
+
+    try {
+      await rmdir(current);
+    } catch {
+      // Raced with something, or never existed. Either way, stop here.
+      return;
+    }
+
+    current = dirname(current);
   }
 }
 

@@ -1,11 +1,15 @@
-import { basename } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch } from "../branches.ts";
 import { WtError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
-import type { RepoPaths } from "../layout.ts";
-import { listWorktrees, resolveTarget, statusOf, type WorktreeRecord } from "../worktrees.ts";
-import { contains } from "./list.ts";
+import { contains, type RepoPaths } from "../layout.ts";
+import {
+  listWorktrees,
+  resolveTarget,
+  statusOf,
+  type WorktreeRecord,
+  worktreeDir,
+} from "../worktrees.ts";
 
 /**
  * `wt sync` — fetch, then bring worktrees up to date with the default branch.
@@ -25,6 +29,8 @@ export type SyncOptions = {
 
 export type SyncOutcome = {
   readonly path: string;
+  /** The worktree's directory relative to the repo root, for messages. */
+  readonly dir: string;
   readonly branch?: string;
   readonly kind: "up-to-date" | "fast-forwarded" | "rebased" | "skipped" | "conflicted";
   /** Why it was skipped, or what conflicted. Absent when nothing went wrong. */
@@ -41,7 +47,7 @@ export async function syncWorktrees(
   reporter: Reporter,
 ): Promise<readonly SyncOutcome[]> {
   const worktrees = await listWorktrees(repo.bare);
-  const targets = chooseTargets(worktrees, cwd, options);
+  const targets = chooseTargets(worktrees, repo.root, cwd, options);
 
   // One fetch for the whole run: the remote does not change between worktrees,
   // and `--all` over ten of them should not mean ten round trips.
@@ -53,7 +59,7 @@ export async function syncWorktrees(
   const outcomes: SyncOutcome[] = [];
 
   for (const target of targets) {
-    outcomes.push(await syncOne(target, trunk, options, reporter));
+    outcomes.push(await syncOne(target, repo.root, trunk, options, reporter));
   }
 
   return outcomes;
@@ -61,11 +67,14 @@ export async function syncWorktrees(
 
 function chooseTargets(
   worktrees: readonly WorktreeRecord[],
+  root: string,
   cwd: string,
   options: SyncOptions,
 ): readonly WorktreeRecord[] {
   if (options.all) return worktrees;
-  if (options.target !== undefined) return [resolveTarget(options.target, worktrees, cwd)];
+  if (options.target !== undefined) {
+    return [resolveTarget(options.target, worktrees, { root, cwd })];
+  }
 
   const here = worktrees.find((record) => contains(record.path, cwd));
   if (here) return [here];
@@ -77,13 +86,15 @@ function chooseTargets(
 
 async function syncOne(
   record: WorktreeRecord,
+  root: string,
   trunk: string,
   options: SyncOptions,
   reporter: Reporter,
 ): Promise<SyncOutcome> {
-  const name = basename(record.path);
+  const name = worktreeDir(root, record.path);
   const skip = (reason: string, conflicts?: readonly string[]): SyncOutcome => ({
     path: record.path,
+    dir: name,
     branch: record.branch,
     kind: "skipped",
     reason,
@@ -134,6 +145,7 @@ async function syncOne(
 
     return {
       path: record.path,
+      dir: name,
       branch: record.branch,
       kind: "conflicted",
       reason: options.abortOnConflict
@@ -146,13 +158,14 @@ async function syncOne(
   const after = await gitOutput(["rev-parse", "HEAD"], { cwd: record.path });
   if (before === after) {
     step.succeed(`${name} already up to date`);
-    return { path: record.path, branch: record.branch, kind: "up-to-date" };
+    return { path: record.path, dir: name, branch: record.branch, kind: "up-to-date" };
   }
 
   step.succeed(`${name} updated`);
 
   return {
     path: record.path,
+    dir: name,
     branch: record.branch,
     kind: record.branch === trunk ? "fast-forwarded" : "rebased",
   };
@@ -181,7 +194,7 @@ export function failureFor(outcomes: readonly SyncOutcome[]): WtError | undefine
     return new WtError("rebase-conflict", describe(conflicted, "conflicted"), {
       hint: "resolve them by hand, or sync after committing",
       details: conflicted.flatMap((outcome) => [
-        `${basename(outcome.path)}: ${outcome.reason ?? ""}`,
+        `${outcome.dir}: ${outcome.reason ?? ""}`,
         ...(outcome.conflicts ?? []).map((file) => `  ${file}`),
       ]),
     });
@@ -190,7 +203,7 @@ export function failureFor(outcomes: readonly SyncOutcome[]): WtError | undefine
   if (skipped.length > 0) {
     return new WtError("refused", describe(skipped, "skipped"), {
       details: skipped.flatMap((outcome) => [
-        `${basename(outcome.path)}: ${outcome.reason ?? ""}`,
+        `${outcome.dir}: ${outcome.reason ?? ""}`,
         ...(outcome.conflicts ?? []).map((file) => `  ${file}`),
       ]),
     });
@@ -201,6 +214,6 @@ export function failureFor(outcomes: readonly SyncOutcome[]): WtError | undefine
 
 function describe(outcomes: readonly SyncOutcome[], what: string): string {
   return outcomes.length === 1 && outcomes[0]
-    ? `${basename(outcomes[0].path)} ${what}`
+    ? `${outcomes[0].dir} ${what}`
     : `${outcomes.length} worktrees ${what}`;
 }

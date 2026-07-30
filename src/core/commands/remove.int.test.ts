@@ -50,7 +50,7 @@ onPosix(
         silent(),
       );
 
-      expect(result.path).toBe(join(repo.root, "feat-login"));
+      expect(result.path).toBe(join(repo.root, "feat", "login"));
       expect(await pathExists(result.path)).toBe(false);
       expect((await listWorktrees(repo.bare)).map((w) => w.branch)).toEqual(["main"]);
 
@@ -67,6 +67,57 @@ onPosix(
   30_000,
 );
 
+// Nesting would otherwise leave an empty `feat/` behind forever, and those
+// accumulate into exactly the clutter the grouping was supposed to organise away.
+onPosix(
+  "removing the last branch under a prefix takes the empty folder with it",
+  async () => {
+    await withRepo(async (repo, work) => {
+      await addWorktree(repo, { branch: "feat/search", fetch: true, push: false }, silent());
+
+      await removeWorktree(
+        repo,
+        work,
+        { target: "feat/login", force: false, deleteBranch: false },
+        silent(),
+      );
+      // A sibling is still there, so the folder stays.
+      expect(await pathExists(join(repo.root, "feat"))).toBe(true);
+
+      await removeWorktree(
+        repo,
+        work,
+        { target: "feat/search", force: false, deleteBranch: false },
+        silent(),
+      );
+      expect(await pathExists(join(repo.root, "feat"))).toBe(false);
+      // Never the repo root itself, whatever is left.
+      expect(await pathExists(repo.root)).toBe(true);
+    });
+  },
+  30_000,
+);
+
+onPosix(
+  "a folder holding something of yours is left alone",
+  async () => {
+    await withRepo(async (repo, work) => {
+      await Bun.write(join(repo.root, "feat", "notes.txt"), "mine\n");
+
+      await removeWorktree(
+        repo,
+        work,
+        { target: "feat/login", force: false, deleteBranch: false },
+        silent(),
+      );
+
+      // Anything in there is someone's, not ours.
+      expect(await pathExists(join(repo.root, "feat", "notes.txt"))).toBe(true);
+    });
+  },
+  30_000,
+);
+
 onPosix(
   "either spelling of the target reaches the same worktree",
   async () => {
@@ -74,7 +125,7 @@ onPosix(
       const byDir = await removeWorktree(
         repo,
         work,
-        { target: "feat-login", force: false, deleteBranch: false },
+        { target: "feat/login", force: false, deleteBranch: false },
         silent(),
       );
 
@@ -90,7 +141,7 @@ onPosix(
   "refuses to remove the worktree you are standing in, even with --force",
   async () => {
     await withRepo(async (repo) => {
-      const inside = join(repo.root, "feat-login", "nested");
+      const inside = join(repo.root, "feat/login", "nested");
 
       for (const force of [false, true]) {
         const error = await expectError(
@@ -106,7 +157,7 @@ onPosix(
         expect(error.hint).toContain("cd");
       }
 
-      expect(await pathExists(join(repo.root, "feat-login"))).toBe(true);
+      expect(await pathExists(join(repo.root, "feat", "login"))).toBe(true);
     });
   },
   30_000,
@@ -116,7 +167,7 @@ onPosix(
   "refuses a dirty worktree and names what is in the way",
   async () => {
     await withRepo(async (repo, work) => {
-      const path = join(repo.root, "feat-login");
+      const path = join(repo.root, "feat", "login");
       await Bun.write(join(path, "login.txt"), "unsaved\n");
 
       const error = await expectError(
@@ -140,7 +191,7 @@ onPosix(
   "--force discards uncommitted changes",
   async () => {
     await withRepo(async (repo, work) => {
-      const path = join(repo.root, "feat-login");
+      const path = join(repo.root, "feat", "login");
       await Bun.write(join(path, "login.txt"), "unsaved\n");
 
       await removeWorktree(
@@ -205,7 +256,7 @@ onPosix(
   "keeps the branch by default and says so when it holds unpushed commits",
   async () => {
     await withRepo(async (repo, work) => {
-      const path = join(repo.root, "feat-login");
+      const path = join(repo.root, "feat", "login");
       await Bun.write(join(path, "extra.txt"), "work\n");
       await runGit(["add", "-A"], { cwd: path });
       await runGit(["-c", "commit.gpgsign=false", "commit", "-m", "unpushed"], { cwd: path });
@@ -274,7 +325,7 @@ onPosix(
   "--delete-branch stops short of throwing away unmerged commits",
   async () => {
     await withRepo(async (repo, work) => {
-      const path = join(repo.root, "feat-login");
+      const path = join(repo.root, "feat", "login");
       await Bun.write(join(path, "extra.txt"), "work\n");
       await runGit(["add", "-A"], { cwd: path });
       await runGit(["-c", "commit.gpgsign=false", "commit", "-m", "unmerged"], { cwd: path });
@@ -326,7 +377,7 @@ onPosix(
   "a locked worktree is refused with the command that unlocks it",
   async () => {
     await withRepo(async (repo, work) => {
-      await runGit(["worktree", "lock", "--reason", "held", join(repo.root, "feat-login")], {
+      await runGit(["worktree", "lock", "--reason", "held", join(repo.root, "feat", "login")], {
         cwd: repo.bare,
       });
 

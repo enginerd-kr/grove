@@ -19,8 +19,12 @@ Running `wt clone https://github.com/org/repo.git` in `~/work` produces:
 ~/work/repo/
   .bare/          the bare clone — all of git's actual storage
   .git            a file containing "gitdir: ./.bare"
-  main/           worktree for the default branch
-  feat-login/     worktree for feat/login
+  main/           worktree for main
+  feat/
+    login/        worktree for feat/login
+    search/       worktree for feat/search
+  fix/
+    crash/        worktree for fix/crash
 ```
 
 Everything for one repository lives in one folder, and every command works out which folder
@@ -47,19 +51,29 @@ wt add feat/login        # tracks origin/feat/login
 wt add feat/new-thing    # branches off origin/main
 wt list
 #  * main             main             clean
-#    feat/login       feat-login       2 ahead
-#    feat/new-thing   feat-new-thing   dirty
+#    feat/login       feat/login       2 ahead
+#    feat/new-thing   feat/new-thing   dirty
 
 wt sync --all            # fast-forward main, rebase the rest onto it
-wt rm feat/login         # or `wt rm feat-login` — both work
+wt rm feat/login         # by branch, by directory, or by path
 ```
 
 ### Naming
 
-`feat/login` becomes the directory `feat-login`. The mapping is one-way and never inverted:
-it is lossy (`feat/login` and `feat-login` both slug to `feat-login`) and `--dir` makes it
-arbitrary anyway. `remove` and `sync` instead look the target up in `git worktree list`, so a
-branch name, a directory name, or a path all work.
+A branch keeps its shape: `feat/login` becomes `feat/login` on disk, a worktree inside
+`feat/`. The tree mirrors `refs/heads`, so the grouping the slashes were there to express
+survives — with thirty branches, `feat/`, `fix/`, and `chore/` are how you find anything.
+`remove` deletes the folder too once the last branch under a prefix is gone.
+
+One consequence: `feat` and `feat/test` cannot both exist. git already forbids that pair as a
+ref D/F conflict, so the filesystem simply agrees with it.
+
+The mapping is one-way and never inverted — a branch name needing sanitising cannot be
+reconstructed, and `--dir` makes it arbitrary anyway. `remove` and `sync` look the target up in
+`git worktree list` instead, so a branch name, a directory path, or a filesystem path all work.
+
+`--dir` accepts a nested path but is validated rather than rewritten: no leading slash, no
+`..`, nothing that would put a worktree outside the repo folder or inside another worktree.
 
 ### Sync
 

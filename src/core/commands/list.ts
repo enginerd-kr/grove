@@ -1,7 +1,6 @@
-import { basename, relative, sep } from "node:path";
 import { defaultBranch } from "../branches.ts";
-import type { RepoPaths } from "../layout.ts";
-import { listWorktrees, statusOf } from "../worktrees.ts";
+import { contains, type RepoPaths } from "../layout.ts";
+import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
 /** `wt list` — what is here, what state it is in, and where you are standing. */
 
@@ -24,17 +23,6 @@ export type WorktreeSummary = {
   readonly current: boolean;
 };
 
-/** True when `cwd` is inside `path` — the worktree you are standing in. */
-export function contains(path: string, cwd: string): boolean {
-  if (cwd === path) return true;
-
-  const rel = relative(path, cwd);
-
-  // A non-empty relative path that neither climbs out nor is absolute means the
-  // directory really is below. String prefixes would call `/a/bc` a child of `/a/b`.
-  return rel.length > 0 && !rel.startsWith(`..${sep}`) && rel !== ".." && !rel.startsWith(sep);
-}
-
 export async function listWorktreeSummaries(
   repo: RepoPaths,
   cwd: string,
@@ -47,7 +35,7 @@ export async function listWorktreeSummaries(
 
       return {
         path: record.path,
-        dir: basename(record.path),
+        dir: worktreeDir(repo.root, record.path),
         branch: record.branch,
         detached: record.detached,
         dirty: status.dirty,

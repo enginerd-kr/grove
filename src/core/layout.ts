@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { WtError } from "./errors.ts";
 
 /**
@@ -36,19 +36,17 @@ export const GIT_FILE_CONTENTS = `gitdir: ./${BARE_DIR}\n`;
 const RESERVED = new Set(["", ".", "..", BARE_DIR, ".git"]);
 
 /**
- * A branch name as a directory name: `feat/login` becomes `feat-login`.
+ * One path segment, made safe to put on a filesystem.
  *
- * Case is preserved deliberately. Lowercasing would map `Feat/Login` and
- * `feat/login` onto one directory and invent a collision between two branches
- * git considers distinct.
+ * Case is preserved deliberately. Lowercasing would map `Feat` and `feat` onto
+ * one directory and invent a collision between two branches git considers
+ * distinct.
  *
- * The result can be empty — a branch of nothing but slashes and dots has no
- * usable name — so callers go through `worktreeDirName`, which turns that into
- * an error naming `--dir`.
+ * The result can be empty — a segment of nothing but dots and dashes has no
+ * usable name — which `worktreeRelPath` turns into an error naming `--dir`.
  */
-export function slugify(branch: string): string {
-  return branch
-    .replaceAll("/", "-")
+export function slugifySegment(segment: string): string {
+  return segment
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/-{2,}/g, "-")
     .replace(/^[-.]+/, "")
@@ -56,34 +54,77 @@ export function slugify(branch: string): string {
 }
 
 /**
- * The directory a branch's worktree gets, or an explicit `--dir` override.
+ * A branch's worktree directory, relative to the repo root.
  *
- * An override still has to be a single safe path segment: `--dir ../elsewhere`
- * would put a worktree outside the repo folder, where nothing else would find
- * it again.
+ * The branch's own shape is kept: `feat/test` becomes `feat/test`, a directory
+ * inside `feat/`. Flattening it to `feat-test` would throw away the grouping
+ * the slashes were there to express — with thirty branches, `feat/`, `fix/`,
+ * and `chore/` are how you find anything — and it is also what git does with
+ * refs, so the tree on disk mirrors the tree in `refs/heads`.
+ *
+ * Note this makes `feat` and `feat/test` mutually exclusive as branches, since
+ * one would have to be both a directory and a worktree. git already forbids
+ * exactly that pair as a ref D/F conflict, so the filesystem agrees with it.
  */
-export function worktreeDirName(branch: string, override?: string): string {
-  if (override !== undefined) {
-    if (override.includes("/") || override.includes("\\") || RESERVED.has(override)) {
-      throw new WtError(
-        "usage",
-        `--dir must be a single directory name, got ${JSON.stringify(override)}`,
-      );
-    }
+export function worktreeRelPath(branch: string, override?: string): string {
+  if (override !== undefined) return checkedOverride(override);
 
-    return override;
+  const segments = branch
+    .split("/")
+    .map(slugifySegment)
+    .filter((s) => s.length > 0);
+
+  if (segments.length === 0 || segments.some((s) => RESERVED.has(s))) {
+    throw new WtError("usage", `cannot derive a directory from branch ${JSON.stringify(branch)}`, {
+      hint: "pass --dir <path> to choose one",
+    });
   }
 
-  const slug = slugify(branch);
-  if (RESERVED.has(slug)) {
+  return segments.join("/");
+}
+
+/**
+ * Validates `--dir` rather than rewriting it.
+ *
+ * Someone naming a directory explicitly means it, so a silently slugified
+ * result would be worse than a refusal. Nesting is allowed — the default is
+ * nested now — but the path must stay inside the repo folder, or the worktree
+ * lands somewhere discovery will never find it again.
+ */
+function checkedOverride(override: string): string {
+  const segments = override.split(/[/\\]/);
+  const bad =
+    override.startsWith("/") ||
+    override.startsWith("\\") ||
+    /^[A-Za-z]:/.test(override) ||
+    segments.length === 0 ||
+    segments.some((segment) => RESERVED.has(segment));
+
+  if (bad) {
     throw new WtError(
       "usage",
-      `cannot derive a directory name from branch ${JSON.stringify(branch)}`,
-      { hint: "pass --dir <name> to choose one" },
+      `--dir must be a path inside the repo, got ${JSON.stringify(override)}`,
+      {
+        hint: "a relative path such as `feat/login`; no leading slash, no `..`",
+      },
     );
   }
 
-  return slug;
+  return segments.join("/");
+}
+
+/**
+ * True when `cwd` is inside `path` — the worktree you are standing in.
+ *
+ * A string prefix would call `/a/bc` a child of `/a/b`, which is how a command
+ * ends up refusing, or acting on, the wrong directory.
+ */
+export function contains(path: string, cwd: string): boolean {
+  if (cwd === path) return true;
+
+  const rel = relative(path, cwd);
+
+  return rel.length > 0 && !rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel);
 }
 
 /**

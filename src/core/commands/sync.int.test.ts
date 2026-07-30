@@ -59,7 +59,7 @@ onPosix(
   "replays a branch's commits on top of the updated default branch",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
-      const feature = join(repo.root, "feat-login");
+      const feature = join(repo.root, "feat", "login");
       await commitIn(feature, "mine.txt", "mine\n");
       await advanceRemote("theirs.txt", "theirs\n");
 
@@ -155,7 +155,7 @@ onPosix(
   "a dirty worktree is skipped before any git command runs against it",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
-      const feature = join(repo.root, "feat-login");
+      const feature = join(repo.root, "feat", "login");
       await advanceRemote("theirs.txt", "theirs\n");
       await Bun.write(join(feature, "login.txt"), "unsaved edit\n");
       const before = await gitOutput(["rev-parse", "HEAD"], { cwd: feature });
@@ -181,7 +181,7 @@ onPosix(
   "a real conflict is rolled back, leaving a clean tree",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
-      const feature = join(repo.root, "feat-login");
+      const feature = join(repo.root, "feat", "login");
       // Both sides change app.txt's only line, which is a genuine conflict.
       await commitIn(feature, "app.txt", "ours\n");
       await advanceRemote("app.txt", "theirs\n");
@@ -213,7 +213,7 @@ onPosix(
   "--no-abort leaves the conflict in place to resolve by hand",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
-      const feature = join(repo.root, "feat-login");
+      const feature = join(repo.root, "feat", "login");
       await commitIn(feature, "app.txt", "ours\n");
       await advanceRemote("app.txt", "theirs\n");
 
@@ -237,7 +237,7 @@ onPosix(
   "a rebase already in progress is left alone",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
-      const feature = join(repo.root, "feat-login");
+      const feature = join(repo.root, "feat", "login");
       await commitIn(feature, "app.txt", "ours\n");
       await advanceRemote("app.txt", "theirs\n");
 
@@ -281,7 +281,7 @@ onPosix(
   "--all keeps going past a worktree it cannot touch",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
-      const feature = join(repo.root, "feat-login");
+      const feature = join(repo.root, "feat", "login");
       await Bun.write(join(feature, "login.txt"), "unsaved\n");
       await advanceRemote("theirs.txt", "theirs\n");
 
@@ -308,7 +308,7 @@ onPosix(
   "a conflict outranks a skip when reporting the run",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
-      const feature = join(repo.root, "feat-login");
+      const feature = join(repo.root, "feat", "login");
       const main = join(repo.root, "main");
       await commitIn(feature, "app.txt", "ours\n");
       await advanceRemote("app.txt", "theirs\n");

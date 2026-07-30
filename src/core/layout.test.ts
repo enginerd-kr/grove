@@ -1,38 +1,47 @@
 import { expect, test } from "bun:test";
 import { WtError } from "./errors.ts";
-import { looksLikeRepoUrl, repoNameFromUrl, slugify, worktreeDirName } from "./layout.ts";
+import {
+  contains,
+  looksLikeRepoUrl,
+  repoNameFromUrl,
+  slugifySegment,
+  worktreeRelPath,
+} from "./layout.ts";
 
-test("slugify flattens branch names into directory names", () => {
+// The tree on disk mirrors the tree in refs/heads: `feat/test` is a worktree
+// inside `feat/`, not a directory called `feat-test`.
+test("a branch keeps its shape as a nested directory", () => {
   const cases: readonly (readonly [string, string])[] = [
-    ["feat/login", "feat-login"],
+    ["feat/test", "feat/test"],
+    ["feat/login", "feat/login"],
     ["main", "main"],
-    ["release/v1.2.0", "release-v1.2.0"],
-    ["feature/JIRA-123/add-thing", "feature-JIRA-123-add-thing"],
-    ["fix/spaces in name", "fix-spaces-in-name"],
-    ["feat/한글", "feat"],
-    ["a//b", "a-b"],
+    ["release/v1.2.0", "release/v1.2.0"],
+    ["feature/JIRA-123/add-thing", "feature/JIRA-123/add-thing"],
+    ["fix/spaces in name", "fix/spaces-in-name"],
+    ["a//b", "a/b"],
     ["--leading", "leading"],
     ["trailing--", "trailing"],
     [".hidden", "hidden"],
+    ["feat/한글", "feat"],
   ];
 
   for (const [branch, expected] of cases) {
-    expect(slugify(branch)).toBe(expected);
+    expect(worktreeRelPath(branch)).toBe(expected);
   }
 });
 
 // Lowercasing would map two branches git considers distinct onto one directory,
 // inventing a collision that did not exist.
-test("slugify preserves case", () => {
-  expect(slugify("Feat/Login")).toBe("Feat-Login");
-  expect(slugify("Feat/Login")).not.toBe(slugify("feat/login"));
+test("case is preserved", () => {
+  expect(worktreeRelPath("Feat/Login")).toBe("Feat/Login");
+  expect(slugifySegment("Feat")).not.toBe(slugifySegment("feat"));
 });
 
 test("a branch with no usable characters is a usage error naming --dir", () => {
-  for (const branch of ["///", "...", "---", "한글"]) {
+  for (const branch of ["///", "...", "---", "\uD55C\uAE00"]) {
     const thrown = (() => {
       try {
-        worktreeDirName(branch);
+        worktreeRelPath(branch);
         return undefined;
       } catch (error) {
         return error;
@@ -45,22 +54,36 @@ test("a branch with no usable characters is a usage error naming --dir", () => {
   }
 });
 
-test("--dir must be a single safe segment", () => {
-  expect(worktreeDirName("feat/login", "login")).toBe("login");
+test("--dir is validated, not rewritten", () => {
+  // Someone naming a directory explicitly means it; a silently slugified result
+  // would be worse than a refusal.
+  expect(worktreeRelPath("feat/login", "login")).toBe("login");
+  // Nesting is allowed now that it is the default.
+  expect(worktreeRelPath("feat/login", "work/login")).toBe("work/login");
 
   // The failure this prevents: a worktree created outside the repo folder,
   // where discovery would never find it again.
-  for (const override of ["../elsewhere", "nested/dir", ".bare", ".git", "..", ""]) {
-    expect(() => worktreeDirName("feat/login", override)).toThrow(WtError);
+  for (const override of ["../elsewhere", "nested/../..", "/abs/path", ".bare", ".git", "..", ""]) {
+    expect(() => worktreeRelPath("feat/login", override)).toThrow(WtError);
   }
 });
 
-test("slugs that would collide with repository plumbing are rejected", () => {
-  // `.bare` and `.git` survive slugify only as `bare`/`git`, which are safe;
+test("no segment may collide with repository plumbing", () => {
+  // `.bare` and `.git` survive sanitising only as `bare`/`git`, which are safe;
   // this pins that they cannot come back as the dotted originals.
-  expect(slugify(".bare")).toBe("bare");
-  expect(slugify(".git")).toBe("git");
-  expect(worktreeDirName(".bare")).toBe("bare");
+  expect(worktreeRelPath(".bare")).toBe("bare");
+  expect(worktreeRelPath("x/.git/y")).toBe("x/git/y");
+});
+
+test("contains matches a directory but not a sibling with a shared prefix", () => {
+  // The bug a string prefix would introduce: `/work/repo/main-old` reported as
+  // being inside `/work/repo/main`.
+  expect(contains("/work/repo/main", "/work/repo/main")).toBe(true);
+  expect(contains("/work/repo/main", "/work/repo/main/src/deep")).toBe(true);
+  expect(contains("/work/repo/main", "/work/repo/main-old")).toBe(false);
+  expect(contains("/work/repo/main", "/work/repo")).toBe(false);
+  // And the case nesting makes routine: feat/test really is inside feat.
+  expect(contains("/work/repo/feat", "/work/repo/feat/test")).toBe(true);
 });
 
 test("repoNameFromUrl matches what git clone would have picked", () => {

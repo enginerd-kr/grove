@@ -10,7 +10,7 @@ import {
   looksLikeRepoUrl,
   repoNameFromUrl,
   repoPaths,
-  worktreeDirName,
+  worktreeRelPath,
 } from "../layout.ts";
 
 /**
@@ -101,7 +101,7 @@ export async function cloneRepo(
     const trunk = await defaultBranch(paths.bare);
     const branch = options.branch ?? trunk;
 
-    const worktree = join(root, worktreeDirName(branch));
+    const worktree = join(root, worktreeRelPath(branch));
     await Bun.write(paths.gitFile, GIT_FILE_CONTENTS);
     await createFirstWorktree(paths.bare, branch, worktree);
     await pruneUnusedHeads(paths.bare, branch);

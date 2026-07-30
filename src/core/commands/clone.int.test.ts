@@ -98,7 +98,8 @@ onPosix(
       expect(result.branch).toBe("feat/login");
       // Still reported as the remote's trunk, which is what sync rebases onto.
       expect(result.defaultBranch).toBe("main");
-      expect(result.worktree).toBe(join(result.root, "feat-login"));
+      // Nested, mirroring the branch: `feat/login`, not `feat-login`.
+      expect(result.worktree).toBe(join(result.root, "feat", "login"));
       expect(await pathExists(join(result.worktree, "login.txt"))).toBe(true);
 
       expect(await gitOutput(["symbolic-ref", "--short", "HEAD"], { cwd: result.bare })).toBe(

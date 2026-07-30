@@ -125,22 +125,30 @@ test("a rename's original path is not counted as a second change", () => {
   expect(status.changed).toEqual(["new name.txt", "after.txt"]);
 });
 
+const ROOT = "/work/repo";
 const WORKTREES: readonly WorktreeRecord[] = [
   { path: "/work/repo/main", branch: "main", detached: false, bare: false },
-  { path: "/work/repo/feat-login", branch: "feat/login", detached: false, bare: false },
+  { path: "/work/repo/feat/login", branch: "feat/login", detached: false, bare: false },
   { path: "/work/repo/det", detached: true, bare: false },
 ];
 
 test("a target resolves by branch, by directory, or by path", () => {
-  // The point of looking it up rather than inverting the slug: both spellings
-  // reach the same worktree, and neither is a guess.
-  expect(resolveTarget("feat/login", WORKTREES, "/work/repo").path).toBe("/work/repo/feat-login");
-  expect(resolveTarget("feat-login", WORKTREES, "/work/repo").path).toBe("/work/repo/feat-login");
-  expect(resolveTarget("/work/repo/feat-login", WORKTREES, "/tmp").path).toBe(
-    "/work/repo/feat-login",
-  );
+  const at = (target: string, cwd = ROOT) =>
+    resolveTarget(target, WORKTREES, { root: ROOT, cwd }).path;
+
+  // With nesting the branch and the directory are spelled the same way, which is
+  // the point — but both routes still have to work, and neither is a guess.
+  expect(at("feat/login")).toBe("/work/repo/feat/login");
+  expect(at("/work/repo/feat/login", "/tmp")).toBe("/work/repo/feat/login");
   // Relative to where the user is standing, which is how tab completion spells it.
-  expect(resolveTarget("./feat-login", WORKTREES, "/work/repo").path).toBe("/work/repo/feat-login");
+  expect(at("./feat/login")).toBe("/work/repo/feat/login");
+  expect(at("main")).toBe("/work/repo/main");
+});
+
+// `feat` is a folder holding worktrees, not a worktree — so naming it is a
+// miss, not a partial match on everything beneath it.
+test("a parent directory is not a target", () => {
+  expect(() => resolveTarget("feat", WORKTREES, { root: ROOT, cwd: ROOT })).toThrow(WtError);
 });
 
 test("branch wins over a directory of the same name", () => {
@@ -151,13 +159,13 @@ test("branch wins over a directory of the same name", () => {
 
   // "main" is both a branch and a directory here. Branch is what people say out
   // loud, so it is what wins.
-  expect(resolveTarget("main", clashing, "/work/repo").path).toBe("/work/repo/other");
+  expect(resolveTarget("main", clashing, { root: ROOT, cwd: ROOT }).path).toBe("/work/repo/other");
 });
 
 test("an unknown target lists what is actually there", () => {
   const thrown = (() => {
     try {
-      resolveTarget("nope", WORKTREES, "/work/repo");
+      resolveTarget("nope", WORKTREES, { root: ROOT, cwd: ROOT });
       return undefined;
     } catch (error) {
       return error;

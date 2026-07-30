@@ -1,12 +1,12 @@
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranchExists, remoteBranchExists } from "../branches.ts";
 import { WtError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
-import { worktreeDirName } from "../layout.ts";
-import { listWorktrees, type WorktreeRecord } from "../worktrees.ts";
+import { contains, worktreeRelPath } from "../layout.ts";
+import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
 /** `wt add` — give a branch a worktree, creating the branch if it does not exist. */
 
@@ -37,17 +37,19 @@ export async function addWorktree(
   options: AddOptions,
   reporter: Reporter,
 ): Promise<AddResult> {
-  const path = join(repo.root, worktreeDirName(options.branch, options.dir));
+  const dir = worktreeRelPath(options.branch, options.dir);
+  const path = join(repo.root, dir);
   const worktrees = await listWorktrees(repo.bare);
 
-  const existing = await checkAlreadyThere(options.branch, path, worktrees);
+  const existing = await checkAlreadyThere(repo.root, options.branch, path, worktrees);
   if (existing) return existing;
 
-  refuseNameCollision(path, worktrees);
+  refuseNameCollision(repo.root, path, worktrees);
+  refuseNesting(repo.root, path, worktrees);
 
   if (await pathExists(path)) {
-    throw new WtError("state-conflict", `${path} already exists`, {
-      hint: "pass --dir <name> to use a different directory",
+    throw new WtError("state-conflict", `${dir} already exists`, {
+      hint: "pass --dir <path> to use a different directory",
     });
   }
 
@@ -55,8 +57,10 @@ export async function addWorktree(
 
   const step = reporter.step(`adding ${options.branch}`);
   try {
+    // `git worktree add` creates intermediate directories itself, so a nested
+    // path needs no mkdir of ours.
     await runGitOrThrow(argsFor(source, options, path), { cwd: repo.bare });
-    step.succeed(`added ${basename(path)}`);
+    step.succeed(`added ${dir}`);
   } catch (error) {
     step.fail(`could not add ${options.branch}`);
     throw error;
@@ -81,6 +85,7 @@ export async function addWorktree(
  * it safe to put in a script.
  */
 async function checkAlreadyThere(
+  root: string,
   branch: string,
   path: string,
   worktrees: readonly WorktreeRecord[],
@@ -97,27 +102,57 @@ async function checkAlreadyThere(
   throw new WtError(
     "state-conflict",
     `${JSON.stringify(branch)} is already checked out at ${holder.path}`,
-    { hint: `use that worktree, or remove it first: wt rm ${basename(holder.path)}` },
+    { hint: `use that worktree, or remove it first: wt rm ${worktreeDir(root, holder.path)}` },
   );
 }
 
 /**
- * Refuses a directory name that differs from an existing one only by case.
+ * Refuses a directory that differs from an existing one only by case.
  *
- * macOS and Windows filesystems fold case, so `Feat-Login` and `feat-login`
+ * macOS and Windows filesystems fold case, so `Feat/Login` and `feat/login`
  * would be the same directory there and a different one on Linux. Refusing is
  * better than a repository that only works on the machine it was made on.
  */
-function refuseNameCollision(path: string, worktrees: readonly WorktreeRecord[]): void {
-  const wanted = basename(path).toLowerCase();
+function refuseNameCollision(
+  root: string,
+  path: string,
+  worktrees: readonly WorktreeRecord[],
+): void {
+  const wanted = worktreeDir(root, path).toLowerCase();
   const clash = worktrees.find(
-    (record) => record.path !== path && basename(record.path).toLowerCase() === wanted,
+    (record) => record.path !== path && worktreeDir(root, record.path).toLowerCase() === wanted,
   );
 
   if (clash) {
-    throw new WtError("state-conflict", `${basename(clash.path)} already exists here`, {
-      hint: "directory names that differ only by case collide on macOS and Windows; pass --dir",
+    throw new WtError("state-conflict", `${worktreeDir(root, clash.path)} already exists here`, {
+      hint: "directories differing only by case collide on macOS and Windows; pass --dir",
     });
+  }
+}
+
+/**
+ * Refuses a worktree that would sit inside another, or swallow one.
+ *
+ * Newly possible now that directories nest: `feat/test` lives under `feat/`, so
+ * a `--dir feat` would put one worktree inside the other. git allows it, and the
+ * result is quietly broken — the outer worktree reports the inner one's files as
+ * untracked, and `git clean` there deletes someone's work.
+ *
+ * Branches alone cannot reach this (git forbids `feat` and `feat/test` as a ref
+ * D/F conflict); `--dir` can.
+ */
+function refuseNesting(root: string, path: string, worktrees: readonly WorktreeRecord[]): void {
+  const clash = worktrees.find(
+    (record) =>
+      record.path !== path && (contains(record.path, path) || contains(path, record.path)),
+  );
+
+  if (clash) {
+    throw new WtError(
+      "state-conflict",
+      `that would nest with the worktree at ${worktreeDir(root, clash.path)}`,
+      { hint: "one worktree inside another makes each report the other's files; pass --dir" },
+    );
   }
 }
 

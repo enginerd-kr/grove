@@ -1,4 +1,4 @@
-import { basename, join, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { WtError } from "./errors.ts";
 import { pathExists } from "./fs.ts";
 import { gitOutput, runGit } from "./git.ts";
@@ -224,25 +224,33 @@ export async function statusOf(path: string): Promise<WorktreeStatus> {
   return parseStatus(result.stdout);
 }
 
+/** A worktree's directory relative to the repo root, always with `/` separators. */
+export function worktreeDir(root: string, path: string): string {
+  return relative(root, path).split(sep).join("/");
+}
+
 /**
  * Finds the worktree a user means by `target`.
  *
- * Never inverts `slugify`: the mapping is lossy — `feat/login` and `feat-login`
- * both slug to `feat-login` — and `--dir` makes it arbitrary anyway. Matching
- * against what git reports means both spellings work and neither is a guess.
+ * The branch-to-directory mapping is never inverted. It is lossy — a branch
+ * whose name needed sanitising cannot be reconstructed from the result — and
+ * `--dir` makes it arbitrary anyway, so the answer is looked up in what git
+ * reports rather than recomputed.
  *
  * Order matters. Branch first, because that is what people say out loud; then
- * the directory name they can see; then a path, for tab completion.
+ * the directory, which for a nested layout is the whole relative path (`feat`
+ * alone is a folder, not a worktree); then a path, for tab completion.
  */
 export function resolveTarget(
   target: string,
   worktrees: readonly WorktreeRecord[],
-  cwd: string,
+  { root, cwd }: { readonly root: string; readonly cwd: string },
 ): WorktreeRecord {
   const byBranch = worktrees.filter((record) => record.branch === target);
   if (byBranch.length === 1 && byBranch[0]) return byBranch[0];
 
-  const byDir = worktrees.filter((record) => basename(record.path) === target);
+  const wantedDir = target.split(sep).join("/").replace(/\/+$/, "");
+  const byDir = worktrees.filter((record) => worktreeDir(root, record.path) === wantedDir);
   if (byDir.length === 1 && byDir[0]) return byDir[0];
 
   const wanted = resolve(cwd, target);
@@ -252,7 +260,7 @@ export function resolveTarget(
   const ambiguous = [...byBranch, ...byDir, ...byPath];
   if (ambiguous.length > 1) {
     throw new WtError("usage", `${JSON.stringify(target)} matches more than one worktree`, {
-      hint: "pass the directory name or the full path",
+      hint: "pass the directory path or the full path",
       details: ambiguous.map((record) => record.path),
     });
   }
@@ -260,7 +268,7 @@ export function resolveTarget(
   throw new WtError("not-a-repo", `no worktree matches ${JSON.stringify(target)}`, {
     hint: "run `wt list` to see what is there",
     details: worktrees.map(
-      (record) => `${record.branch ?? "(detached)"}  ${basename(record.path)}`,
+      (record) => `${record.branch ?? "(detached)"}  ${worktreeDir(root, record.path)}`,
     ),
   });
 }
