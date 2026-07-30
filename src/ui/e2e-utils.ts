@@ -11,7 +11,7 @@ import { plain } from "./test-utils.ts";
  * POSIX only; the tests skip themselves on Windows.
  */
 
-const ENTRY = `${import.meta.dir}/cli.tsx`;
+const ENTRY = `${import.meta.dir}/../cli.tsx`;
 
 export type UiSession = {
   /** Sends raw bytes, exactly as a terminal would — reuse `keys` from test-utils. */
@@ -64,6 +64,7 @@ const QUIET_MS = 50;
 type StartOptions = {
   readonly cols?: number;
   readonly rows?: number;
+  readonly args?: readonly string[];
 };
 
 /**
@@ -73,7 +74,7 @@ type StartOptions = {
  * Clearing the buffer before an interaction makes the next repaint readable on
  * its own — enough for smoke assertions without emulating a terminal grid.
  */
-export function startUi({ cols = 80, rows = 24 }: StartOptions = {}): UiSession {
+export function startUi({ cols = 80, rows = 24, args = [] }: StartOptions = {}): UiSession {
   // Older runtimes ignore the `terminal` option instead of rejecting it, so the
   // child quietly gets no PTY and every wait here dies on a timeout that says
   // nothing. Fail on the actual reason.
@@ -85,7 +86,7 @@ export function startUi({ cols = 80, rows = 24 }: StartOptions = {}): UiSession 
   let buffer = "";
   let lastDataAt = Date.now();
 
-  const proc = Bun.spawn(["bun", ENTRY], {
+  const proc = Bun.spawn(["bun", ENTRY, ...args], {
     env: {
       ...process.env,
       TERM: "xterm-256color",
@@ -203,15 +204,26 @@ export function startUi({ cols = 80, rows = 24 }: StartOptions = {}): UiSession 
   };
 }
 
-/** Runs the entry point with pipes instead of a PTY, to hit the `isTTY` guard. */
-export async function runUiWithoutTty(): Promise<{ exitCode: number; stderr: string }> {
-  const proc = Bun.spawn(["bun", ENTRY], {
+/**
+ * Runs the entry point with pipes instead of a PTY.
+ *
+ * Covers both halves of the no-terminal contract: the `isTTY` guard, and the
+ * flags that must still answer when piped (`--help`, `--version`).
+ */
+export async function runUiWithoutTty(
+  args: readonly string[] = [],
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const proc = Bun.spawn(["bun", ENTRY, ...args], {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   });
 
-  const [exitCode, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
 
-  return { exitCode, stderr };
+  return { exitCode, stdout, stderr };
 }

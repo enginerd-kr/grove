@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { version } from "../../package.json";
 import { runUiWithoutTty, startUi, type UiSession } from "./e2e-utils.ts";
 import { keys } from "./test-utils.ts";
 
@@ -15,7 +16,7 @@ const onPosix = test.skipIf(process.platform === "win32");
 
 const sessions: UiSession[] = [];
 
-function start(options?: { cols: number; rows: number }): UiSession {
+function start(options?: { cols?: number; rows?: number; args?: readonly string[] }): UiSession {
   const session = startUi(options);
   sessions.push(session);
   return session;
@@ -50,6 +51,47 @@ onPosix(
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain("needs an interactive terminal");
+  },
+  20_000,
+);
+
+// --help and --version are the two things that must answer when piped, so they
+// are checked through the process rather than against parseCliArgs alone.
+onPosix(
+  "answers --help and --version without a terminal",
+  async () => {
+    const help = await runUiWithoutTty(["--help"]);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain("Usage:");
+    expect(help.stdout).toContain("--tab");
+
+    const versionRun = await runUiWithoutTty(["--version"]);
+    expect(versionRun.exitCode).toBe(0);
+    expect(versionRun.stdout.trim()).toBe(version);
+  },
+  20_000,
+);
+
+onPosix(
+  "exits 2 on a bad flag, pointing at --help",
+  async () => {
+    const { exitCode, stderr } = await runUiWithoutTty(["--tab", "9"]);
+
+    expect(exitCode).toBe(2);
+    expect(stderr).toContain("--tab");
+    expect(stderr).toContain("--help");
+  },
+  20_000,
+);
+
+onPosix(
+  "opens on the tab named by --tab",
+  async () => {
+    const ui = start({ args: ["--tab", "2"] });
+
+    const frame = await ui.waitForFrame((f) => f.includes("2/5 done"));
+    expect(frame).toContain("space toggle");
+    expect(frame).not.toContain("Count 0");
   },
   20_000,
 );

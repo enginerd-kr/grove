@@ -42,6 +42,9 @@ const TABS: readonly Tab[] = [
   },
 ];
 
+/** Tab names in order. The CLI validates `--tab` against this and lists it in `--help`. */
+export const TAB_LABELS: readonly string[] = TABS.map((tab) => tab.label);
+
 const GLOBAL_HINTS: readonly Hint[] = [
   { keys: "1-3/tab", action: "switch" },
   { keys: "q", action: "quit" },
