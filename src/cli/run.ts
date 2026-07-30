@@ -1,3 +1,5 @@
+import { relative } from "node:path";
+import { cloneRepo } from "../core/commands/clone.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, WtCommand } from "./args.ts";
 
@@ -21,9 +23,32 @@ function notImplemented(name: string): never {
   throw new Error(`\`${name}\` is not implemented yet`);
 }
 
-export async function runCommand(command: WtCommand, _context: CommandContext): Promise<void> {
+/** Paths are reported relative to where the user is standing, when that is shorter. */
+function display(cwd: string, path: string): string {
+  const rel = relative(cwd, path);
+
+  return rel.length > 0 && rel.length < path.length ? rel : path;
+}
+
+export async function runCommand(command: WtCommand, context: CommandContext): Promise<void> {
+  const { cwd, global, reporter } = context;
+
   switch (command.name) {
-    case "clone":
+    case "clone": {
+      const result = await cloneRepo(
+        cwd,
+        { url: command.url, dir: command.dir, branch: command.branch },
+        reporter,
+      );
+
+      if (global.json) {
+        reporter.out(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      reporter.out(`${display(cwd, result.worktree)}\t${result.branch}`);
+      return;
+    }
     case "add":
     case "list":
     case "remove":

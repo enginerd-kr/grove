@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runGit, runGitOrThrow } from "./git.ts";
@@ -91,7 +91,10 @@ async function seedOrigin(root: string, originPath: string): Promise<void> {
  * override — that is the whole point of it being production code.
  */
 export async function withTempRepo(body: (repo: TempRepo) => Promise<void>): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), "wt-"));
+  // Canonicalised because on macOS `tmpdir()` is a symlink (`/var` → `/private/var`)
+  // and git reports the resolved path. Without this, every assertion comparing a
+  // path git produced against one the test built would fail on the prefix alone.
+  const root = await realpath(await mkdtemp(join(tmpdir(), "wt-")));
   const restore = new Map<string, string | undefined>();
 
   for (const [key, value] of Object.entries(GIT_ENV)) {

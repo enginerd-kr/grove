@@ -159,6 +159,23 @@ export async function gitSucceeds(
   return (await runGit(args, options)).code === 0;
 }
 
+/**
+ * The percentage out of a git progress line, if it is one.
+ *
+ * git emits several phases in sequence ("Counting", "Compressing", "Receiving",
+ * "Resolving"), each running 0–100, so a bar fed from this restarts a few times
+ * during one clone. That is honest — the phases really are separate — and it
+ * beats inventing a weighted total that would be wrong for shallow clones.
+ */
+export function parseGitProgress(line: string): number | undefined {
+  const match = /(?:Counting|Compressing|Receiving|Resolving) objects:\s+(\d+)%/.exec(line);
+  if (!match) return undefined;
+
+  const percent = Number(match[1]);
+
+  return Number.isFinite(percent) ? percent : undefined;
+}
+
 /** stdout with trailing whitespace removed — git terminates almost everything with a newline. */
 export async function gitOutput(
   args: readonly string[],

@@ -1,0 +1,180 @@
+import { mkdir, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import type { Reporter } from "../../report/reporter.ts";
+import { defaultBranch, localBranches, remoteBranchExists, updateRemoteHead } from "../branches.ts";
+import { WtError } from "../errors.ts";
+import { isEmptyOrMissing, pathExists } from "../fs.ts";
+import { gitOutput, parseGitProgress, runGit, runGitOrThrow } from "../git.ts";
+import {
+  GIT_FILE_CONTENTS,
+  looksLikeRepoUrl,
+  repoNameFromUrl,
+  repoPaths,
+  worktreeDirName,
+} from "../layout.ts";
+
+/**
+ * `wt clone` — turn a remote URL into a managed repository.
+ *
+ * The result is one directory holding `.bare`, a `.git` file pointing at it, and
+ * a worktree for the first branch. Getting there is more than `git clone
+ * --bare`, and the extra steps are the reason this command exists at all.
+ */
+
+export type CloneOptions = {
+  readonly url: string;
+  /** Directory name for the repo folder; defaults to the URL's last segment. */
+  readonly dir?: string;
+  /** Branch to check out first; defaults to whatever the remote calls default. */
+  readonly branch?: string;
+};
+
+export type CloneResult = {
+  readonly root: string;
+  readonly bare: string;
+  readonly defaultBranch: string;
+  /** The branch that got the first worktree. */
+  readonly branch: string;
+  readonly worktree: string;
+};
+
+const REMOTE = "origin";
+
+/**
+ * The refspec `git clone --bare` declines to write.
+ *
+ * Without it `git fetch` exits 0 having updated nothing: a bare clone copies the
+ * remote's heads straight into `refs/heads/*` and configures no mapping into
+ * `refs/remotes/*`. Every later command then fails in a way that points
+ * somewhere else — `add` cannot find `origin/feat-x`, `sync` has no upstream to
+ * rebase onto, `--prune` prunes nothing — so it is set before the first fetch.
+ */
+const FETCH_REFSPEC = `+refs/heads/*:refs/remotes/${REMOTE}/*`;
+
+export async function cloneRepo(
+  cwd: string,
+  options: CloneOptions,
+  reporter: Reporter,
+): Promise<CloneResult> {
+  if (!looksLikeRepoUrl(options.url)) {
+    throw new WtError(
+      "usage",
+      `${JSON.stringify(options.url)} does not look like a repository URL`,
+    );
+  }
+
+  const root = resolve(cwd, options.dir ?? repoNameFromUrl(options.url));
+  const paths = repoPaths(root);
+
+  if (!(await isEmptyOrMissing(root))) {
+    throw new WtError("state-conflict", `${root} already exists and is not empty`, {
+      hint: "pass a different directory: wt clone <url> <dir>",
+    });
+  }
+
+  // Remember whether we are the ones creating it, so a failure cleans up after
+  // itself without deleting a directory the user had already made.
+  const rootExisted = await pathExists(root);
+
+  try {
+    await mkdir(root, { recursive: true });
+
+    const step = reporter.step(`cloning ${options.url}`);
+    try {
+      await runGitOrThrow(["clone", "--bare", "--progress", options.url, paths.bare], {
+        cwd,
+        onStderrLine: (line) => {
+          const percent = parseGitProgress(line);
+          if (percent !== undefined) step.progress(percent);
+        },
+      });
+      step.succeed("cloned");
+    } catch (error) {
+      step.fail("clone failed");
+      throw error;
+    }
+
+    await configureRemote(paths.bare, reporter);
+
+    const trunk = await defaultBranch(paths.bare);
+    const branch = options.branch ?? trunk;
+
+    const worktree = join(root, worktreeDirName(branch));
+    await Bun.write(paths.gitFile, GIT_FILE_CONTENTS);
+    await createFirstWorktree(paths.bare, branch, worktree);
+    await pruneUnusedHeads(paths.bare, branch);
+
+    reporter.info(`${root} is ready`);
+
+    return { root, bare: paths.bare, defaultBranch: trunk, branch, worktree };
+  } catch (error) {
+    // A partial `.bare` is worse than nothing: discovery would find it, every
+    // command would then fail obscurely, and re-running clone would refuse
+    // because the directory is no longer empty. Removing it makes clone
+    // idempotent — the second attempt behaves like the first.
+    await rm(rootExisted ? paths.bare : root, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function configureRemote(bare: string, reporter: Reporter): Promise<void> {
+  const step = reporter.step("fetching refs");
+
+  await runGitOrThrow(["config", `remote.${REMOTE}.fetch`, FETCH_REFSPEC], { cwd: bare });
+  await runGitOrThrow(["fetch", REMOTE, "--prune", "--tags"], { cwd: bare });
+
+  if (!(await updateRemoteHead(bare))) {
+    // A remote that advertises no HEAD is unusual but survivable: the branch the
+    // clone checked out is the same one git would have picked.
+    const head = await gitOutput(["symbolic-ref", "--short", "HEAD"], { cwd: bare });
+    await runGitOrThrow(
+      ["symbolic-ref", `refs/remotes/${REMOTE}/HEAD`, `refs/remotes/${REMOTE}/${head}`],
+      { cwd: bare },
+    );
+  }
+
+  step.succeed("fetched refs");
+}
+
+async function createFirstWorktree(bare: string, branch: string, path: string): Promise<void> {
+  const exists = await runGit(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], {
+    cwd: bare,
+  });
+
+  if (exists.code !== 0) {
+    throw new WtError("usage", `the remote has no branch named ${JSON.stringify(branch)}`, {
+      hint: "omit --branch to use the remote's default",
+    });
+  }
+
+  await runGitOrThrow(["worktree", "add", path, branch], { cwd: bare });
+
+  // `clone --bare` copies the heads without any branch.<name>.remote config, so
+  // this branch would have no upstream: `git status` would not say "up to date
+  // with origin/main", and a bare `git push` would have nothing to aim at.
+  if (await remoteBranchExists(bare, branch)) {
+    await runGitOrThrow(["branch", `--set-upstream-to=${REMOTE}/${branch}`, branch], { cwd: bare });
+  }
+
+  // HEAD follows the branch that has a worktree, not the remote's default. It
+  // has to point at a ref that survives the pruning below, and this is the one
+  // that does.
+  await runGitOrThrow(["symbolic-ref", "HEAD", `refs/heads/${branch}`], { cwd: bare });
+}
+
+/**
+ * Deletes the local branches `clone --bare` copied in but nothing checked out.
+ *
+ * Establishes the invariant the rest of the tool leans on: **a ref exists under
+ * `refs/heads/` exactly when a worktree holds it**. With that, `add` can always
+ * create-and-track in one step, `list` never shows a branch you cannot visit,
+ * and every local branch has a correct upstream. The remote-tracking refs
+ * configured above are what still remembers the other branches.
+ */
+async function pruneUnusedHeads(bare: string, keep: string): Promise<void> {
+  for (const branch of await localBranches(bare)) {
+    if (branch === keep) continue;
+
+    await runGitOrThrow(["update-ref", "-d", `refs/heads/${branch}`], { cwd: bare });
+  }
+}
