@@ -1,8 +1,8 @@
 name: CI
 
+# Pull requests only: main is not pushed to directly, so every change reaches it
+# through a PR that this workflow has already checked.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
