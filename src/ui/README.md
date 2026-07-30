@@ -30,9 +30,13 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   overflow.
 - **The tree is pure and lives in `app/tree.ts`.** Ordering is the part worth testing —
   worktrees before folders at each level, the default branch before its siblings — and none of
-  it needs a terminal. The screen draws what it returns and keeps its cursor over the *leaves*,
-  so a folder heading is stepped over rather than selected, and the scroll window is measured in
-  drawn rows because those include the headings.
+  it needs a terminal. The screen draws what it returns and the cursor walks every row it
+  produced, folders included — `leavesUnder` is what turns a folder row back into the worktrees
+  it stands for.
+- **Cursor moves go through `setCursor(previous => …)`.** Keys arrive faster than React commits,
+  so two presses in one frame both read the same rendered index and the second goes nowhere —
+  which is exactly what holding an arrow key does. The clamp lives in the updater too, so a list
+  that shrank under the cursor cannot leave it past the end.
 - **The screen holds no git knowledge.** `App` takes a `WorktreeService` — four functions, each
   answering with the line to show afterwards. That is what lets `App.test.tsx` drive every key
   with a stub and no repository, and it is why a keystroke cannot grow a capability the command

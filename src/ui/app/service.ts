@@ -18,6 +18,14 @@ export type WorktreeService = {
   /** Each action answers with the one line worth showing afterwards. */
   readonly add: (branch: string) => Promise<string>;
   readonly remove: (target: string) => Promise<string>;
+  /**
+   * Every worktree under one folder, removed one at a time.
+   *
+   * Not a new power — it is `remove` in a loop, and each one faces the same
+   * refusals — which is what makes a folder safe to select at all. One that
+   * refuses does not stop the rest; the answer says how many did what.
+   */
+  readonly removeMany: (targets: readonly string[]) => Promise<string>;
   /** `target` omitted means every worktree — the app's `S`. */
   readonly sync: (target?: string) => Promise<string>;
 };
@@ -64,6 +72,36 @@ export function createWorktreeService(
       );
 
       return result.unpushedWarning ?? `removed ${result.branch ?? result.path}`;
+    },
+
+    removeMany: async (targets) => {
+      // Deepest first, so `remove` can prune the folder it empties instead of
+      // tripping over a worktree still sitting inside it.
+      const ordered = targets.toSorted(
+        (a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b),
+      );
+
+      let removed = 0;
+      const refusals: unknown[] = [];
+
+      for (const target of ordered) {
+        try {
+          await removeWorktree(repo, cwd, { target, force: false, deleteBranch: false }, reporter);
+          removed += 1;
+        } catch (error) {
+          refusals.push(error);
+        }
+      }
+
+      // Nothing removed means the refusal *is* the outcome, and a red line
+      // saying why beats a grey one counting to zero.
+      const first = refusals[0];
+      if (removed === 0 && first !== undefined) throw first;
+
+      const plural = removed === 1 ? "" : "s";
+      if (refusals.length === 0) return `removed ${removed} worktree${plural}`;
+
+      return `removed ${removed} worktree${plural}, ${refusals.length} refused`;
     },
 
     sync: async (target) => {

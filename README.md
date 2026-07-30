@@ -118,9 +118,26 @@ wt ~/work/repo                                                      7 worktrees
 
 The list is the directory tree, because that is what the worktrees already are: `feat/login`
 lives in `feat/login`, so a flat list repeats the prefix on every row and hides the grouping the
-slashes were there to express. Folder rows are headings — the cursor steps over them — and a
-`branch` column appears only for a worktree whose branch differs from the directory holding it,
-which `--dir` and a detached HEAD are the ways to produce.
+slashes were there to express. A `branch` column appears only for a worktree whose branch
+differs from the directory holding it, which `--dir` and a detached HEAD are the ways to
+produce.
+
+Folders are destinations too, and the keys change on one:
+
+```
+▸   feat/
+      login   2 ahead
+      api/
+        v2    clean
+
+↑↓ move · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
+```
+
+`r` there removes every worktree beneath it, after asking, deepest first — which is `wt remove`
+run once per worktree, with each one still facing its own refusals. One that says no does not
+stop the rest, and the answer counts both: `removed 2 worktrees, 1 refused`. `a` starts the
+branch name inside the folder you are standing on. `s` is absent, because syncing is a thing you
+do to a worktree and a menu that offered it there would be lying.
 
 `*` is the worktree you started from, `▸` the one the keys act on. `a` prompts for a branch
 name; `r` asks before deleting anything; `s` syncs the selected worktree and `S` syncs them all.

@@ -30,14 +30,18 @@ function summary(overrides: Partial<WorktreeSummary> & { dir: string }): Worktre
   };
 }
 
+// Drawn as `main`, `feat/`, `login`, `search` — four rows the cursor walks, of
+// which one is a folder.
 const ROWS: readonly WorktreeSummary[] = [
   summary({ dir: "main", isDefault: true, current: true }),
   summary({ dir: "feat/login", ahead: 2 }),
+  summary({ dir: "feat/search" }),
 ];
 
 type Calls = {
   readonly added: string[];
   readonly removed: string[];
+  readonly removedMany: (readonly string[])[];
   readonly synced: (string | undefined)[];
 };
 
@@ -45,7 +49,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
   service: WorktreeService;
   calls: Calls;
 } {
-  const calls: Calls = { added: [], removed: [], synced: [] };
+  const calls: Calls = { added: [], removed: [], removedMany: [], synced: [] };
 
   return {
     calls,
@@ -58,6 +62,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       remove: async (target) => {
         calls.removed.push(target);
         return `removed ${target}`;
+      },
+      removeMany: async (targets) => {
+        calls.removedMany.push(targets);
+        return `removed ${targets.length} worktrees`;
       },
       sync: async (target) => {
         calls.synced.push(target);
@@ -98,6 +106,8 @@ test("the cursor moves and `s` syncs whatever it is on", async () => {
   const ui = mount(service);
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
+  // Two rows down: the folder heading is a stop of its own.
+  ui.stdin.write(keys.down);
   ui.stdin.write(keys.down);
   await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
 
@@ -181,6 +191,61 @@ test("`r` confirms before removing, and `n` means no", async () => {
   ui.stdin.write("y");
   await waitFor(ui.lastFrame, (f) => f.includes("removed"));
   expect(calls.removed).toEqual(["/repo/main"]);
+});
+
+// A folder is a destination, not just a heading: it is what you reach for to
+// act on everything under it at once.
+test("landing on a folder changes the keys to what a folder can do", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  const frame = await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+
+  expect(frame).toContain("remove all 2");
+  expect(frame).toContain("add under feat/");
+  // `s` syncs one worktree, and a folder is not one — a menu offering it would
+  // be a menu that lies.
+  expect(frame).not.toMatch(/s sync\b/);
+});
+
+test("`r` on a folder removes every worktree under it, after asking", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+
+  ui.stdin.write("r");
+  await waitFor(ui.lastFrame, (f) => f.includes("remove all 2 under feat/"));
+  ui.stdin.write("y");
+  await waitFor(ui.lastFrame, (f) => f.includes("removed 2 worktrees"));
+
+  expect(calls.removedMany).toEqual([["/repo/feat/login", "/repo/feat/search"]]);
+  // Never one at a time behind the user's back: the loop and its refusals live
+  // in the service, where the command's own checks still apply to each.
+  expect(calls.removed).toEqual([]);
+});
+
+test("`a` on a folder starts the branch name inside it", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+
+  ui.stdin.write("a");
+  await waitFor(ui.lastFrame, (f) => f.includes("new branch feat/"));
+  ui.stdin.write("chat");
+  await waitFor(ui.lastFrame, (f) => f.includes("new branch feat/chat"));
+
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("added feat/chat"));
+
+  expect(calls.added).toEqual(["feat/chat"]);
 });
 
 test("a refused action is reported on the screen instead of ending the app", async () => {

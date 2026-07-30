@@ -7,7 +7,7 @@ import { StatusBar } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { theme } from "../theme.ts";
 import type { WorktreeService } from "./service.ts";
-import { buildTree, leavesOf, type TreeRow } from "./tree.ts";
+import { buildTree, leavesOf, leavesUnder, type TreeRow } from "./tree.ts";
 
 /**
  * `wt` with nothing to do: the worktrees, and the five commands as keystrokes.
@@ -23,10 +23,15 @@ import { buildTree, leavesOf, type TreeRow } from "./tree.ts";
  * always on the last row and nothing reflows as work scrolls past.
  */
 
+/** What a `r` is about to delete: one worktree, or a folder's worth of them. */
+type Removal =
+  | { readonly kind: "one"; readonly summary: WorktreeSummary }
+  | { readonly kind: "many"; readonly label: string; readonly paths: readonly string[] };
+
 type Mode =
   | { readonly kind: "list" }
   | { readonly kind: "add"; readonly value: string }
-  | { readonly kind: "confirm"; readonly target: WorktreeSummary }
+  | { readonly kind: "confirm"; readonly target: Removal }
   | { readonly kind: "busy"; readonly label: string };
 
 type Message = {
@@ -97,11 +102,12 @@ function Row({
 }) {
   const indent = "  ".repeat(row.depth);
 
-  // A folder is a heading: no marker, no state, nothing to act on.
+  // A folder has no state of its own, and never the `*`: you cannot be standing
+  // in a folder, only in one of the worktrees under it.
   if (row.kind === "group") {
     return (
-      <Text dimColor wrap="truncate">
-        {"    "}
+      <Text color={selected ? theme.accent : undefined} dimColor={!selected} wrap="truncate">
+        {`${selected ? "▸" : " "}   `}
         {indent}
         {row.label}
       </Text>
@@ -134,15 +140,39 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
 
   const lines = useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
 
-  // The tree is what is drawn; the cursor counts worktrees, because a folder
-  // row is a heading with nothing to sync or remove.
+  // The cursor walks every drawn row, folders included: a folder is what you
+  // reach for to act on the branches under it in one go.
   const tree = useMemo(() => buildTree(rows), [rows]);
-  const leaves = useMemo(() => leavesOf(tree), [tree]);
 
   // Clamped rather than corrected on change: removing the last worktree would
   // otherwise leave the cursor pointing past the end for one render.
-  const index = leaves.length === 0 ? 0 : Math.min(cursor, leaves.length - 1);
-  const selected = leaves[index]?.summary;
+  const index = tree.length === 0 ? 0 : Math.min(cursor, tree.length - 1);
+  const current = tree[index];
+  const selected = current?.kind === "leaf" ? current.summary : undefined;
+  const under = useMemo(
+    () => (current === undefined || current.kind !== "group" ? [] : leavesUnder(tree, current)),
+    [tree, current],
+  );
+
+  /**
+   * Cursor movement, computed from the previous cursor rather than from the
+   * rendered one.
+   *
+   * Keys arrive faster than React commits: two presses in the same frame both
+   * read the same `index` and the second one goes nowhere, which is exactly
+   * what holding the arrow key does. Clamping lives in here too, so a list that
+   * shrank under the cursor cannot leave it past the end.
+   */
+  const move = useCallback(
+    (delta: number) => {
+      setCursor((previous) => {
+        const last = Math.max(0, tree.length - 1);
+
+        return Math.min(last, Math.max(0, Math.min(previous, last) + delta));
+      });
+    },
+    [tree.length],
+  );
 
   const refresh = useCallback(async () => {
     setRows(await service.list());
@@ -230,17 +260,36 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     if (mode.kind === "confirm") {
       const target = mode.target;
       if (input === "y" || input === "Y") {
-        return void perform(`removing ${target.dir}`, () => service.remove(target.path));
+        return void (target.kind === "one"
+          ? perform(`removing ${target.summary.dir}`, () => service.remove(target.summary.path))
+          : perform(`removing ${target.paths.length} under ${target.label}`, () =>
+              service.removeMany(target.paths),
+            ));
       }
 
       return setMode({ kind: "list" });
     }
 
-    if (key.upArrow || input === "k") return setCursor(Math.max(0, index - 1));
-    if (key.downArrow || input === "j") return setCursor(Math.min(leaves.length - 1, index + 1));
+    if (key.upArrow || input === "k") return move(-1);
+    if (key.downArrow || input === "j") return move(1);
 
-    if (input === "a") return setMode({ kind: "add", value: "" });
-    if (input === "r" && selected) return setMode({ kind: "confirm", target: selected });
+    // On a folder, `a` starts the name where the cursor already is: reaching for
+    // it there is how you say "another one of these".
+    if (input === "a") {
+      return setMode({
+        kind: "add",
+        value: current?.kind === "group" ? current.key : "",
+      });
+    }
+    if (input === "r" && selected) {
+      return setMode({ kind: "confirm", target: { kind: "one", summary: selected } });
+    }
+    if (input === "r" && current?.kind === "group" && under.length > 0) {
+      return setMode({
+        kind: "confirm",
+        target: { kind: "many", label: current.key, paths: under.map((leaf) => leaf.summary.path) },
+      });
+    }
     if (input === "s" && selected) {
       return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
     }
@@ -272,10 +321,8 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
   // A window onto the tree that keeps the cursor roughly centred, and stops
   // scrolling once the end is on screen. Measured in drawn rows, which include
   // the folder headings the cursor itself skips over.
-  const onCursor = leaves[index];
-  const cursorRow = onCursor === undefined ? 0 : Math.max(0, tree.indexOf(onCursor));
   const start = Math.min(
-    Math.max(0, cursorRow - Math.floor(listHeight / 2)),
+    Math.max(0, index - Math.floor(listHeight / 2)),
     Math.max(0, tree.length - listHeight),
   );
   const visible = tree.slice(start, start + listHeight);
@@ -288,7 +335,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     );
     // Only when something has one to show: a branch matching its directory is
     // the ordinary case, and a column of blanks would be worse than no column.
-    const asides = leaves.map((leaf) => branchAside(leaf.summary).length);
+    const asides = leavesOf(tree).map((leaf) => branchAside(leaf.summary).length);
     const branch = Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(...asides), 24);
 
     return {
@@ -296,7 +343,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       branch,
       state: Math.max(0, columns - treeColumn - branch - (branch > 0 ? 8 : 6)),
     };
-  }, [tree, leaves, columns]);
+  }, [tree, columns]);
 
   const hints = useMemo(() => {
     if (mode.kind === "busy") return [{ keys: "ctrl+c", action: "cancel" }];
@@ -313,6 +360,19 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       ];
     }
 
+    // A folder offers what a folder can do. Leaving `s` and `r` on it to mean
+    // what they mean on a worktree would be a menu that lies.
+    if (current?.kind === "group") {
+      return [
+        { keys: "↑↓", action: "move" },
+        { keys: "a", action: `add under ${current.label}` },
+        { keys: "r", action: `remove all ${under.length}` },
+        { keys: "S", action: "sync all" },
+        { keys: "R", action: "refresh" },
+        { keys: "q", action: "quit" },
+      ];
+    }
+
     return [
       { keys: "↑↓", action: "move" },
       { keys: "a", action: "add" },
@@ -322,7 +382,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       { keys: "R", action: "refresh" },
       { keys: "q", action: "quit" },
     ];
-  }, [mode.kind]);
+  }, [mode.kind, current, under.length]);
 
   const rule = "─".repeat(Math.max(0, columns));
   const counted =
@@ -352,12 +412,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
           <Text dimColor>no worktrees here yet — press a to add one</Text>
         ) : (
           visible.map((row) => (
-            <Row
-              key={row.key}
-              row={row}
-              selected={row.kind === "leaf" && row.summary === selected}
-              widths={widths}
-            />
+            <Row key={row.key} row={row} selected={row === current} widths={widths} />
           ))
         )}
       </Box>
@@ -385,7 +440,9 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
 
       {mode.kind === "confirm" ? (
         <Text color={theme.warn} wrap="truncate">
-          remove {mode.target.dir}? the directory goes, the branch stays
+          {mode.target.kind === "one"
+            ? `remove ${mode.target.summary.dir}? the directory goes, the branch stays`
+            : `remove all ${mode.target.paths.length} under ${mode.target.label}? the directories go, the branches stay`}
         </Text>
       ) : null}
 

@@ -110,7 +110,28 @@ export function buildTree(summaries: readonly WorktreeSummary[]): readonly TreeR
   return rows;
 }
 
-/** The rows a cursor may land on: folders are headings, not destinations. */
-export function leavesOf(rows: readonly TreeRow[]): readonly Extract<TreeRow, { kind: "leaf" }>[] {
-  return rows.filter((row): row is Extract<TreeRow, { kind: "leaf" }> => row.kind === "leaf");
+export type TreeLeaf = Extract<TreeRow, { kind: "leaf" }>;
+
+export function leavesOf(rows: readonly TreeRow[]): readonly TreeLeaf[] {
+  return rows.filter((row): row is TreeLeaf => row.kind === "leaf");
+}
+
+/**
+ * The worktrees a folder row stands for — everything nested beneath it.
+ *
+ * Read off the emitted rows rather than the tree it came from: the rows are
+ * what the cursor is sitting in, so "under this one" means the run that follows
+ * it, up to the first row back at its own depth.
+ */
+export function leavesUnder(rows: readonly TreeRow[], group: TreeRow): readonly TreeLeaf[] {
+  const start = rows.indexOf(group);
+  if (start < 0) return [];
+
+  const under: TreeLeaf[] = [];
+  for (const row of rows.slice(start + 1)) {
+    if (row.depth <= group.depth) break;
+    if (row.kind === "leaf") under.push(row);
+  }
+
+  return under;
 }
