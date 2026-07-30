@@ -69,20 +69,7 @@ onPosix(
   20_000,
 );
 
-// Pins the contract that an unfinished feature reports as a bug in the tool (1)
-// rather than as something the user did wrong.
-onPosix(
-  "an unimplemented command exits 1, not 2",
-  async () => {
-    const { exitCode, stderr } = await runCli(["sync"]);
-
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("not implemented");
-  },
-  20_000,
-);
-
-// Distinct from both of the above: the command exists and the request was
+// Distinct from the errors above: the command exists and the request was
 // understood, there is just no repository here.
 onPosix(
   "running outside a managed repo exits 3 with somewhere to go next",

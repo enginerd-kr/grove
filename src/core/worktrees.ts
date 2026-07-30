@@ -1,5 +1,6 @@
-import { basename, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { WtError } from "./errors.ts";
+import { pathExists } from "./fs.ts";
 import { gitOutput, runGit } from "./git.ts";
 
 /**
@@ -21,6 +22,8 @@ export type WorktreeRecord = {
   /** Present when locked; the string is the reason, which may be empty. */
   readonly locked?: string;
   readonly prunable?: string;
+  /** A rebase is stopped part-way here. Only ever set by `listWorktrees`. */
+  readonly rebasing?: boolean;
 };
 
 /**
@@ -158,11 +161,57 @@ export function parseStatus(output: string): WorktreeStatus {
   return { dirty: changed.length > 0, changed, upstream, ahead, behind };
 }
 
-/** Every worktree the repository has, without the bare entry nobody visits. */
+/**
+ * A rebase stopped part-way, and the branch it was moving.
+ *
+ * git reports a mid-rebase worktree as detached, because HEAD genuinely is. That
+ * is true and useless: the user still calls it `feat/login`, and without this
+ * `wt sync feat/login` would answer "no worktree matches feat/login" at exactly
+ * the moment they most need the tool to know where they are. The branch name is
+ * kept in the rebase state directory, so it is read back from there.
+ */
+async function rebaseState(path: string): Promise<{ branch?: string } | undefined> {
+  for (const marker of ["rebase-merge", "rebase-apply"]) {
+    const located = await runGit(["rev-parse", "--path-format=absolute", "--git-path", marker], {
+      cwd: path,
+    });
+    if (located.code !== 0) continue;
+
+    const dir = located.stdout.trim();
+    if (!(await pathExists(dir))) continue;
+
+    const headName = Bun.file(join(dir, "head-name"));
+    const branch = (await headName.exists())
+      ? (await headName.text()).trim().replace(/^refs\/heads\//, "")
+      : undefined;
+
+    return { branch };
+  }
+
+  return undefined;
+}
+
+/**
+ * Every worktree the repository has, without the bare entry nobody visits.
+ *
+ * Detached records are checked for an interrupted rebase, so callers see the
+ * branch the user is thinking of rather than the truthful but unhelpful
+ * "detached".
+ */
 export async function listWorktrees(bare: string): Promise<readonly WorktreeRecord[]> {
   const output = await gitOutput(["worktree", "list", "--porcelain"], { cwd: bare });
+  const records = parseWorktreeList(output).filter((record) => !record.bare);
 
-  return parseWorktreeList(output).filter((record) => !record.bare);
+  return Promise.all(
+    records.map(async (record) => {
+      if (!record.detached) return record;
+
+      const rebase = await rebaseState(record.path);
+      if (!rebase) return record;
+
+      return { ...record, branch: rebase.branch ?? record.branch, rebasing: true };
+    }),
+  );
 }
 
 export async function statusOf(path: string): Promise<WorktreeStatus> {

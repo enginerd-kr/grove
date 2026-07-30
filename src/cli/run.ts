@@ -3,6 +3,7 @@ import { addWorktree } from "../core/commands/add.ts";
 import { cloneRepo } from "../core/commands/clone.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
+import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, WtCommand } from "./args.ts";
@@ -20,18 +21,15 @@ export type CommandContext = {
   readonly reporter: Reporter;
 };
 
-function notImplemented(name: string): never {
-  // A plain Error on purpose: this is a gap in the tool, not something the user
-  // did, so it exits 1 alongside the other bugs rather than posing as a
-  // condition they could fix.
-  throw new Error(`\`${name}\` is not implemented yet`);
-}
-
 /** Paths are reported relative to where the user is standing, when that is shorter. */
 function display(cwd: string, path: string): string {
   const rel = relative(cwd, path);
 
-  return rel.length > 0 && rel.length < path.length ? rel : path;
+  // Empty means it *is* the current directory, which "." says and an absolute
+  // path buries — and that is the row people scan for.
+  if (rel.length === 0) return ".";
+
+  return rel.length < path.length ? rel : path;
 }
 
 export async function runCommand(command: WtCommand, context: CommandContext): Promise<void> {
@@ -119,7 +117,24 @@ export async function runCommand(command: WtCommand, context: CommandContext): P
       return;
     }
 
-    case "sync":
-      return notImplemented(command.name);
+    case "sync": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const outcomes = await syncWorktrees(
+        repo,
+        cwd,
+        { target: command.target, all: command.all, abortOnConflict: command.abortOnConflict },
+        reporter,
+      );
+
+      if (global.json) reporter.out(JSON.stringify(outcomes, null, 2));
+      else reporter.out(outcomes.map((o) => `${display(cwd, o.path)}\t${o.kind}`).join("\n"));
+
+      // Reported first, then thrown: with --all the successful worktrees are
+      // still worth knowing about, and stdout is where that belongs.
+      const failure = failureFor(outcomes);
+      if (failure) throw failure;
+
+      return;
+    }
   }
 }

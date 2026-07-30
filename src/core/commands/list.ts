@@ -16,6 +16,8 @@ export type WorktreeSummary = {
   readonly behind: number;
   readonly upstream?: string;
   readonly locked: boolean;
+  /** A rebase is stopped part-way here and needs finishing or aborting. */
+  readonly rebasing: boolean;
   /** True for the branch the repository treats as its trunk. */
   readonly isDefault: boolean;
   /** True for the worktree the command was run from. */
@@ -53,6 +55,7 @@ export async function listWorktreeSummaries(
         behind: status.behind,
         upstream: status.upstream,
         locked: record.locked !== undefined,
+        rebasing: record.rebasing === true,
         isDefault: record.branch === trunk,
         current: contains(record.path, cwd),
       };
@@ -71,7 +74,10 @@ export async function listWorktreeSummaries(
 export function describeState(summary: WorktreeSummary): string {
   const parts: string[] = [];
 
-  if (summary.detached) parts.push("detached");
+  // Reported instead of "detached", which is technically true of a stopped
+  // rebase and tells the user nothing about what to do next.
+  if (summary.rebasing) parts.push("rebasing");
+  else if (summary.detached) parts.push("detached");
   if (summary.dirty) parts.push("dirty");
   if (summary.ahead > 0) parts.push(`${summary.ahead} ahead`);
   if (summary.behind > 0) parts.push(`${summary.behind} behind`);
