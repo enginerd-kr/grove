@@ -74,6 +74,13 @@ type StartOptions = {
  * its own — enough for smoke assertions without emulating a terminal grid.
  */
 export function startUi({ cols = 80, rows = 24 }: StartOptions = {}): UiSession {
+  // Older runtimes ignore the `terminal` option instead of rejecting it, so the
+  // child quietly gets no PTY and every wait here dies on a timeout that says
+  // nothing. Fail on the actual reason.
+  if (typeof Bun.Terminal !== "function") {
+    throw new Error(`Bun.spawn({ terminal }) needs Bun >= 1.3.5; running ${Bun.version}`);
+  }
+
   const decoder = new TextDecoder();
   let buffer = "";
   let lastDataAt = Date.now();
