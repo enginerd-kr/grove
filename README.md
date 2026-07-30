@@ -22,6 +22,8 @@ bun install
 | `bun run format`    | Format only                                    |
 | `bun run ci`        | `biome ci` + typecheck + tests (CI gate)       |
 
+GitHub Actions runs the same checks on every pull request (`.github/workflows/ci.yml`).
+
 ## Pre-commit hook
 
 `.githooks/pre-commit` runs Biome on staged files, applies safe fixes, and re-stages them.
@@ -35,6 +37,11 @@ git config core.hooksPath             # verify -> .githooks
 ```
 
 Fresh clones need nothing beyond `bun install`. Use `git commit --no-verify` to bypass.
+
+## Pre-push hook
+
+`.githooks/pre-push` refuses a direct push to `main` — changes go through a pull request,
+which CI checks. Same activation as above, and `git push --no-verify` bypasses it.
 
 Note: if a file has both staged and unstaged changes, Biome rewrites the working-tree copy
 and the hook stages those unstaged changes too. Stage the whole file to avoid surprises.

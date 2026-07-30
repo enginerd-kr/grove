@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# Refuses a direct push to a protected branch. Changes reach main through a PR.
+#
+# Best effort only: `--no-verify` bypasses it, and it applies only where
+# `git config core.hooksPath .githooks` has run (the package.json "prepare"
+# script). Server-side branch protection is the real enforcement.
+
+protected="main"
+
+# git feeds pre-push one line per ref: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [ "$remote_ref" = "refs/heads/$protected" ]; then
+    echo "pre-push: direct push to '$protected' is blocked - open a pull request instead." >&2
+    echo "" >&2
+    echo "  git switch -c my-branch" >&2
+    echo "  git push -u origin my-branch" >&2
+    echo "  gh pr create" >&2
+    exit 1
+  fi
+done
+
+exit 0
