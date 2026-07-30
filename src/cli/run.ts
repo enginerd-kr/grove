@@ -2,6 +2,7 @@ import { relative } from "node:path";
 import { addWorktree } from "../core/commands/add.ts";
 import { cloneRepo } from "../core/commands/clone.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
+import { removeWorktree } from "../core/commands/remove.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, WtCommand } from "./args.ts";
@@ -98,7 +99,26 @@ export async function runCommand(command: WtCommand, context: CommandContext): P
       return;
     }
 
-    case "remove":
+    case "remove": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await removeWorktree(
+        repo,
+        cwd,
+        { target: command.target, force: command.force, deleteBranch: command.deleteBranch },
+        reporter,
+      );
+
+      if (result.unpushedWarning) reporter.warn(result.unpushedWarning);
+
+      if (global.json) {
+        reporter.out(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      reporter.out(display(cwd, result.path));
+      return;
+    }
+
     case "sync":
       return notImplemented(command.name);
   }

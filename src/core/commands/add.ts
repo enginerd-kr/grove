@@ -167,9 +167,9 @@ function argsFor(source: Source, options: AddOptions, path: string): readonly st
   switch (source.kind) {
     case "existing":
       return ["worktree", "add", path, options.branch];
-    // `--track -b` in one step is safe because of the invariant clone
-    // establishes: no local ref exists for this branch, so there is nothing to
-    // collide with and the upstream is set correctly from the start.
+    // `--track -b` in one step is reachable only when no local ref exists for
+    // this branch — the check above proved that — so there is nothing to collide
+    // with and the upstream is set correctly from the start.
     case "remote":
       return [
         "worktree",

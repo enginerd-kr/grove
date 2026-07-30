@@ -165,11 +165,16 @@ async function createFirstWorktree(bare: string, branch: string, path: string): 
 /**
  * Deletes the local branches `clone --bare` copied in but nothing checked out.
  *
- * Establishes the invariant the rest of the tool leans on: **a ref exists under
- * `refs/heads/` exactly when a worktree holds it**. With that, `add` can always
- * create-and-track in one step, `list` never shows a branch you cannot visit,
- * and every local branch has a correct upstream. The remote-tracking refs
- * configured above are what still remembers the other branches.
+ * A bare clone imports every remote branch as a local one, which is a set nobody
+ * asked for: fifty branches on the remote means fifty local refs with no
+ * worktrees, no upstreams, and no way to tell which you actually work on.
+ * Pruning starts the repository at "local branches are the ones you checked
+ * out", so `add` can create-and-track in one step and every local branch has a
+ * correct upstream. The remote-tracking refs configured above still remember the
+ * rest.
+ *
+ * `remove` may leave a branch behind deliberately — that is where unpushed
+ * commits live — so this is the starting state, not a permanent invariant.
  */
 async function pruneUnusedHeads(bare: string, keep: string): Promise<void> {
   for (const branch of await localBranches(bare)) {
