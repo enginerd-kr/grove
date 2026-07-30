@@ -129,11 +129,39 @@ test("-- keeps a dash-leading branch name reachable", () => {
   expect(run(["add", "--", "-weird-branch"])).toHaveProperty("branch", "-weird-branch");
 });
 
-test("a flag before the command is rejected with the global help", () => {
-  const parsed = parseCliArgs(["--json", "list"]);
+// `-C` is spelled after git's, and `git -C dir status` puts it first, so that is
+// where people type it out of habit.
+test("global flags work on either side of the command", () => {
+  const before = parseCliArgs(["-C", "/work/repo", "--json", "list"]);
+  const after = parseCliArgs(["list", "-C", "/work/repo", "--json"]);
+
+  expect(before).toEqual(after);
+  expect(before).toHaveProperty("global", { repo: "/work/repo", json: true, verbose: false });
+});
+
+test("a leading flag's value is not mistaken for the command", () => {
+  // The failure this prevents: `repo` read as the subcommand, and `list` as a
+  // stray positional.
+  expect(parseCliArgs(["-C", "repo", "list"])).toHaveProperty("kind", "run");
+  expect(parseCliArgs(["--repo", "repo", "list"])).toHaveProperty("kind", "run");
+  // Attached forms carry their own value and consume nothing further.
+  expect(parseCliArgs(["--repo=repo", "list"])).toHaveProperty("global", {
+    repo: "repo",
+    json: false,
+    verbose: false,
+  });
+});
+
+test("--help and --version answer before a command is required", () => {
+  expect(parseCliArgs(["--json", "--help"]).kind).toBe("text");
+  expect(parseCliArgs(["-C", "/work", "-v"])).toEqual({ kind: "text", output: version });
+});
+
+test("an unknown flag before the command is still rejected", () => {
+  const parsed = parseCliArgs(["--jsno", "list"]);
 
   expect(parsed.kind).toBe("error");
-  expect(parsed).toHaveProperty("message", expect.stringContaining("--json"));
+  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: wt <command>"));
 });
 
 test("--help answers at every level", () => {

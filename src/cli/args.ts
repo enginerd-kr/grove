@@ -160,14 +160,85 @@ function maxPositionals(args: string): number {
   return args.split(/\s+/).filter((token) => token.length > 0).length;
 }
 
+/** Whether `token` expects the following argument to be its value. */
+function takesNextValue(token: string): boolean {
+  // `--repo=path` and `-Cpath` already carry theirs.
+  if (token.startsWith("--")) {
+    if (token.includes("=")) return false;
+
+    return GLOBAL_FLAGS.some((flag) => `--${flag.name}` === token && flag.type === "string");
+  }
+
+  if (token.length !== 2) return false;
+
+  return GLOBAL_FLAGS.some((flag) => flag.short === token.slice(1) && flag.type === "string");
+}
+
+/**
+ * Splits global flags written *before* the subcommand from the rest.
+ *
+ * `-C` is spelled after git's own, and `git -C dir status` puts it first — so
+ * that is where people type it. Supporting only `wt list -C dir` would be a
+ * wart in exactly the flag most likely to be reached for out of habit.
+ *
+ * The scan has to know which flags take a value, or `wt -C repo list` would
+ * read `repo` as the subcommand.
+ */
+function splitLeadingGlobals(argv: readonly string[]): {
+  leading: readonly string[];
+  rest: readonly string[];
+} {
+  const leading: string[] = [];
+  let index = 0;
+
+  while (index < argv.length) {
+    const token = argv[index];
+    // `--` ends option parsing, and a non-flag is the subcommand.
+    if (token === undefined || token === "--" || !token.startsWith("-")) break;
+
+    leading.push(token);
+    index += 1;
+
+    if (takesNextValue(token) && index < argv.length) {
+      const value = argv[index];
+      if (value !== undefined) leading.push(value);
+      index += 1;
+    }
+  }
+
+  return { leading, rest: argv.slice(index) };
+}
+
 export function parseCliArgs(argv: readonly string[]): CliCommand {
-  const [head, ...rest] = argv;
+  const { leading, rest: afterGlobals } = splitLeadingGlobals(argv);
+
+  let leadingValues: ParsedValues = {};
+  if (leading.length > 0) {
+    try {
+      ({ values: leadingValues } = parseArgs({
+        args: [...leading],
+        options: optionsFor(GLOBAL_FLAGS),
+        allowPositionals: false,
+        strict: true,
+      }));
+    } catch (error) {
+      return {
+        kind: "error",
+        message: error instanceof Error ? error.message : String(error),
+        usage: formatGlobalHelp(),
+      };
+    }
+  }
+
+  // Answered before a subcommand is required, so `wt --help` and `wt -v` work.
+  if (bool(leadingValues, "help")) return text(formatGlobalHelp());
+  if (bool(leadingValues, "version")) return text(version);
+
+  const [head, ...rest] = afterGlobals;
 
   // A bare invocation shows the usage rather than erroring: someone typing the
   // binary's name is asking what it does.
   if (head === undefined) return text(formatGlobalHelp());
-  if (head === "--help" || head === "-h") return text(formatGlobalHelp());
-  if (head === "--version" || head === "-v") return text(version);
 
   if (head === "help") {
     const target = rest[0];
@@ -223,13 +294,17 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   const built = buildCommand(spec, values, positionals);
   if ("kind" in built) return built;
 
+  // Written either side of the subcommand; the later spelling wins, which is
+  // what `wt -C a list -C b` reads as.
+  const global = { ...leadingValues, ...values };
+
   return {
     kind: "run",
     command: built,
     global: {
-      repo: str(values, "repo"),
-      json: bool(values, "json"),
-      verbose: bool(values, "verbose"),
+      repo: str(global, "repo"),
+      json: bool(global, "json"),
+      verbose: bool(global, "verbose"),
     },
   };
 }

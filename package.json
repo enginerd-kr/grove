@@ -10,7 +10,7 @@
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "wt": "bun src/cli.tsx",
     "wt:dev": "bun --watch src/cli.tsx",
-    "build": "bun build src/cli.tsx --outfile dist/wt.js --target bun --minify --sourcemap --packages external",
+    "build": "bun build src/cli.tsx --outdir dist --entry-naming 'wt.[ext]' --target bun --minify --sourcemap --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check .",
