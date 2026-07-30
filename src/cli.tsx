@@ -1,7 +1,5 @@
 #!/usr/bin/env bun
-import { render } from "ink";
-import { BIN_NAME, parseCliArgs } from "./cli/args.ts";
-import { App } from "./ui/index.ts";
+import { parseCliArgs } from "./cli/args.ts";
 
 const command = parseCliArgs(Bun.argv.slice(2));
 
@@ -10,20 +8,8 @@ if (command.kind === "error") {
   process.exit(2);
 }
 
-// Before the TTY guard on purpose: `--help` and `--version` are the two things
-// that must answer when piped, which is how every other CLI behaves.
-if (command.kind === "text") {
-  console.log(command.output);
-  process.exit(0);
-}
-
-// Ink needs raw mode for keyboard input, which only a TTY provides. Piping the
-// output (`bun run ui | cat`) would otherwise crash inside `useInput`.
-if (!process.stdin.isTTY) {
-  console.error(`${BIN_NAME} needs an interactive terminal (stdin is not a TTY).`);
-  process.exit(1);
-}
-
-const { waitUntilExit } = render(<App initialTab={command.initialTab} />);
-
-await waitUntilExit();
+// No TTY guard: this is a non-interactive CLI, so it has to work under a pipe
+// and in CI. Ink returns only as a progress reporter drawn on stderr, and that
+// reporter falls back to plain lines when stderr is not a terminal.
+console.log(command.output);
+process.exit(0);

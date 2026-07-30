@@ -4,9 +4,15 @@ import { plain } from "./test-utils.ts";
  * Drives the real `cli.tsx` binary inside a pseudo-terminal.
  *
  * `ink-testing-library` fakes stdout (columns hardcoded to 100, no `isTTY`) and
- * stubs out `setRawMode`, so it can never exercise the TTY guard, the exit code,
- * or a resize. `Bun.spawn({ terminal })` gives the child a real PTY — no
- * `node-pty` needed, which matters because Bun cannot load its C++ addon.
+ * stubs out `setRawMode`, so it can never exercise what a terminal actually
+ * changes — whether the Ink reporter is chosen at all, the exit code, a resize.
+ * `Bun.spawn({ terminal })` gives the child a real PTY — no `node-pty` needed,
+ * which matters because Bun cannot load its C++ addon.
+ *
+ * Currently unused: the demo app it drove is gone, and the Ink progress reporter
+ * that will replace it lands later. Kept rather than deleted because the three
+ * race fixes below (quiet-period, key resend, `is-in-ci` opt-out) were expensive
+ * to find and are not obvious enough to rediscover.
  *
  * POSIX only; the tests skip themselves on Windows.
  */
@@ -204,16 +210,33 @@ export function startUi({ cols = 80, rows = 24, args = [] }: StartOptions = {}):
   };
 }
 
+type RunCliOptions = {
+  /**
+   * Where the child starts.
+   *
+   * Not a convenience: every worktree command resolves its target from the
+   * directory it was invoked in, so without this there is no way to point the
+   * binary at a throwaway repo and the whole layer is untestable.
+   */
+  readonly cwd?: string;
+  /** Merged over `process.env`; set a key to `undefined` to unset it. */
+  readonly env?: Readonly<Record<string, string | undefined>>;
+};
+
 /**
  * Runs the entry point with pipes instead of a PTY.
  *
- * Covers both halves of the no-terminal contract: the `isTTY` guard, and the
- * flags that must still answer when piped (`--help`, `--version`).
+ * This is the normal way the CLI runs — piped, scripted, in CI — so it covers
+ * exit codes, the flags that must answer without a terminal, and the rule that
+ * stdout carries data while stderr carries progress.
  */
-export async function runUiWithoutTty(
+export async function runCli(
   args: readonly string[] = [],
+  { cwd, env }: RunCliOptions = {},
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
+    cwd,
+    env: env ? { ...process.env, ...env } : undefined,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
