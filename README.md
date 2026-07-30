@@ -96,19 +96,31 @@ Typing `wt` with no arguments opens the worktrees as a full-screen app, and ever
 is a keystroke:
 
 ```
-wt ~/work/repo                                                     3 worktrees
+    worktree  state
 ────────────────────────────────────────────────────────────────────────────────
-▸ * main        main        clean
-    feat/login  feat/login  2 ahead
-    fix/crash   fix/crash   dirty
-
+  * main      clean
+    chore/
+      work-1  clean
+▸     work-2  dirty
+    feat/
+      login   2 ahead
+      api/
+        v2    clean
 
 ────────────────────────────────────────────────────────────────────────────────
 ✓ fetched
 ✓ feat/login rebased
 2 up-to-date, 1 rebased
+
 ↑↓ move · a add · r remove · s sync · S sync all · R refresh · q quit
+wt ~/work/repo                                                      7 worktrees
 ```
+
+The list is the directory tree, because that is what the worktrees already are: `feat/login`
+lives in `feat/login`, so a flat list repeats the prefix on every row and hides the grouping the
+slashes were there to express. Folder rows are headings — the cursor steps over them — and a
+`branch` column appears only for a worktree whose branch differs from the directory holding it,
+which `--dir` and a detached HEAD are the ways to produce.
 
 `*` is the worktree you started from, `▸` the one the keys act on. `a` prompts for a branch
 name; `r` asks before deleting anything; `s` syncs the selected worktree and `S` syncs them all.

@@ -7,6 +7,7 @@ import { StatusBar } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { theme } from "../theme.ts";
 import type { WorktreeService } from "./service.ts";
+import { buildTree, leavesOf, type TreeRow } from "./tree.ts";
 
 /**
  * `wt` with nothing to do: the worktrees, and the five commands as keystrokes.
@@ -76,27 +77,49 @@ function messageFor(error: unknown): Message {
   return { kind: "error", text: error instanceof Error ? error.message : String(error) };
 }
 
-type Widths = { readonly branch: number; readonly dir: number; readonly state: number };
+type Widths = { readonly tree: number; readonly branch: number; readonly state: number };
+
+/** The branch, when the directory does not already say it. */
+function branchAside(summary: WorktreeSummary): string {
+  if (summary.branch === undefined) return "(detached)";
+
+  return summary.branch === summary.dir ? "" : summary.branch;
+}
 
 function Row({
-  summary,
+  row,
   selected,
   widths,
 }: {
-  readonly summary: WorktreeSummary;
+  readonly row: TreeRow;
   readonly selected: boolean;
   readonly widths: Widths;
 }) {
-  const branch = summary.branch ?? "(detached)";
+  const indent = "  ".repeat(row.depth);
+
+  // A folder is a heading: no marker, no state, nothing to act on.
+  if (row.kind === "group") {
+    return (
+      <Text dimColor wrap="truncate">
+        {"    "}
+        {indent}
+        {row.label}
+      </Text>
+    );
+  }
 
   return (
     <Text color={selected ? theme.accent : undefined} wrap="truncate">
-      {`${selected ? "▸" : " "} ${summary.current ? "*" : " "} `}
-      {padTo(branch, widths.branch)}
+      {`${selected ? "▸" : " "} ${row.summary.current ? "*" : " "} `}
+      {padTo(`${indent}${row.label}`, widths.tree)}
       {"  "}
-      {padTo(summary.dir, widths.dir)}
-      {"  "}
-      <Text dimColor={!selected}>{padTo(describeState(summary), widths.state)}</Text>
+      {widths.branch > 0 ? (
+        <>
+          <Text dimColor={!selected}>{padTo(branchAside(row.summary), widths.branch)}</Text>
+          {"  "}
+        </>
+      ) : null}
+      <Text dimColor={!selected}>{padTo(describeState(row.summary), widths.state)}</Text>
     </Text>
   );
 }
@@ -111,10 +134,15 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
 
   const lines = useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
 
+  // The tree is what is drawn; the cursor counts worktrees, because a folder
+  // row is a heading with nothing to sync or remove.
+  const tree = useMemo(() => buildTree(rows), [rows]);
+  const leaves = useMemo(() => leavesOf(tree), [tree]);
+
   // Clamped rather than corrected on change: removing the last worktree would
   // otherwise leave the cursor pointing past the end for one render.
-  const index = rows.length === 0 ? 0 : Math.min(cursor, rows.length - 1);
-  const selected = rows[index];
+  const index = leaves.length === 0 ? 0 : Math.min(cursor, leaves.length - 1);
+  const selected = leaves[index]?.summary;
 
   const refresh = useCallback(async () => {
     setRows(await service.list());
@@ -209,7 +237,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     }
 
     if (key.upArrow || input === "k") return setCursor(Math.max(0, index - 1));
-    if (key.downArrow || input === "j") return setCursor(Math.min(rows.length - 1, index + 1));
+    if (key.downArrow || input === "j") return setCursor(Math.min(leaves.length - 1, index + 1));
 
     if (input === "a") return setMode({ kind: "add", value: "" });
     if (input === "r" && selected) return setMode({ kind: "confirm", target: selected });
@@ -225,35 +253,50 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
 
   // Every section's height, decided here rather than left to the renderer: the
   // list can only be sliced to fit if something knows what "fit" is.
+  const labelled = rows.length > 0;
+  // A blank row above the labels, and another between the last thing reported
+  // and the keys: the two places the screen would otherwise start and end hard
+  // against the terminal's own output.
+  const headerRows = (labelled ? 2 : 1) + 1;
+  const footerRows = 2 + 1;
+  const activityRows = activity.length > 0 ? activity.length + 1 : 0;
   const detailRows =
     (mode.kind === "add" ? 3 : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
   const listHeight = Math.max(
     1,
-    terminalRows - 2 - 1 - (activity.length > 0 ? activity.length + 1 : 0) - detailRows - 1,
+    terminalRows - headerRows - activityRows - detailRows - footerRows,
   );
 
-  // A window onto the list that keeps the cursor roughly centred, and stops
-  // scrolling once the end is on screen.
+  // A window onto the tree that keeps the cursor roughly centred, and stops
+  // scrolling once the end is on screen. Measured in drawn rows, which include
+  // the folder headings the cursor itself skips over.
+  const onCursor = leaves[index];
+  const cursorRow = onCursor === undefined ? 0 : Math.max(0, tree.indexOf(onCursor));
   const start = Math.min(
-    Math.max(0, index - Math.floor(listHeight / 2)),
-    Math.max(0, rows.length - listHeight),
+    Math.max(0, cursorRow - Math.floor(listHeight / 2)),
+    Math.max(0, tree.length - listHeight),
   );
-  const visible = rows.slice(start, start + listHeight);
+  const visible = tree.slice(start, start + listHeight);
 
   const widths = useMemo((): Widths => {
-    const branch = Math.min(
-      Math.max(6, ...rows.map((row) => (row.branch ?? "(detached)").length)),
-      Math.max(6, Math.floor(columns * 0.35)),
+    const width = (row: TreeRow) => row.depth * 2 + row.label.length;
+    const treeColumn = Math.min(
+      Math.max(8, ...tree.map(width)),
+      Math.max(8, Math.floor(columns * 0.45)),
     );
-    const dir = Math.min(
-      Math.max(3, ...rows.map((row) => row.dir.length)),
-      Math.max(3, Math.floor(columns * 0.3)),
-    );
+    // Only when something has one to show: a branch matching its directory is
+    // the ordinary case, and a column of blanks would be worse than no column.
+    const asides = leaves.map((leaf) => branchAside(leaf.summary).length);
+    const branch = Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(...asides), 24);
 
-    return { branch, dir, state: Math.max(0, columns - branch - dir - 8) };
-  }, [rows, columns]);
+    return {
+      tree: treeColumn,
+      branch,
+      state: Math.max(0, columns - treeColumn - branch - (branch > 0 ? 8 : 6)),
+    };
+  }, [tree, leaves, columns]);
 
   const hints = useMemo(() => {
     if (mode.kind === "busy") return [{ keys: "ctrl+c", action: "cancel" }];
@@ -285,35 +328,34 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
   const counted =
     rows.length === 0
       ? "no worktrees"
-      : visible.length < rows.length
-        ? `${start + 1}–${start + visible.length} of ${rows.length}`
+      : visible.length < tree.length
+        ? `${index + 1} of ${rows.length}`
         : `${rows.length} worktree${rows.length === 1 ? "" : "s"}`;
 
   return (
-    <Box flexDirection="column" width={columns} height={terminalRows}>
-      <Box>
-        <Box marginRight={1}>
-          <Text bold color={theme.accent}>
-            wt
-          </Text>
-        </Box>
+    <Box flexDirection="column" width={columns} height={terminalRows} paddingTop={1}>
+      {/* The branch column appears only when some worktree's branch differs from
+          the directory it sits in, so the label has to come and go with it. */}
+      {labelled ? (
         <Text dimColor wrap="truncate">
-          {shortenPath(repoRoot, Math.max(10, columns - 24))}
+          {"    "}
+          {padTo("worktree", widths.tree)}
+          {"  "}
+          {widths.branch > 0 ? `${padTo("branch", widths.branch)}  ` : ""}
+          state
         </Text>
-        <Spacer />
-        <Text dimColor>{counted}</Text>
-      </Box>
+      ) : null}
       <Text dimColor>{rule}</Text>
 
       <Box flexDirection="column" flexGrow={1}>
         {rows.length === 0 && mode.kind !== "busy" ? (
           <Text dimColor>no worktrees here yet — press a to add one</Text>
         ) : (
-          visible.map((summary) => (
+          visible.map((row) => (
             <Row
-              key={summary.path}
-              summary={summary}
-              selected={summary === rows[index]}
+              key={row.key}
+              row={row}
+              selected={row.kind === "leaf" && row.summary === selected}
               widths={widths}
             />
           ))
@@ -360,7 +402,25 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
         </Box>
       ) : null}
 
-      <StatusBar hints={hints} />
+      <Box marginTop={1}>
+        <StatusBar hints={hints} />
+      </Box>
+
+      {/* Last row, under the keys: which repository this is, and how much of it
+          is on screen. It sits here rather than on top because it is the answer
+          to a question nobody asks twice — the list is what the eye starts on. */}
+      <Box>
+        <Box marginRight={1}>
+          <Text bold color={theme.accent}>
+            wt
+          </Text>
+        </Box>
+        <Text dimColor wrap="truncate">
+          {shortenPath(repoRoot, Math.max(10, columns - 24))}
+        </Text>
+        <Spacer />
+        <Text dimColor>{counted}</Text>
+      </Box>
     </Box>
   );
 }

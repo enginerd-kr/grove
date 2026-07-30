@@ -13,6 +13,7 @@ theme.ts          shared colors
 components/       Spinner, ProgressBar, StatusBar, StepRow
 hooks/            useInterval
 app/App.tsx       the screen: rows, keys, and one mode at a time
+app/tree.ts       the worktree paths as the tree they are on disk
 app/service.ts    what the screen is allowed to do, as four functions
 app/run.tsx       discovery, the reporter, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
@@ -27,6 +28,11 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   *sliced* to the rows left over after the header, activity, and key bar — a layout that only
   works because something computes how many rows fit rather than leaving it to the renderer to
   overflow.
+- **The tree is pure and lives in `app/tree.ts`.** Ordering is the part worth testing —
+  worktrees before folders at each level, the default branch before its siblings — and none of
+  it needs a terminal. The screen draws what it returns and keeps its cursor over the *leaves*,
+  so a folder heading is stepped over rather than selected, and the scroll window is measured in
+  drawn rows because those include the headings.
 - **The screen holds no git knowledge.** `App` takes a `WorktreeService` — four functions, each
   answering with the line to show afterwards. That is what lets `App.test.tsx` drive every key
   with a stub and no repository, and it is why a keystroke cannot grow a capability the command

@@ -79,22 +79,27 @@ test("lists the worktrees, marking where you are and where the cursor is", async
   const { service } = stub();
   const ui = mount(service);
 
-  const frame = await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   expect(frame).toContain("wt");
+  expect(frame).toMatch(/worktree\s+state/);
   // `*` is the worktree you are standing in, `▸` the one the keys act on.
   expect(frame).toMatch(/▸ \* main/);
   expect(frame).toContain("2 ahead");
   expect(frame).toContain("q quit");
+  // The prefix is a folder heading with the worktree indented under it, not a
+  // `feat/login` repeated on every row.
+  expect(frame).toMatch(/feat\/\n\s+login/);
+  expect(frame).not.toContain("feat/login");
 });
 
 test("the cursor moves and `s` syncs whatever it is on", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ +feat\/login/.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
 
   ui.stdin.write("s");
   await waitFor(ui.lastFrame, (f) => f.includes("1 up-to-date"));
@@ -105,7 +110,7 @@ test("the cursor moves and `s` syncs whatever it is on", async () => {
 test("`S` syncs every worktree, which is the one action with no target", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write("S");
   await waitFor(ui.lastFrame, (f) => f.includes("1 up-to-date"));
@@ -116,7 +121,7 @@ test("`S` syncs every worktree, which is the one action with no target", async (
 test("`a` takes a branch name and hands it to add", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write("a");
   await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
@@ -135,7 +140,7 @@ test("`a` takes a branch name and hands it to add", async () => {
 test("keys typed into the prompt are text, not commands", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write("a");
   await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
@@ -148,7 +153,7 @@ test("keys typed into the prompt are text, not commands", async () => {
 test("escape leaves the prompt without adding anything", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write("a");
   await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
@@ -163,7 +168,7 @@ test("escape leaves the prompt without adding anything", async () => {
 test("`r` confirms before removing, and `n` means no", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write("r");
   await waitFor(ui.lastFrame, (f) => f.includes("remove main?"));
@@ -185,7 +190,7 @@ test("a refused action is reported on the screen instead of ending the app", asy
     },
   });
   const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/login"));
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write("r");
   await waitFor(ui.lastFrame, (f) => f.includes("remove main?"));
@@ -193,6 +198,6 @@ test("a refused action is reported on the screen instead of ending the app", asy
 
   const frame = await waitFor(ui.lastFrame, (f) => f.includes("default branch"));
   // Still a working screen: the list and the keys are both still there.
-  expect(frame).toContain("feat/login");
+  expect(frame).toContain("feat/");
   expect(frame).toContain("q quit");
 });
