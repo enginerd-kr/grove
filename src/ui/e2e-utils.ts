@@ -9,11 +9,6 @@ import { plain } from "./test-utils.ts";
  * `Bun.spawn({ terminal })` gives the child a real PTY — no `node-pty` needed,
  * which matters because Bun cannot load its C++ addon.
  *
- * Currently unused: the demo app it drove is gone, and the Ink progress reporter
- * that will replace it lands later. Kept rather than deleted because the three
- * race fixes below (quiet-period, key resend, `is-in-ci` opt-out) were expensive
- * to find and are not obvious enough to rediscover.
- *
  * POSIX only; the tests skip themselves on Windows.
  */
 
@@ -71,6 +66,8 @@ type StartOptions = {
   readonly cols?: number;
   readonly rows?: number;
   readonly args?: readonly string[];
+  /** Where the child starts — every command resolves its target from here. */
+  readonly cwd?: string;
 };
 
 /**
@@ -80,7 +77,7 @@ type StartOptions = {
  * Clearing the buffer before an interaction makes the next repaint readable on
  * its own — enough for smoke assertions without emulating a terminal grid.
  */
-export function startUi({ cols = 80, rows = 24, args = [] }: StartOptions = {}): UiSession {
+export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions = {}): UiSession {
   // Older runtimes ignore the `terminal` option instead of rejecting it, so the
   // child quietly gets no PTY and every wait here dies on a timeout that says
   // nothing. Fail on the actual reason.
@@ -93,6 +90,7 @@ export function startUi({ cols = 80, rows = 24, args = [] }: StartOptions = {}):
   let lastDataAt = Date.now();
 
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
+    cwd,
     env: {
       ...process.env,
       TERM: "xterm-256color",

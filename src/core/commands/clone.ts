@@ -1,5 +1,5 @@
 import { mkdir, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranches, remoteBranchExists, updateRemoteHead } from "../branches.ts";
 import { WtError } from "../errors.ts";
@@ -79,7 +79,9 @@ export async function cloneRepo(
   try {
     await mkdir(root, { recursive: true });
 
-    const step = reporter.step(`cloning ${options.url}`);
+    // Deliberately not the URL: a long one wraps across several terminal lines
+    // and shoves the progress bar around while it draws. The user just typed it.
+    const step = reporter.step("cloning");
     try {
       await runGitOrThrow(["clone", "--bare", "--progress", options.url, paths.bare], {
         cwd,
@@ -104,7 +106,7 @@ export async function cloneRepo(
     await createFirstWorktree(paths.bare, branch, worktree);
     await pruneUnusedHeads(paths.bare, branch);
 
-    reporter.info(`${root} is ready`);
+    reporter.info(`${relative(cwd, root) || root} is ready`);
 
     return { root, bare: paths.bare, defaultBranch: trunk, branch, worktree };
   } catch (error) {

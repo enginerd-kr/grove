@@ -4,7 +4,8 @@ import { ExitCode, errorToExitCode } from "./cli/exit-codes.ts";
 import { runCommand } from "./cli/run.ts";
 import { isWtError } from "./core/errors.ts";
 import { killRunningGit } from "./core/git.ts";
-import { createPlainReporter } from "./report/reporter.ts";
+import { createInkReporter } from "./report/ink-reporter.tsx";
+import { createPlainReporter, prefersPlainReporter } from "./report/reporter.ts";
 
 const command = parseCliArgs(Bun.argv.slice(2));
 
@@ -22,9 +23,14 @@ if (command.kind === "text") {
 }
 
 // No TTY guard: piped and scripted are ordinary ways to run this. The reporter
-// is what adapts, and its plain form needs no terminal at all. `prefersPlainReporter`
-// picks between this and the Ink one once that exists.
-const reporter = createPlainReporter();
+// is what adapts, and its plain form needs no terminal at all.
+const reporter = prefersPlainReporter({
+  isStderrTty: process.stderr.isTTY === true,
+  json: command.global.json,
+  env: process.env,
+})
+  ? createPlainReporter()
+  : createInkReporter();
 
 // A half-finished `git clone` is worse than none, so stop the child rather than
 // letting it race the exit. 130 is the conventional 128 + SIGINT.
