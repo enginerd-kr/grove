@@ -1,5 +1,8 @@
 import { relative } from "node:path";
+import { addWorktree } from "../core/commands/add.ts";
 import { cloneRepo } from "../core/commands/clone.ts";
+import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
+import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, WtCommand } from "./args.ts";
 
@@ -49,8 +52,52 @@ export async function runCommand(command: WtCommand, context: CommandContext): P
       reporter.out(`${display(cwd, result.worktree)}\t${result.branch}`);
       return;
     }
-    case "add":
-    case "list":
+
+    case "add": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await addWorktree(
+        repo,
+        {
+          branch: command.branch,
+          from: command.from,
+          dir: command.dir,
+          fetch: command.fetch,
+          push: command.push,
+        },
+        reporter,
+      );
+
+      if (result.alreadyPresent) reporter.info(`${command.branch} already has a worktree`);
+
+      if (global.json) {
+        reporter.out(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      reporter.out(`${display(cwd, result.path)}\t${result.branch}`);
+      return;
+    }
+
+    case "list": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const summaries = await listWorktreeSummaries(repo, cwd);
+
+      if (global.json) {
+        reporter.out(JSON.stringify(summaries, null, 2));
+        return;
+      }
+
+      // An empty repository is not an error, and printing a blank line for it
+      // would be worse than saying so.
+      if (summaries.length === 0) {
+        reporter.info("no worktrees");
+        return;
+      }
+
+      reporter.out(formatWorktreeTable(summaries));
+      return;
+    }
+
     case "remove":
     case "sync":
       return notImplemented(command.name);

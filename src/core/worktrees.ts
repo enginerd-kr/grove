@@ -1,0 +1,217 @@
+import { basename, resolve } from "node:path";
+import { WtError } from "./errors.ts";
+import { gitOutput, runGit } from "./git.ts";
+
+/**
+ * Reading the repository's worktrees, and working out which one a user meant.
+ *
+ * Both halves parse git's porcelain formats rather than guessing from names.
+ * That matters most for the second: the branch-to-directory mapping is lossy,
+ * so it is never inverted — the answer is looked up instead.
+ */
+
+export type WorktreeRecord = {
+  readonly path: string;
+  readonly head?: string;
+  /** Short branch name. Absent when detached, or for the bare entry. */
+  readonly branch?: string;
+  readonly detached: boolean;
+  /** The bare repository's own entry, which is not a worktree anyone visits. */
+  readonly bare: boolean;
+  /** Present when locked; the string is the reason, which may be empty. */
+  readonly locked?: string;
+  readonly prunable?: string;
+};
+
+/**
+ * Parses `git worktree list --porcelain`.
+ *
+ * Records are separated by blank lines and every attribute is `key value` or a
+ * bare `key`. Paths are printed raw, so a path containing spaces is handled by
+ * splitting only on the first space — never by tokenising the line.
+ */
+export function parseWorktreeList(porcelain: string): readonly WorktreeRecord[] {
+  const records: WorktreeRecord[] = [];
+
+  for (const block of porcelain.split(/\n\s*\n/)) {
+    let path: string | undefined;
+    let head: string | undefined;
+    let branch: string | undefined;
+    let detached = false;
+    let bare = false;
+    let locked: string | undefined;
+    let prunable: string | undefined;
+
+    for (const line of block.split("\n")) {
+      if (line.length === 0) continue;
+
+      const space = line.indexOf(" ");
+      const key = space === -1 ? line : line.slice(0, space);
+      const value = space === -1 ? "" : line.slice(space + 1);
+
+      switch (key) {
+        case "worktree":
+          path = value;
+          break;
+        case "HEAD":
+          head = value;
+          break;
+        case "branch":
+          branch = value.replace(/^refs\/heads\//, "");
+          break;
+        case "detached":
+          detached = true;
+          break;
+        case "bare":
+          bare = true;
+          break;
+        // Both can appear with or without a reason, so the empty string is a
+        // meaningful value here and `undefined` is what means "not locked".
+        case "locked":
+          locked = value;
+          break;
+        case "prunable":
+          prunable = value;
+          break;
+        default:
+          break;
+      }
+    }
+
+    if (path !== undefined) {
+      records.push({ path, head, branch, detached, bare, locked, prunable });
+    }
+  }
+
+  return records;
+}
+
+export type WorktreeStatus = {
+  readonly dirty: boolean;
+  /** A few changed paths, for telling the user what is in the way. */
+  readonly changed: readonly string[];
+  readonly upstream?: string;
+  readonly ahead: number;
+  readonly behind: number;
+};
+
+/** The remainder of `line` after its `n`th space — how porcelain v2 delimits paths. */
+function afterSpaces(line: string, n: number): string {
+  let index = -1;
+
+  for (let i = 0; i < n; i += 1) {
+    index = line.indexOf(" ", index + 1);
+    if (index === -1) return "";
+  }
+
+  return line.slice(index + 1);
+}
+
+/**
+ * Parses `git status --porcelain=v2 --branch -z`.
+ *
+ * One call answers both questions worth asking — is it dirty, and how far has
+ * it drifted — which is why `list` does not run `status` twice per worktree.
+ *
+ * The `-z` form is not a convenience: without it git quotes paths containing
+ * spaces or non-ASCII, and the changed-file list reported back to the user would
+ * be quoted nonsense. It does mean the field count per entry type has to be
+ * respected exactly, since a path may itself contain spaces.
+ */
+export function parseStatus(output: string): WorktreeStatus {
+  const fields = output.split("\0").filter((field) => field.length > 0);
+  const changed: string[] = [];
+  let upstream: string | undefined;
+  let ahead = 0;
+  let behind = 0;
+
+  for (let i = 0; i < fields.length; i += 1) {
+    const field = fields[i];
+    if (field === undefined) continue;
+
+    if (field.startsWith("# branch.upstream ")) {
+      upstream = field.slice("# branch.upstream ".length);
+      continue;
+    }
+    if (field.startsWith("# branch.ab ")) {
+      const match = /^# branch\.ab \+(\d+) -(\d+)$/.exec(field);
+      if (match) {
+        ahead = Number(match[1]);
+        behind = Number(match[2]);
+      }
+      continue;
+    }
+    if (field.startsWith("#")) continue;
+
+    // Field counts come straight from the porcelain v2 spec; the path is
+    // whatever follows, spaces and all.
+    if (field.startsWith("1 ")) changed.push(afterSpaces(field, 8));
+    else if (field.startsWith("2 ")) {
+      changed.push(afterSpaces(field, 9));
+      // A rename spends a second field on the original path. Skipping it is what
+      // stops that path being read as another entry.
+      i += 1;
+    } else if (field.startsWith("u ")) changed.push(afterSpaces(field, 10));
+    else if (field.startsWith("? ") || field.startsWith("! ")) changed.push(field.slice(2));
+  }
+
+  return { dirty: changed.length > 0, changed, upstream, ahead, behind };
+}
+
+/** Every worktree the repository has, without the bare entry nobody visits. */
+export async function listWorktrees(bare: string): Promise<readonly WorktreeRecord[]> {
+  const output = await gitOutput(["worktree", "list", "--porcelain"], { cwd: bare });
+
+  return parseWorktreeList(output).filter((record) => !record.bare);
+}
+
+export async function statusOf(path: string): Promise<WorktreeStatus> {
+  const result = await runGit(["status", "--porcelain=v2", "--branch", "-z"], { cwd: path });
+
+  // A worktree whose directory was deleted behind git's back still appears in
+  // the list; reporting it as clean-and-unknown beats failing the whole command.
+  if (result.code !== 0) return { dirty: false, changed: [], ahead: 0, behind: 0 };
+
+  return parseStatus(result.stdout);
+}
+
+/**
+ * Finds the worktree a user means by `target`.
+ *
+ * Never inverts `slugify`: the mapping is lossy — `feat/login` and `feat-login`
+ * both slug to `feat-login` — and `--dir` makes it arbitrary anyway. Matching
+ * against what git reports means both spellings work and neither is a guess.
+ *
+ * Order matters. Branch first, because that is what people say out loud; then
+ * the directory name they can see; then a path, for tab completion.
+ */
+export function resolveTarget(
+  target: string,
+  worktrees: readonly WorktreeRecord[],
+  cwd: string,
+): WorktreeRecord {
+  const byBranch = worktrees.filter((record) => record.branch === target);
+  if (byBranch.length === 1 && byBranch[0]) return byBranch[0];
+
+  const byDir = worktrees.filter((record) => basename(record.path) === target);
+  if (byDir.length === 1 && byDir[0]) return byDir[0];
+
+  const wanted = resolve(cwd, target);
+  const byPath = worktrees.filter((record) => record.path === wanted);
+  if (byPath.length === 1 && byPath[0]) return byPath[0];
+
+  const ambiguous = [...byBranch, ...byDir, ...byPath];
+  if (ambiguous.length > 1) {
+    throw new WtError("usage", `${JSON.stringify(target)} matches more than one worktree`, {
+      hint: "pass the directory name or the full path",
+      details: ambiguous.map((record) => record.path),
+    });
+  }
+
+  throw new WtError("not-a-repo", `no worktree matches ${JSON.stringify(target)}`, {
+    hint: "run `wt list` to see what is there",
+    details: worktrees.map(
+      (record) => `${record.branch ?? "(detached)"}  ${basename(record.path)}`,
+    ),
+  });
+}
