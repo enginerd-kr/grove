@@ -26,7 +26,11 @@ async function withRepo(
   await withTempRepo(async ({ work, originUrl, originPath, root }) => {
     const { root: repoRoot } = await cloneRepo(work, { url: originUrl, dir: "repo" }, silent());
     const repo = repoPaths(repoRoot);
-    await addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent());
+    await addWorktree(
+      repo,
+      { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
+      silent(),
+    );
 
     // A separate clone stands in for a colleague pushing to main.
     const other = join(root, "other");
@@ -484,7 +488,11 @@ onPosix(
   "leaves a branch with no upstream alone rather than creating one",
   async () => {
     await withRepo(async ({ repo, advanceRemote }) => {
-      await addWorktree(repo, { branch: "local-only", fetch: true, push: false }, silent());
+      await addWorktree(
+        repo,
+        { branch: "local-only", fetch: true, push: false, setup: true, trust: false },
+        silent(),
+      );
       await commitIn(join(repo.root, "local-only"), "mine.txt", "mine");
       await advanceRemote("theirs.txt", "theirs");
 

@@ -53,6 +53,7 @@ type Calls = {
   readonly resetted: string[];
   readonly ran: { args: readonly string[]; at: string }[];
   readonly synced: (string | undefined)[];
+  readonly trusted: string[];
 };
 
 function stub(overrides: Partial<WorktreeService> = {}): {
@@ -67,6 +68,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     resetted: [],
     ran: [],
     synced: [],
+    trusted: [],
   };
 
   return {
@@ -105,6 +107,14 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       sync: async (target) => {
         calls.synced.push(target);
         return "1 up-to-date";
+      },
+      // Nothing waiting by default, which is every repository with no
+      // `.garden.toml` and every one whose file is already trusted: no
+      // question is drawn, and the other tests never see one.
+      pendingCommands: async () => [],
+      trustAndRun: async (branch) => {
+        calls.trusted.push(branch);
+        return `1 run in ${branch}`;
       },
       ...overrides,
     },
@@ -431,6 +441,75 @@ test("`x` works on a worktree that is dirty only from untracked files", async ()
   ui.stdin.write("y");
   await waitFor(ui.lastFrame, (f) => f.includes("discarded"));
   expect(calls.resetted).toEqual(["/repo/main"]);
+});
+
+// The price of a configuration that travels with the project: `copy` and
+// `link` move files already on the disk, and a command came in with a pull.
+// The screen is the only surface that can hold the question — `garden add` has
+// to behave the same in a pipe as under a terminal — so it asks here.
+test("`a` asks about the commands the new worktree's file wants to run", async () => {
+  const { service, calls } = stub({
+    pendingCommands: async () => ["bun install", "./scripts/postinstall.sh"],
+  });
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("a");
+  await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
+  ui.stdin.write("feat/new");
+  await waitFor(ui.lastFrame, (f) => f.includes("feat/new"));
+  ui.stdin.write(keys.enter);
+
+  const asked = await waitFor(ui.lastFrame, (f) => f.includes("run it here?"));
+
+  // The commands themselves, not a count of them: "trust 2 commands?" is a
+  // question nobody can answer.
+  expect(asked).toContain('"bun install"');
+  expect(asked).toContain('"./scripts/postinstall.sh"');
+  expect(asked).toContain("y run it");
+  // The worktree was made either way; only the commands waited.
+  expect(calls.added).toEqual([{ branch: "feat/new", from: "main" }]);
+  expect(calls.trusted).toEqual([]);
+
+  ui.stdin.write("n");
+  await waitFor(ui.lastFrame, (f) => !f.includes("run it here?"));
+  expect(calls.trusted).toEqual([]);
+});
+
+test("`y` to that question runs them, against the worktree just made", async () => {
+  const { service, calls } = stub({ pendingCommands: async () => ["bun install"] });
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("a");
+  await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
+  ui.stdin.write("feat/new");
+  await waitFor(ui.lastFrame, (f) => f.includes("feat/new"));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("run it here?"));
+
+  ui.stdin.write("y");
+  await waitFor(ui.lastFrame, (f) => f.includes("1 run in"));
+
+  expect(calls.trusted).toEqual(["feat/new"]);
+});
+
+// Every ordinary repository: no file, or one whose commands are already
+// recorded. Nothing is drawn, and `a` is the one-step thing it has always been.
+test("nothing is asked when nothing is waiting", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("a");
+  await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
+  ui.stdin.write("feat/new");
+  await waitFor(ui.lastFrame, (f) => f.includes("feat/new"));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("added feat/new"));
+
+  expect(ui.frame()).not.toContain("run it here?");
+  expect(calls.trusted).toEqual([]);
 });
 
 // A confirmation for a reset that would do nothing is a prompt that teaches

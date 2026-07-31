@@ -1,0 +1,12 @@
+# What a new worktree of this project needs, on top of what git tracks.
+#
+# Nothing to `copy`: there is no `.env` here, and the only untracked things a
+# worktree has are `node_modules` and `dist`, which are both made rather than
+# carried.
+#
+# Nothing to `link` either. Sharing one `node_modules` between worktrees is
+# faster and wrong the moment two branches disagree about a dependency — and
+# with a lockfile, `bun install` in a fresh worktree is seconds. `dist` is a
+# build output, which is never a thing to share.
+[setup]
+run = ["bun install"]

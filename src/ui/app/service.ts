@@ -7,6 +7,8 @@ import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
 import { runGit } from "../../core/git.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
+import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../core/setup.ts";
+import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
 import type { Reporter } from "../../report/reporter.ts";
 
 /**
@@ -65,6 +67,22 @@ export type WorktreeService = {
   readonly reset: (target: string) => Promise<string>;
   /** `target` omitted means every worktree — the app's `S`. */
   readonly sync: (target?: string) => Promise<string>;
+  /**
+   * The commands a worktree was just denied, if any.
+   *
+   * Asked straight after `a`, because that is when the question means
+   * something: the files are in place, the commands are not, and what is being
+   * agreed to is on the screen. Empty for every repository that has no
+   * `.garden.toml` and every one whose file is already trusted.
+   */
+  readonly pendingCommands: () => Promise<readonly string[]>;
+  /**
+   * `y` to that question: record the file as read, then run what it says.
+   *
+   * The same record `garden add --trust` writes, so answering here answers for
+   * the command line too — and a pull that changes the file asks again.
+   */
+  readonly trustAndRun: (branch: string) => Promise<string>;
   /**
    * Any git command at all, in one worktree.
    *
@@ -150,7 +168,15 @@ export function createWorktreeService(
     fetch: () => fetchRemotes(repo.bare),
 
     add: async (branch, from) => {
-      const result = await addWorktree(repo, { branch, from, fetch: true, push: false }, reporter);
+      // `setup: true` like the command line, because filling the worktree in is
+      // part of making one rather than a second thing to ask for — the steps
+      // draw themselves in the activity area, and a command that failed says so
+      // there without ending the session.
+      const result = await addWorktree(
+        repo,
+        { branch, from, fetch: true, push: false, setup: true, trust: false },
+        reporter,
+      );
 
       if (result.alreadyPresent) return `${result.branch} already has a worktree`;
       // Said back rather than assumed: `from` is only honoured for a branch that
@@ -235,6 +261,26 @@ export function createWorktreeService(
       if (result.code !== 0) return `git ${args.join(" ")} exited ${result.code}`;
 
       return output.length === 0 ? `git ${args.join(" ")} — no output` : `git ${args[0] ?? ""} ok`;
+    },
+
+    pendingCommands: () => pendingCommands(repo),
+
+    trustAndRun: async (branch) => {
+      // Resolved rather than assembled: the directory a branch lives in is
+      // whatever `git worktree list` says, and `--dir` and slugging both make
+      // guessing it from the name wrong.
+      const worktrees = await listWorktrees(repo.bare);
+      const record = resolveTarget(branch, worktrees, { root: repo.root, cwd });
+      const result = await trustAndRun(
+        repo,
+        { path: record.path, branch: record.branch },
+        reporter,
+      );
+
+      const failure = failureFor(result);
+      if (failure) throw failure;
+
+      return `${describeSetup(result)} in ${result.dir}`;
     },
 
     sync: async (target) => {

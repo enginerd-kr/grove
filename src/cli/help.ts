@@ -15,6 +15,8 @@ export type FlagSpec = {
   readonly type: "string" | "boolean";
   /** Shown after the flag in help, e.g. `--from <base>`. String flags only. */
   readonly placeholder?: string;
+  /** Repeatable: every occurrence is kept, rather than the last one winning. */
+  readonly multiple?: boolean;
   readonly summary: string;
 };
 
@@ -78,6 +80,10 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     description: [
       "Uses the branch if it exists locally, tracks it if it exists on the",
       "remote, and otherwise creates it from the default branch.",
+      "",
+      "The new worktree is then filled in from .garden.toml, if the default",
+      "branch's worktree has one: `copy` and `link` apply on sight, and `run`",
+      "commands are printed and skipped until --trust says you have read them.",
     ],
     flags: [
       {
@@ -98,6 +104,16 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         summary: "skip the fetch that looks for a remote branch",
       },
       { name: "push", type: "boolean", summary: "push the branch and set its upstream" },
+      {
+        name: "no-setup",
+        type: "boolean",
+        summary: "skip the copies, links, and commands .garden.toml asks for",
+      },
+      {
+        name: "trust",
+        type: "boolean",
+        summary: "run .garden.toml's commands, recording that you have read them",
+      },
     ],
   },
   {

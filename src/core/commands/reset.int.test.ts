@@ -35,7 +35,11 @@ async function withRepo(body: (repo: RepoPaths, work: string) => Promise<void>):
   await withTempRepo(async ({ work, originUrl }) => {
     const { root } = await cloneRepo(work, { url: originUrl, dir: "repo" }, silent());
     const repo = repoPaths(root);
-    await addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent());
+    await addWorktree(
+      repo,
+      { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
+      silent(),
+    );
 
     await body(repo, work);
   });

@@ -42,7 +42,7 @@ onPosix(
 
       const result = await addWorktree(
         repo,
-        { branch: "feat/login", fetch: true, push: false },
+        { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
 
@@ -66,7 +66,7 @@ onPosix(
 
       const result = await addWorktree(
         repo,
-        { branch: "feat/brand-new", fetch: true, push: false },
+        { branch: "feat/brand-new", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
 
@@ -102,11 +102,15 @@ onPosix(
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const repo = await cloned(work, originUrl);
-      await addWorktree(repo, { branch: "test", fetch: true, push: false }, silent());
+      await addWorktree(
+        repo,
+        { branch: "test", fetch: true, push: false, setup: true, trust: false },
+        silent(),
+      );
 
       const result = await addWorktree(
         repo,
-        { branch: "test-2", from: "test", fetch: true, push: false },
+        { branch: "test-2", from: "test", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
 
@@ -132,7 +136,14 @@ onPosix(
 
       const result = await addWorktree(
         repo,
-        { branch: "hotfix", from: "origin/feat/login", fetch: true, push: false },
+        {
+          branch: "hotfix",
+          from: "origin/feat/login",
+          fetch: true,
+          push: false,
+          setup: true,
+          trust: false,
+        },
         silent(),
       );
 
@@ -152,7 +163,11 @@ onPosix(
       const repo = await cloned(work, originUrl);
 
       const error = await expectError(
-        addWorktree(repo, { branch: "x", from: "origin/nope", fetch: true, push: false }, silent()),
+        addWorktree(
+          repo,
+          { branch: "x", from: "origin/nope", fetch: true, push: false, setup: true, trust: false },
+          silent(),
+        ),
       );
 
       expect(error.code).toBe("usage");
@@ -175,7 +190,7 @@ onPosix(
 
       const found = await addWorktree(
         repo,
-        { branch: "feat/later", fetch: true, push: false },
+        { branch: "feat/later", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
       expect(found.source).toBe("remote");
@@ -193,7 +208,7 @@ onPosix(
 
       const result = await addWorktree(
         repo,
-        { branch: "feat/later", fetch: false, push: false },
+        { branch: "feat/later", fetch: false, push: false, setup: true, trust: false },
         silent(),
       );
 
@@ -209,11 +224,15 @@ onPosix(
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const repo = await cloned(work, originUrl);
-      await addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent());
+      await addWorktree(
+        repo,
+        { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
+        silent(),
+      );
 
       const again = await addWorktree(
         repo,
-        { branch: "feat/login", fetch: true, push: false },
+        { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
 
@@ -231,12 +250,23 @@ onPosix(
       const repo = await cloned(work, originUrl);
       await addWorktree(
         repo,
-        { branch: "feat/login", dir: "somewhere-else", fetch: true, push: false },
+        {
+          branch: "feat/login",
+          dir: "somewhere-else",
+          fetch: true,
+          push: false,
+          setup: true,
+          trust: false,
+        },
         silent(),
       );
 
       const error = await expectError(
-        addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent()),
+        addWorktree(
+          repo,
+          { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
+          silent(),
+        ),
       );
 
       expect(error.code).toBe("state-conflict");
@@ -254,7 +284,11 @@ onPosix(
       await mkdir(join(repo.root, "feat/login"), { recursive: true });
 
       const error = await expectError(
-        addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent()),
+        addWorktree(
+          repo,
+          { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
+          silent(),
+        ),
       );
 
       expect(error.code).toBe("state-conflict");
@@ -274,12 +308,12 @@ onPosix(
 
       const login = await addWorktree(
         repo,
-        { branch: "feat/login", fetch: true, push: false },
+        { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
       const search = await addWorktree(
         repo,
-        { branch: "feat/search", fetch: true, push: false },
+        { branch: "feat/search", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
 
@@ -304,7 +338,7 @@ onPosix(
 
       const result = await addWorktree(
         repo,
-        { branch: "team/api/feat/thing", fetch: true, push: false },
+        { branch: "team/api/feat/thing", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
 
@@ -325,17 +359,32 @@ onPosix(
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const repo = await cloned(work, originUrl);
-      await addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent());
+      await addWorktree(
+        repo,
+        { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
+        silent(),
+      );
 
       const swallowing = await expectError(
-        addWorktree(repo, { branch: "other", dir: "feat", fetch: false, push: false }, silent()),
+        addWorktree(
+          repo,
+          { branch: "other", dir: "feat", fetch: false, push: false, setup: true, trust: false },
+          silent(),
+        ),
       );
       expect(swallowing.code).toBe("state-conflict");
 
       const swallowed = await expectError(
         addWorktree(
           repo,
-          { branch: "other", dir: "feat/login/inner", fetch: false, push: false },
+          {
+            branch: "other",
+            dir: "feat/login/inner",
+            fetch: false,
+            push: false,
+            setup: true,
+            trust: false,
+          },
           silent(),
         ),
       );
@@ -354,7 +403,11 @@ onPosix(
       const repo = await cloned(work, originUrl);
 
       const error = await expectError(
-        addWorktree(repo, { branch: "feat/x", dir: "MAIN", fetch: false, push: false }, silent()),
+        addWorktree(
+          repo,
+          { branch: "feat/x", dir: "MAIN", fetch: false, push: false, setup: true, trust: false },
+          silent(),
+        ),
       );
 
       expect(error.code).toBe("state-conflict");
@@ -371,7 +424,7 @@ onPosix(
 
       const result = await addWorktree(
         repo,
-        { branch: "feat/published", fetch: true, push: true },
+        { branch: "feat/published", fetch: true, push: true, setup: true, trust: false },
         silent(),
       );
 
@@ -395,7 +448,7 @@ onPosix(
       const repo = await cloned(work, originUrl);
       const added = await addWorktree(
         repo,
-        { branch: "feat/login", fetch: true, push: false },
+        { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
       await Bun.write(join(added.path, "scratch.txt"), "wip\n");

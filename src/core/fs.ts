@@ -1,10 +1,26 @@
-import { readdir, stat } from "node:fs/promises";
+import { lstat, readdir, stat } from "node:fs/promises";
 
 /** Small filesystem questions, answered without throwing on "it isn't there". */
 
 export async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when something is at this path — including a symlink pointing at nothing.
+ *
+ * `pathExists` follows links, so it calls a dangling one absent, and anything
+ * that then tries to create a file there fails with `EEXIST` on a path it was
+ * just told was free. `setup` asks this before it writes.
+ */
+export async function entryExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
     return true;
   } catch {
     return false;

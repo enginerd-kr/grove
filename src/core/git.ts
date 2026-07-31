@@ -6,6 +6,12 @@ import { classifyGitError, GardenError, stderrDetails } from "./errors.ts";
  * Keeping it to one function means the environment below is pinned for every
  * git call rather than for the ones somebody remembered, and it gives the SIGINT
  * handler a single set of children to interrupt.
+ *
+ * `runShell` is the second spawner and lives here for exactly that second
+ * reason: it runs a `garden.setup` command somebody configured, which is the
+ * one thing this tool executes that it did not write, and it is also the one
+ * most likely to take a minute — so it has to be in the set Ctrl-C can reach.
+ * What it does *not* share is the pinned environment; see `SHELL_ENV`.
  */
 
 export type GitResult = {
@@ -142,15 +148,14 @@ async function drain(
   return text;
 }
 
-/** Runs git and reports what happened. A non-zero exit is a result, not a throw. */
-export async function runGit(
-  args: readonly string[],
-  { cwd, onStderrLine, env }: GitOptions = {},
+async function spawnProcess(
+  argv: readonly string[],
+  env: Readonly<Record<string, string | undefined>>,
+  { cwd, onStderrLine }: Pick<GitOptions, "cwd" | "onStderrLine">,
 ): Promise<GitResult> {
-  const startedAt = performance.now();
-  const child = Bun.spawn(["git", ...args], {
+  const child = Bun.spawn([...argv], {
     cwd,
-    env: { ...process.env, ...PINNED_ENV, ...env },
+    env,
     // Never inherited: a child that reads stdin would block on a terminal this
     // tool does not require, and `GIT_TERMINAL_PROMPT` only covers git's own
     // prompts, not a credential helper's.
@@ -168,13 +173,70 @@ export async function runGit(
       child.exited,
     ]);
 
-    const result = { code, stdout, stderr };
-    if (trace) traceCommand(args, cwd, result, performance.now() - startedAt);
-
-    return result;
+    return { code, stdout, stderr };
   } finally {
     running.delete(child);
   }
+}
+
+/** Runs git and reports what happened. A non-zero exit is a result, not a throw. */
+export async function runGit(
+  args: readonly string[],
+  { cwd, onStderrLine, env }: GitOptions = {},
+): Promise<GitResult> {
+  const startedAt = performance.now();
+  const result = await spawnProcess(
+    ["git", ...args],
+    { ...process.env, ...PINNED_ENV, ...env },
+    { cwd, onStderrLine },
+  );
+
+  if (trace) traceCommand(args, cwd, result, performance.now() - startedAt);
+
+  return result;
+}
+
+/**
+ * What a `garden.setup` command gets on top of the user's own environment.
+ *
+ * Deliberately not `PINNED_ENV`. `LC_ALL=C` is there so this tool can match
+ * git's English stderr, and forcing it on somebody's `bun install` would change
+ * the language their own tooling speaks for no benefit to anyone. What does
+ * carry over is the prompt: a setup command that shells out to git must fail
+ * rather than block on a question nobody is watching, which is the same reason
+ * stdin is not inherited.
+ */
+const SHELL_ENV: Readonly<Record<string, string>> = {
+  GIT_TERMINAL_PROMPT: "0",
+};
+
+/**
+ * Runs one configured command line, through `sh`, in a worktree.
+ *
+ * This *is* a shell, unlike the app's `!` — and the difference is who is
+ * speaking. `!` is a keystroke away from a running screen, so `!log; rm -rf ~`
+ * had better be one argument list; `garden.setup` was typed into `git config`
+ * on purpose, once, by the person whose machine it runs on, and it is written
+ * expecting `&&` and `$HOME` to mean what they mean everywhere else.
+ */
+export async function runShell(
+  command: string,
+  { cwd, env, onStderrLine }: GitOptions = {},
+): Promise<GitResult> {
+  const startedAt = performance.now();
+  const result = await spawnProcess(
+    ["sh", "-c", command],
+    { ...process.env, ...SHELL_ENV, ...env },
+    { cwd, onStderrLine },
+  );
+
+  trace?.(
+    `sh -c ${quote(command)}${cwd === undefined ? "" : ` in ${quote(cwd)}`} → ${
+      result.code === 0 ? "ok" : `exit ${result.code}`
+    }, ${Math.round(performance.now() - startedAt)}ms`,
+  );
+
+  return result;
 }
 
 /**

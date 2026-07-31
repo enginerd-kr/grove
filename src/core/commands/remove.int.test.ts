@@ -33,7 +33,11 @@ async function withRepo(
   await withTempRepo(async ({ work, originUrl, originPath }) => {
     const { root } = await cloneRepo(work, { url: originUrl, dir: "repo" }, silent());
     const repo = repoPaths(root);
-    await addWorktree(repo, { branch: "feat/login", fetch: true, push: false }, silent());
+    await addWorktree(
+      repo,
+      { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
+      silent(),
+    );
 
     await body(repo, work, originPath);
   });
@@ -58,7 +62,7 @@ onPosix(
       // administrative record.
       const again = await addWorktree(
         repo,
-        { branch: "feat/login", fetch: true, push: false },
+        { branch: "feat/login", fetch: true, push: false, setup: true, trust: false },
         silent(),
       );
       expect(await pathExists(again.path)).toBe(true);
@@ -73,7 +77,11 @@ onPosix(
   "removing the last branch under a prefix takes the empty folder with it",
   async () => {
     await withRepo(async (repo, work) => {
-      await addWorktree(repo, { branch: "feat/search", fetch: true, push: false }, silent());
+      await addWorktree(
+        repo,
+        { branch: "feat/search", fetch: true, push: false, setup: true, trust: false },
+        silent(),
+      );
 
       await removeWorktree(
         repo,
