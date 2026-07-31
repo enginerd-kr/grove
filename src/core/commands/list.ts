@@ -1,4 +1,4 @@
-import { defaultBranch } from "../branches.ts";
+import { type Drift, defaultBranch, driftFrom } from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
@@ -30,6 +30,18 @@ export type WorktreeSummary = {
   readonly ahead: number;
   readonly behind: number;
   readonly upstream?: string;
+  /**
+   * How far this branch has drifted from the default branch.
+   *
+   * A second question entirely from `ahead`/`behind`, which are about the branch
+   * this one tracks. Working in a worktree you care about both: whether there is
+   * anything to push, and whether the trunk has moved out from under you — the
+   * second is what `sync` is for and the first has nothing to say about it.
+   *
+   * Absent where there is nothing to compare: the default branch itself, a
+   * detached HEAD, and a git too old to answer in one call.
+   */
+  readonly trunk?: Drift;
   readonly locked: boolean;
   /** A rebase is stopped part-way here and needs finishing or aborting. */
   readonly rebasing: boolean;
@@ -44,6 +56,8 @@ export async function listWorktreeSummaries(
   cwd: string,
 ): Promise<readonly WorktreeSummary[]> {
   const [records, trunk] = await Promise.all([listWorktrees(repo.bare), defaultBranch(repo.bare)]);
+  // After `trunk` is known, and once for every branch rather than per worktree.
+  const drift = await driftFrom(repo.bare, trunk);
 
   const summaries = await Promise.all(
     records.map(async (record) => {
@@ -60,6 +74,11 @@ export async function listWorktreeSummaries(
         ahead: status.ahead,
         behind: status.behind,
         upstream: status.upstream,
+        // Nothing to say about the trunk's distance from itself.
+        trunk:
+          record.branch === undefined || record.branch === trunk
+            ? undefined
+            : drift.get(record.branch),
         locked: record.locked !== undefined,
         rebasing: record.rebasing === true,
         isDefault: record.branch === trunk,
@@ -137,6 +156,20 @@ export function describeRemote(summary: WorktreeSummary): string {
   if (summary.upstream === undefined) return "no upstream";
 
   return `↑${summary.ahead} ↓${summary.behind}`;
+}
+
+/**
+ * The same, against the default branch: `↑` is what this branch adds to it, `↓`
+ * is what it has fallen behind by — and the second is the one `sync` exists to
+ * close.
+ *
+ * Empty where the comparison is meaningless rather than zero, since `↑0 ↓0` on
+ * the trunk's own row would be answering a question nobody asked.
+ */
+export function describeTrunk(summary: WorktreeSummary): string {
+  if (summary.trunk === undefined) return "";
+
+  return `↑${summary.trunk.ahead} ↓${summary.trunk.behind}`;
 }
 
 /**

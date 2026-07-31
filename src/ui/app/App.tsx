@@ -1,6 +1,12 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { describeNotes, describeRemote, type WorktreeSummary } from "../../core/commands/list.ts";
+import type { Drift } from "../../core/branches.ts";
+import {
+  describeNotes,
+  describeRemote,
+  describeTrunk,
+  type WorktreeSummary,
+} from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
@@ -115,45 +121,54 @@ type Widths = {
   readonly tree: number;
   readonly branch: number;
   readonly remote: number;
+  readonly trunk: number;
   readonly state: number;
 };
 
 /**
- * The remote column, with the two directions coloured apart.
+ * One drift column, with the two directions coloured apart.
  *
- * They are not the same news. `↑` is work that exists only here — yours to push,
- * and yours to lose with the laptop, which is why it reads as something you have
- * rather than something wrong. `↓` is work you have not got, and it is the half
- * that bites: it is what makes a rebase land on top of a moving branch and what
- * makes "it worked on my machine" true and useless. Colouring them the same
- * would make the row a number to decode rather than a thing to glance at.
+ * They are not the same news. `↑` is work that exists only here — yours to push
+ * or to merge, and yours to lose with the laptop, which is why it reads as
+ * something you have rather than something wrong. `↓` is work you have not got,
+ * and it is the half that bites: against the remote it is what makes "it worked
+ * on my machine" true and useless, and against the trunk it is what `sync`
+ * exists to close. Colouring them the same would make the row a number to
+ * decode rather than a thing to glance at.
  *
- * A zero is dimmed whichever side it is on. A column of green `↑0` would be
- * decoration competing with the rows that have actually moved.
+ * A zero is dimmed whichever side it is on and whichever column it is in. Green
+ * `↑0` down a whole column would be decoration competing with the rows that have
+ * actually moved.
+ *
+ * Both columns are drawn by this, deliberately: `↑2 ↓1` means the same shape of
+ * thing under `origin` and under `main`, so it is one convention to learn rather
+ * than two.
  */
-function RemoteCell({
-  summary,
+function DriftCell({
+  drift,
+  text,
   width,
   selected,
 }: {
-  readonly summary: WorktreeSummary;
+  readonly drift: Drift | undefined;
+  /** What to draw; `drift` is what to colour it by. */
+  readonly text: string;
   readonly width: number;
   readonly selected: boolean;
 }) {
-  const text = describeRemote(summary);
-
-  // Nothing to point at, and nothing the arrows could honestly say about it.
-  if (summary.upstream === undefined || text.length > width) {
+  // Nothing to point at, and nothing the arrows could honestly say about it —
+  // `no upstream`, or the trunk's own blank row.
+  if (drift === undefined || text.length > width) {
     return <Text dimColor={!selected}>{padTo(text, width)}</Text>;
   }
 
   return (
     <>
-      <Text color={summary.ahead > 0 ? theme.ok : undefined} dimColor={summary.ahead === 0}>
-        {`↑${summary.ahead}`}
+      <Text color={drift.ahead > 0 ? theme.ok : undefined} dimColor={drift.ahead === 0}>
+        {`↑${drift.ahead}`}
       </Text>{" "}
-      <Text color={summary.behind > 0 ? theme.warn : undefined} dimColor={summary.behind === 0}>
-        {`↓${summary.behind}`}
+      <Text color={drift.behind > 0 ? theme.warn : undefined} dimColor={drift.behind === 0}>
+        {`↓${drift.behind}`}
       </Text>
       {" ".repeat(width - text.length)}
     </>
@@ -267,7 +282,27 @@ function Row({
       ) : null}
       {widths.remote > 0 ? (
         <>
-          <RemoteCell summary={row.summary} width={widths.remote} selected={selected} />
+          <DriftCell
+            drift={
+              row.summary.upstream === undefined
+                ? undefined
+                : { ahead: row.summary.ahead, behind: row.summary.behind }
+            }
+            text={describeRemote(row.summary)}
+            width={widths.remote}
+            selected={selected}
+          />
+          {"  "}
+        </>
+      ) : null}
+      {widths.trunk > 0 ? (
+        <>
+          <DriftCell
+            drift={row.summary.trunk}
+            text={describeTrunk(row.summary)}
+            width={widths.trunk}
+            selected={selected}
+          />
           {"  "}
         </>
       ) : null}
@@ -589,6 +624,10 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
   });
 
   const activity = lines.slice(-ACTIVITY_ROWS);
+  // The heading of the trunk column, and the branch it compares against. Read
+  // off the rows rather than assumed, because `master` and `trunk` are both
+  // things people call it.
+  const trunkName = rows.find((summary) => summary.isDefault)?.branch ?? "trunk";
 
   const hints = useMemo(() => {
     if (mode.kind === "busy") return [{ keys: "ctrl+c", action: "cancel" }];
@@ -684,24 +723,40 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     const branch =
       Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(LABELS.branch, ...asides), 24);
 
-    // Sized to its contents, which is at most `no upstream`. Dropped entirely
-    // when what would be left cannot hold the state column's own heading — the
-    // dot is what says a worktree has changes in it, and it goes last.
-    const widest = Math.max(
+    // Each sized to its contents and its own heading — `no upstream` for one,
+    // the trunk's name for the other, which is however long someone called it.
+    const remoteWidth = Math.max(
       LABELS.remote,
       ...leaves.map((leaf) => describeRemote(leaf.summary).length),
     );
+    const trunkWidth = Math.max(
+      trunkName.length,
+      ...leaves.map((leaf) => describeTrunk(leaf.summary).length),
+    );
+
+    // Dropped when what is left cannot hold the state column's own heading, and
+    // the trunk column goes first: "is there anything uncommitted here" and "is
+    // there anything to push" are the two a narrow terminal should keep.
     const gaps = branch > 0 ? 8 : 6;
-    const spare = columns - treeColumn - branch - widest - gaps - 2;
-    const remote = spare >= LABELS.state ? widest : 0;
+    const fits = (...widths: number[]) =>
+      columns - treeColumn - branch - gaps - widths.reduce((a, b) => a + b + 2, 0) >= LABELS.state;
+
+    const remote = fits(remoteWidth) ? remoteWidth : 0;
+    const trunk = remote > 0 && fits(remoteWidth, trunkWidth) ? trunkWidth : 0;
+
+    const taken = [remote, trunk].filter((width) => width > 0);
 
     return {
       tree: treeColumn,
       branch,
       remote,
-      state: Math.max(0, columns - treeColumn - branch - remote - gaps - (remote > 0 ? 2 : 0)),
+      trunk,
+      state: Math.max(
+        0,
+        columns - treeColumn - branch - gaps - taken.reduce((a, b) => a + b + 2, 0),
+      ),
     };
-  }, [tree, columns]);
+  }, [tree, columns, trunkName]);
 
   const rule = "─".repeat(Math.max(0, columns));
   // The banner already says how many there are, so the last row is left with
@@ -728,7 +783,10 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
           {padTo("worktree", widths.tree)}
           {"  "}
           {widths.branch > 0 ? `${padTo("branch", widths.branch)}  ` : ""}
-          {widths.remote > 0 ? `${padTo("remote", widths.remote)}  ` : ""}
+          {widths.remote > 0 ? `${padTo("origin", widths.remote)}  ` : ""}
+          {/* Named after the branch it compares against, since `master` and
+              `trunk` are both things people call it. */}
+          {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}  ` : ""}
           state
         </Text>
       ) : null}

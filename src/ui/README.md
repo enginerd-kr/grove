@@ -66,7 +66,13 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   selected row is the one that vanished.
 - **The services are memoised in `Garden`.** Not a micro-optimisation: `App` fetches when its
   service changes, so a fresh object per render would be a `git fetch` per render.
-- **`RemoteCell` and `StateCell` colour on their own contents, not on the cursor.** Every other
+- **One `DriftCell` draws both drift columns.** `origin` and `main` answer different questions —
+  is there anything to push, and has the trunk moved out from under you — but `↑2 ↓1` means the
+  same shape of thing in each, so it is one convention to learn. The trunk's own row is blank
+  rather than `↑0 ↓0`, and the column's heading is read off `isDefault` so a repository on
+  `master` says `master`. `driftFrom` reads the whole set in one `for-each-ref`, because this is
+  on the two-second refresh and a `rev-list` per worktree would grow with the repository.
+- **`DriftCell` and `StateCell` colour on their own contents, not on the cursor.** Every other
   column dims when its row is not selected; these two dim a zero and a `○` wherever they are, so
   the rows that have drifted or have changes in them are the ones that read. Both pair colour
   with something else — direction for the arrows, fill for the dot — because a status column
