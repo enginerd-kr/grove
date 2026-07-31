@@ -1,3 +1,4 @@
+import { fetchRemotes } from "../../core/branches.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
@@ -16,6 +17,15 @@ import type { Reporter } from "../../report/reporter.ts";
  */
 export type WorktreeService = {
   readonly list: () => Promise<readonly WorktreeSummary[]>;
+  /**
+   * Refresh the remote-tracking refs, so `↑2 ↓1` means what it says.
+   *
+   * The one call here that reports nothing and refuses nothing: the app runs it
+   * on a timer, and a laptop on a train would otherwise fill the screen with
+   * network failures nobody asked for. `false` means the numbers are as stale as
+   * they were, which is what the previous behaviour was anyway.
+   */
+  readonly fetch: () => Promise<boolean>;
   /** Each action answers with the one line worth showing afterwards. */
   readonly add: (branch: string) => Promise<string>;
   readonly remove: (target: string) => Promise<string>;
@@ -87,6 +97,8 @@ export function createWorktreeService(
 ): WorktreeService {
   return {
     list: () => listWorktreeSummaries(repo, cwd),
+
+    fetch: () => fetchRemotes(repo.bare),
 
     add: async (branch) => {
       const result = await addWorktree(repo, { branch, fetch: true, push: false }, reporter);

@@ -1,9 +1,25 @@
 import { GardenError } from "./errors.ts";
-import { gitOutput, runGit } from "./git.ts";
+import { gitOutput, gitSucceeds, runGit } from "./git.ts";
 
-/** Questions about refs, asked of the bare repository. */
+/** Questions about refs, asked of the bare repository — and the one call that refreshes them. */
 
 const REMOTE = "origin";
+
+/**
+ * Brings every remote-tracking ref up to date.
+ *
+ * The one write in this file, and it is here because everything else here reads
+ * what it produces: `origin/main` is a local ref, so "2 behind" means two
+ * commits behind whatever this last saw, not behind the remote as it is now.
+ *
+ * Answers rather than throws. Both callers want that — `sync` is about to do the
+ * real work and would rather fail there with a better message, and the app polls
+ * this in the background, where being offline is an ordinary state of affairs
+ * and not something to interrupt anyone about.
+ */
+export function fetchRemotes(bare: string): Promise<boolean> {
+  return gitSucceeds(["fetch", "--all", "--prune", "--tags"], { cwd: bare });
+}
 
 /**
  * The branch everything else is measured against.

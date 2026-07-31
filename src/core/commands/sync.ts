@@ -1,5 +1,5 @@
 import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch } from "../branches.ts";
+import { defaultBranch, fetchRemotes } from "../branches.ts";
 import { GardenError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
@@ -52,7 +52,7 @@ export async function syncWorktrees(
   // One fetch for the whole run: the remote does not change between worktrees,
   // and `--all` over ten of them should not mean ten round trips.
   const step = reporter.step("fetching");
-  await runGit(["fetch", "--all", "--prune", "--tags"], { cwd: repo.bare });
+  await fetchRemotes(repo.bare);
   step.succeed("fetched");
 
   const trunk = await defaultBranch(repo.bare);

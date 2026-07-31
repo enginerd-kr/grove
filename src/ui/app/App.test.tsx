@@ -21,6 +21,10 @@ function summary(overrides: Partial<WorktreeSummary> & { dir: string }): Worktre
     branch: overrides.dir,
     detached: false,
     dirty: false,
+    // Tracking by default, because git only reports ahead/behind for a branch
+    // that has an upstream — a summary with counts and no upstream is a state
+    // no repository can be in.
+    upstream: `origin/${overrides.dir}`,
     ahead: 0,
     behind: 0,
     locked: false,
@@ -40,6 +44,7 @@ const ROWS: readonly WorktreeSummary[] = [
 ];
 
 type Calls = {
+  fetched: number;
   readonly added: string[];
   readonly removed: string[];
   readonly removedMany: (readonly string[])[];
@@ -50,12 +55,18 @@ function stub(overrides: Partial<WorktreeService> = {}): {
   service: WorktreeService;
   calls: Calls;
 } {
-  const calls: Calls = { added: [], removed: [], removedMany: [], synced: [] };
+  const calls: Calls = { fetched: 0, added: [], removed: [], removedMany: [], synced: [] };
 
   return {
     calls,
     service: {
       list: async () => ROWS,
+      // Answering "nothing changed" keeps the background fetch out of every
+      // other test: no re-read, so no frame nobody was waiting for.
+      fetch: async () => {
+        calls.fetched += 1;
+        return false;
+      },
       add: async (branch) => {
         calls.added.push(branch);
         return `added ${branch}`;
@@ -96,16 +107,85 @@ test("lists the worktrees, marking where you are and where the cursor is", async
   expect(frame).toContain(`garden v${version}`);
   expect(frame).toContain("/repo");
   expect(frame).toContain("3 worktrees · in main");
-  expect(frame).toMatch(/worktree\s+state/);
+  expect(frame).toMatch(/worktree\s+remote\s+state/);
   // `*` is the worktree you are standing in, `▸` the one the keys act on.
   expect(frame).toMatch(/▸ \* main/);
-  expect(frame).toContain("2 ahead");
   expect(frame).toContain("q quit");
   // The prefix is a folder heading with the worktree indented under it, not a
   // `feat/login` repeated on every row.
   expect(frame).toMatch(/feat\/\n\s+login/);
   expect(frame).not.toContain("feat/login");
 });
+
+// `↑` is what origin does not have and `↓` is what you do not, in a column of
+// their own — the state column beside them would otherwise say "2 ahead" about
+// the same two commits.
+test("the remote column says how far each worktree has drifted from origin", async () => {
+  const { service } = stub({
+    list: async () => [
+      summary({ dir: "main", isDefault: true, current: true }),
+      summary({ dir: "feat/login", ahead: 2, behind: 1, dirty: true }),
+      summary({ dir: "feat/local", upstream: undefined }),
+    ],
+  });
+  const ui = mount(service);
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  // `●` has changes in it, `○` does not. The word `clean` was on every row and
+  // told you nothing; the dot is what makes the one that changed look different.
+  expect(frame).toMatch(/login\s+↑2 ↓1\s+●/);
+  expect(frame).toMatch(/main\s+↑0 ↓0\s+○/);
+  // A branch that was never pushed has no answer to give, which is itself worth
+  // saying — `↑0 ↓0` there would claim it is in step with something.
+  expect(frame).toMatch(/local\s+no upstream/);
+  // The drift is said once, in the column that exists for it.
+  expect(frame).not.toContain("2 ahead");
+});
+
+// The state column is about a working tree, and a working tree is edited from
+// somewhere else. Waiting for `R` makes the screen a photograph of whenever you
+// last pressed a key.
+test("the state column keeps up with the worktrees without a keypress", async () => {
+  let listed: readonly WorktreeSummary[] = ROWS;
+  const { service } = stub({ list: async () => listed });
+  const ui = mount(service);
+
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+  expect(ui.frame()).not.toContain("●");
+
+  // What another terminal doing the editing looks like from in here.
+  listed = ROWS.map((row) => (row.dir === "feat/login" ? { ...row, dirty: true } : row));
+
+  expect(await waitFor(ui.lastFrame, (f) => f.includes("●"), { timeoutMs: 6000 })).toMatch(
+    /login\s+↑2 ↓0\s+●/,
+  );
+}, 10_000);
+
+// The failure this prevents: a worktree created in another terminal appears
+// above the selected one, the selection slides down a row on its own, and the
+// next `r` is aimed at something the user never pointed at.
+test("the cursor stays on the row it was on when the list changes underneath", async () => {
+  let listed: readonly WorktreeSummary[] = ROWS;
+  const { service } = stub({ list: async () => listed });
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+
+  // `chore/` sorts before `feat/`, so this pushes `login` two rows down. Read
+  // back through `R` rather than through the timer, so what is under test is the
+  // cursor and not the polling.
+  listed = [...ROWS, summary({ dir: "chore/deps" })];
+  ui.stdin.write("R");
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("deps"), { timeoutMs: 6000 });
+
+  expect(frame).toMatch(/▸ +login/);
+  expect(frame).not.toMatch(/▸ +deps/);
+}, 10_000);
 
 test("the cursor moves and `s` syncs whatever it is on", async () => {
   const { service, calls } = stub();
