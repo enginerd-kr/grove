@@ -15,6 +15,9 @@ export const keys = {
   right: `${ESC}[C`,
   left: `${ESC}[D`,
   enter: "\r",
+  // 127, which is what a terminal sends for the key labelled backspace — and
+  // what Ink reports as `key.backspace`.
+  backspace: String.fromCharCode(127),
   esc: ESC,
   tab: "\t",
   shiftTab: `${ESC}[Z`,

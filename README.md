@@ -290,6 +290,65 @@ between them onto a second row and the list gives up the row:
 S sync all · R refresh · q quit
 ```
 
+**`?` opens the one place you type something open-ended.** Full width, ruled off, caret at the
+left — it is not asking a question, so it is not drawn as one. What you type is read by its first
+character, so the modes cost no chrome:
+
+```
+────────────────────────────────────────────────────────────────────────────────
+❯ sea                                                                     filter
+────────────────────────────────────────────────────────────────────────────────
+enter keep filter · esc clear · ! run git
+```
+
+Anything without a prefix **narrows the list**, live, as you type, and **ranks what is left** —
+the row you meant is the first row:
+
+```
+    worktree             origin       main   state          ❯ login
+▸   feat/login           ↑0 ↓0        ↑1 ↓0  ○
+    feat/login-mobile    no upstream  ↑0 ↓0  ○
+    chore/relogin-audit  no upstream  ↑0 ↓0  ○
+```
+
+What you spelled beats what merely contains it: an exact name, then one that starts the way you
+started, then one whose *word* does — `crash` finds `fix/hot-crash` — then anything containing it,
+and last a subsequence, so `fl` reaches `feat/login` without ever outranking something that
+actually spells it. Ties go to the shorter path. Both names are matched, the directory and the
+branch, since which one you reach for depends on whether you are thinking about the tree or the
+ref.
+
+**The folders go while you are filtering**, and the paths come back in full. A tree cannot be
+ranked — headings are a reading aid for the whole set, and once you have typed a name you are not
+reading the whole set. Keeping them would bury the best match under one and leave the cursor
+sitting on the heading. The tree returns the moment the filter does not.
+
+The arrows still move the cursor while the line is open, so narrowing and then picking is one
+motion rather than two modes. Only the arrows: `j` and `k` are letters in there.
+
+`enter` **keeps the worktree and drops the narrowing** — every row comes back with the cursor left
+on what you found, ready for the key you were reaching for. Filtering is how you get to a
+worktree, not a state to be left sitting in. It resolves past a folder heading on the way, because
+that is exactly where the cursor is when a filter leaves one worktree inside one, and the heading
+is not what anybody went looking for.
+
+`esc` takes one layer at a time — the line first, the box only once there is no line left to
+clear. Closing on the first press would mean a typo costs you the box as well as the word.
+
+A leading `!` **runs git in the worktree the cursor is on**, and the line says which one:
+
+```
+❯ !log --oneline -3                                             git in feat/login
+```
+
+That is the deliberate hole in a screen that otherwise offers four commands with their
+destructive spellings filed off. `git stash`, `git bisect`, `git push --force-with-lease` are not
+things this is going to grow keys for, and being unable to reach them would only mean quitting to
+type them. Quotes are respected, so `!commit -m "two words"` arrives as three arguments; `!git log`
+means `!log`. It is not a shell — no pipes, no expansion, no globbing — because the arguments go
+straight to `git` with nothing in between, which is also what makes `!log; rm -rf ~` one argument
+list and not two commands. Output lands in the activity area, capped, with the cut-off stated.
+
 **`x` throws away everything a worktree has changed**, which is `garden reset --clean` and the
 one key here that destroys work. It appears only on a worktree that has something to throw away
 — a confirmation whose whole effect is to say "nothing to discard" teaches people to answer `y`

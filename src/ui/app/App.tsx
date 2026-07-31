@@ -14,7 +14,9 @@ import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
+import { rank } from "./filter.ts";
 import { type Message, messageFor } from "./message.ts";
+import { bodyOf, modeOf, PROMPT_ROWS, Prompt, tokenize } from "./Prompt.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, leavesOf, parentOf, type TreeRow } from "./tree.ts";
 
@@ -54,6 +56,8 @@ type Mode =
    * prompt said.
    */
   | { readonly kind: "add"; readonly value: string; readonly from?: string }
+  /** The open-ended line: `!` runs git, anything else narrows the list. */
+  | { readonly kind: "prompt"; readonly value: string }
   | { readonly kind: "confirm"; readonly target: Pending }
   | { readonly kind: "busy"; readonly label: string };
 
@@ -311,6 +315,12 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
   const [cursorKey, setCursorKey] = useState<string | undefined>(undefined);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // Kept outside the prompt, because it outlives it: you narrow the list in
+  // order to work in what is left, and closing the box should not undo that.
+  const [filter, setFilter] = useState("");
+  // What is on the prompt line right now, as opposed to at the last render. See
+  // the `prompt` branch of `useInput` for why the difference matters.
+  const typed = useRef("");
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
   const [message, setMessage] = useState<Message | undefined>(undefined);
 
@@ -322,7 +332,14 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
   // Folded folders are held by key rather than by row, so a fold survives the
   // list re-reading itself — which it does every two seconds, and which would
   // otherwise flick every folder back open while you were looking at it.
-  const tree = useMemo(() => buildTree(rows, collapsed), [rows, collapsed]);
+  // Two shapes, and which one is on screen is decided by whether anything has
+  // been typed. Folders group the whole set, which is what you are reading with
+  // no filter; a ranked list answers a name, which is what you are reading with
+  // one. Trying to be both would bury the best match under a heading.
+  const tree = useMemo(
+    () => (filter.length === 0 ? buildTree(rows, collapsed) : rank(rows, filter)),
+    [rows, collapsed, filter],
+  );
 
   /**
    * Where the cursor is, remembered as the row rather than as its position.
@@ -507,6 +524,75 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       return;
     }
 
+    if (mode.kind === "prompt") {
+      // The list is still the thing being looked at, so the keys that move
+      // around it still move around it. Only the real arrows — `j` and `k` are
+      // letters here, and typing `jk` into a filter should type `jk`.
+      if (key.upArrow) return move(-1);
+      if (key.downArrow) return move(1);
+
+      // Escape takes one layer at a time: the line first, and the box only once
+      // there is no line left to clear. Closing on the first press would mean a
+      // typo costs you the box as well as the word.
+      if (key.escape) {
+        const cleared = typed.current.length > 0;
+        typed.current = "";
+        setFilter("");
+
+        return setMode(cleared ? { kind: "prompt", value: "" } : { kind: "list" });
+      }
+
+      // A paste arrives as one event and carries its own newline, so the text
+      // and the `enter` after it are the same keystroke as far as this is
+      // concerned. Splitting on the newline is what makes pasting a command and
+      // running it one motion rather than a line that silently vanishes.
+      const arrived = input.split(/[\r\n]/);
+      const submitted = key.return || arrived.length > 1;
+      // Printable only: an arrow key arrives as a control sequence that would
+      // otherwise type itself into the middle of the line.
+      const text = key.ctrl || key.meta ? "" : (arrived[0] ?? "").replace(/[^\x20-\x7e]/g, "");
+
+      // Read from a ref rather than from `mode`, because keys arrive faster than
+      // React commits: a paste followed by `enter` in the same frame would have
+      // `enter` acting on the line as it was *before* the paste, which is empty.
+      let next = typed.current;
+      if (key.backspace || key.delete) next = next.slice(0, -1);
+      else if (text.length > 0) next = next + text;
+
+      if (next !== typed.current) {
+        typed.current = next;
+        // Live, rather than on `enter`: narrowing a list you cannot see the
+        // effect of is guessing, and the whole value of it is watching rows go.
+        setFilter(modeOf(next) === "filter" ? bodyOf(next) : "");
+        setMode({ kind: "prompt", value: next });
+      }
+
+      if (!submitted) return;
+
+      typed.current = "";
+
+      if (modeOf(next) === "git") {
+        const args = tokenize(bodyOf(next));
+        if (args.length === 0) return setMode({ kind: "list" });
+
+        // Where the cursor is, or the repository itself when it is on a folder —
+        // which is also where a `git worktree`-ish command wants to be run from.
+        const at = selected?.path ?? repoRoot;
+
+        return void perform(`git ${args[0]}`, () => service.git(args, at));
+      }
+
+      // The row survives, the narrowing does not. Filtering is how you found
+      // the worktree; what you wanted was the worktree. Pinned explicitly rather
+      // than left to the cursor's own anchoring, which only knows where you are
+      // if you moved — and typing one name until one row is left is not moving.
+      //
+      if (current !== undefined) setCursorKey(current.key);
+      setFilter("");
+
+      return setMode({ kind: "list" });
+    }
+
     if (mode.kind === "confirm") {
       const target = mode.target;
       if (input === "y" || input === "Y") {
@@ -591,6 +677,11 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     }
     if (input === "S") return void perform("syncing every worktree", () => service.sync());
     if (input === "R") return void perform("reading worktrees", async () => "refreshed");
+    if (input === "?") {
+      typed.current = filter;
+
+      return setMode({ kind: "prompt", value: filter });
+    }
     if (input === "q" || key.escape) return exit();
   });
 
@@ -602,6 +693,18 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
 
   const hints = useMemo(() => {
     if (mode.kind === "busy") return [{ keys: "ctrl+c", action: "cancel" }];
+    if (mode.kind === "prompt") {
+      const leave = { keys: "esc", action: mode.value.length > 0 ? "clear" : "close" };
+
+      return modeOf(mode.value) === "git"
+        ? [{ keys: "↑↓", action: "move" }, { keys: "enter", action: "run" }, leave]
+        : [
+            { keys: "↑↓", action: "move" },
+            { keys: "enter", action: "select" },
+            leave,
+            { keys: "!", action: "run git" },
+          ];
+    }
     if (mode.kind === "add") {
       return [
         { keys: "enter", action: "add" },
@@ -621,6 +724,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       return [
         { keys: "↑↓", action: "move" },
         { keys: "←→", action: current.collapsed ? "open" : "fold" },
+        { keys: "?", action: "filter · !git" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
         { keys: "S", action: "sync all" },
@@ -633,6 +737,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     // would be a menu entry whose whole effect is to say "nothing to discard".
     return [
       { keys: "↑↓", action: "move" },
+      { keys: "?", action: "filter · !git" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },
       ...(selected?.dirty === true ? [{ keys: "x", action: "discard" }] : []),
@@ -641,7 +746,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       { keys: "R", action: "refresh" },
       { keys: "q", action: "quit" },
     ];
-  }, [mode.kind, current, under.length, selected?.dirty]);
+  }, [mode, current, under.length, selected?.dirty]);
 
   // Every section's height, decided here rather than left to the renderer: the
   // list can only be sliced to fit if something knows what "fit" is.
@@ -660,6 +765,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
   const footerRows = 1 + statusBarRows(hints, columns) + 1;
   const activityRows = activity.length > 0 ? activity.length + 1 : 0;
   const detailRows =
+    (mode.kind === "prompt" ? PROMPT_ROWS : 0) +
     (mode.kind === "add" ? 3 : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
@@ -782,6 +888,15 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
             ))}
           </Box>
         </>
+      ) : null}
+
+      {mode.kind === "prompt" ? (
+        <Prompt
+          value={mode.value}
+          mode={modeOf(mode.value)}
+          columns={columns}
+          where={selected?.dir ?? "the repository"}
+        />
       ) : null}
 
       {mode.kind === "add" ? (

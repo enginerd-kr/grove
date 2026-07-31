@@ -51,6 +51,7 @@ type Calls = {
   readonly removed: string[];
   readonly removedMany: (readonly string[])[];
   readonly resetted: string[];
+  readonly ran: { args: readonly string[]; at: string }[];
   readonly synced: (string | undefined)[];
 };
 
@@ -64,6 +65,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     removed: [],
     removedMany: [],
     resetted: [],
+    ran: [],
     synced: [],
   };
 
@@ -95,6 +97,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       reset: async (target) => {
         calls.resetted.push(target);
         return `discarded 2 changes and 1 untracked file in ${target}`;
+      },
+      git: async (args, at) => {
+        calls.ran.push({ args, at });
+        return `git ${args[0]} ok`;
       },
       sync: async (target) => {
         calls.synced.push(target);
@@ -442,6 +448,191 @@ test("`x` is absent, and does nothing, on a worktree with nothing to discard", a
 
   expect(ui.frame()).not.toContain("no undo");
   expect(calls.resetted).toEqual([]);
+});
+
+// The one open-ended thing you can type at this screen. Live, because narrowing
+// a list you cannot see the effect of is guessing.
+test("`?` opens a line that narrows the list as it is typed", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+
+  ui.stdin.write("sea");
+  const narrowed = await waitFor(ui.lastFrame, (f) => !f.includes("login"));
+
+  expect(narrowed).toContain("search");
+  expect(narrowed).toContain("filter");
+  // `main` went too: this narrows to what matched, it does not merely highlight.
+  expect(narrowed).not.toMatch(/\* main/);
+});
+
+test("`enter` keeps the worktree you found and drops the narrowing", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write("sea");
+  const narrowed = await waitFor(ui.lastFrame, (f) => f.includes("❯ sea"));
+  expect(narrowed).not.toContain("login");
+
+  ui.stdin.write(keys.enter);
+  const picked = await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  // Every row back — filtering was how the worktree was found, not a state to
+  // stay in — with the cursor left on the one that was found.
+  expect(picked).toMatch(/▸ +search/);
+  expect(picked).toContain("main");
+  expect(picked).not.toContain("❯");
+  expect(picked).not.toContain("filter: sea");
+});
+
+// Typing one name until a single row is left is not moving, so the cursor never
+// learned where it was. `enter` has to pin the row rather than trust the anchor.
+test("`enter` lands on the row even when no arrow was ever pressed", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write("logi");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯ logi"));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("search"));
+
+  // And the row it landed on is the one the next key acts on.
+  ui.stdin.write("s");
+  await waitFor(ui.lastFrame, (f) => f.includes("1 up-to-date"));
+
+  expect(calls.synced).toEqual(["/repo/feat/login"]);
+});
+
+// The deliberate hole in a service that is otherwise four commands with their
+// destructive spellings filed off.
+test("a `!` line runs git in the worktree the cursor is on", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write('!commit -m "two words"');
+  // The line says where it is about to run, so that is never a guess.
+  await waitFor(ui.lastFrame, (f) => f.includes("git in feat/login"));
+
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("git commit ok"));
+
+  // Quoted argument kept whole, and no filtering happened on the way.
+  expect(calls.ran).toEqual([{ args: ["commit", "-m", "two words"], at: "/repo/feat/login" }]);
+  expect(ui.frame()).toContain("main");
+});
+
+test("`!git log` means `!log` — the name of the thing you are talking to", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write("!git log --oneline");
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("git log ok"));
+
+  expect(calls.ran[0]?.args).toEqual(["log", "--oneline"]);
+});
+
+// The list is still the thing being looked at while the box is open, so the
+// keys that move around it still do. Narrowing and then picking is one motion.
+test("the arrows still move the cursor while the filter line is open", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write("feat");
+  // Ranked and flat while filtering, so the first row is already a worktree and
+  // carries its whole path — there is no heading to step over.
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\/login/.test(f));
+
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\/search/.test(f));
+
+  // The line is still the line: `j` and `k` are letters in here, not movement.
+  // It lands in the filter, which then matches nothing — which is the proof.
+  ui.stdin.write("j");
+  const typed = await waitFor(ui.lastFrame, (f) => f.includes("❯ featj"));
+  expect(typed).not.toContain("feat/login");
+
+  // Backspace brings the rows back, and the cursor is where the arrows left it.
+  // Waited on the rows rather than on the line, since `❯ featj` contains `❯ feat`.
+  ui.stdin.write(keys.backspace);
+  expect(await waitFor(ui.lastFrame, (f) => f.includes("feat/login"))).toMatch(/▸ +feat\/search/);
+
+  // `!` only means git at the head of the line, so a command needs the filter
+  // out of the way first. Clearing it puts every row back — and the cursor
+  // stays on the one the arrows chose, because it is held by row and not by
+  // position.
+  ui.stdin.write(keys.esc);
+  // `esc close` on the key bar is the line reporting itself empty, which is a
+  // sharper signal than looking for an absence in the frame.
+  await waitFor(ui.lastFrame, (f) => f.includes("esc close"));
+  ui.stdin.write("!status\r");
+  await waitFor(ui.lastFrame, (f) => f.includes("git status ok"));
+
+  expect(calls.ran[0]?.at).toBe("/repo/feat/search");
+});
+
+// One layer at a time. Closing on the first press would mean a typo costs you
+// the box as well as the word.
+test("`esc` clears the line, and only closes the box once there is none", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write("sea");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯ sea"));
+
+  ui.stdin.write(keys.esc);
+  // Line gone, rows back, box still open and ready for the next attempt.
+  const cleared = await waitFor(ui.lastFrame, (f) => !f.includes("❯ sea"));
+  expect(cleared).toContain("❯");
+  expect(cleared).toContain("login");
+  expect(cleared).toContain("esc close");
+
+  ui.stdin.write(keys.esc);
+  expect(await waitFor(ui.lastFrame, (f) => !f.includes("❯"))).toContain("q quit");
+});
+
+// Keys arrive faster than React commits. A line typed and submitted inside one
+// frame — which is what pasting is — used to run against the line as it was
+// *before* the paste, and a paste carrying its own newline was dropped whole by
+// the printable-only filter.
+test("a command pasted with its newline runs, rather than vanishing", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+
+  // One event: the text and the enter after it, with no frame in between.
+  ui.stdin.write("!stash list\r");
+  await waitFor(ui.lastFrame, (f) => f.includes("git stash ok"));
+
+  expect(calls.ran[0]?.args).toEqual(["stash", "list"]);
 });
 
 // A folder is a destination, not just a heading: it is what you reach for to
