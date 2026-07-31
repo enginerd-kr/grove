@@ -256,14 +256,14 @@ function Row({
   if (row.kind === "group") {
     return (
       <Text color={selected ? theme.accent : undefined} dimColor={!selected} wrap="truncate">
-        {`${selected ? "▸" : " "} `}
-        {/* Where a worktree carries its `*`. `▾` points at the rows below it and
-            `▸` at the ones it is holding back, which is the convention every
-            other tree uses and the reason it needs no legend. */}
-        {row.collapsed ? "▸" : "▾"} {indent}
+        {`${selected ? "▸" : " "}   `}
+        {indent}
         {row.label}
-        {/* Only when shut: the count is the thing the folded rows were telling
-            you, and a running total beside an open folder is just noise. */}
+        {/* The whole fold indicator, and only when shut. A chevron beside it
+            would be saying the same thing twice: a folder with its worktrees
+            indented underneath is visibly open, and one with a count and
+            nothing under it is visibly not. The count is also what the folded
+            rows were telling you, which a chevron is not. */}
         {row.collapsed ? `  ${row.leaves.length}` : ""}
       </Text>
     );

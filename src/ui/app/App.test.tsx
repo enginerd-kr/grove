@@ -448,7 +448,7 @@ test("landing on a folder changes the keys to what a folder can do", async () =>
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  const frame = await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  const frame = await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
 
   expect(frame).toContain("remove all 2");
   expect(frame).toContain("add under feat/");
@@ -463,17 +463,18 @@ test("`←` folds a folder shut and `→` opens it again", async () => {
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
 
   ui.stdin.write(keys.left);
-  // `▸` in the fold column rather than `▾`, and the count of what it is holding
-  // back — which is the thing the folded rows were telling you.
-  const folded = await waitFor(ui.lastFrame, (f) => /▸ ▸ feat\/\s+2/.test(f));
+  // A count where the rows used to be, which is the whole indicator: a folder
+  // with nothing under it and a `2` beside it is visibly shut, and the count is
+  // what those rows were telling you.
+  const folded = await waitFor(ui.lastFrame, (f) => /▸ +feat\/\s+2/.test(f));
   expect(folded).not.toContain("login");
   expect(folded).toContain("←→ open");
 
   ui.stdin.write(keys.right);
-  expect(await waitFor(ui.lastFrame, (f) => f.includes("login"))).toMatch(/▸ ▾ feat\//);
+  expect(await waitFor(ui.lastFrame, (f) => f.includes("login"))).toMatch(/▸ +feat\//);
 }, 10_000);
 
 // The keys have to feel like a tree rather than a pair of toggles: `←` from
@@ -488,7 +489,7 @@ test("`←` from a worktree walks out to its folder, and `→` steps back in", a
   await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
 
   ui.stdin.write(keys.left);
-  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
 
   ui.stdin.write(keys.right);
   expect(await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f))).toMatch(/▸ +login/);
@@ -502,9 +503,9 @@ test("`r` on a folded folder still removes everything inside it", async () => {
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
   ui.stdin.write(keys.left);
-  await waitFor(ui.lastFrame, (f) => /▸ ▸ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\/\s+2/.test(f));
 
   ui.stdin.write("r");
   await waitFor(ui.lastFrame, (f) => f.includes("remove all 2 under feat/"));
@@ -522,15 +523,15 @@ test("a fold survives the list re-reading itself", async () => {
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
   ui.stdin.write(keys.left);
-  await waitFor(ui.lastFrame, (f) => /▸ ▸ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\/\s+2/.test(f));
 
   // Long enough for two refresh ticks to have come and gone.
   await new Promise((resolve) => setTimeout(resolve, 4500));
 
   expect(ui.frame()).not.toContain("login");
-  expect(ui.frame()).toMatch(/▸ ▸ feat\//);
+  expect(ui.frame()).toMatch(/▸ +feat\/\s+2/);
 }, 15_000);
 
 test("`r` on a folder removes every worktree under it, after asking", async () => {
@@ -539,7 +540,7 @@ test("`r` on a folder removes every worktree under it, after asking", async () =
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
 
   ui.stdin.write("r");
   await waitFor(ui.lastFrame, (f) => f.includes("remove all 2 under feat/"));
@@ -558,7 +559,7 @@ test("`a` on a folder starts the branch name inside it", async () => {
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
 
   ui.stdin.write("a");
   await waitFor(ui.lastFrame, (f) => f.includes("new branch feat/"));

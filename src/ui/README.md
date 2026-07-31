@@ -43,10 +43,9 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   following it — so `r` there would have found nothing to remove and folding would have quietly
   changed what a key does. Folds themselves are held in a `Set` of folder *keys*, not rows, so
   they survive the list re-reading itself every two seconds.
-- **The marker column is column 2.** `*` for the worktree you are standing in, `▾`/`▸` for a
-  folder's fold state — the label column stays aligned across both, which is what makes the
-  indentation readable as a tree. A chevron sitting next to a nested label instead would push
-  that label out of line with the worktrees around it.
+- **A shut folder is indicated by its count, and nothing else.** It reads `feat/  3`; open, it
+  reads `feat/` with its worktrees indented underneath. A chevron as well would say the same
+  thing twice, and the count says the part a chevron cannot — how much is behind it.
 - **The `add` mode carries its base.** `a` reads the selected worktree's branch when the prompt
   opens and keeps it on the mode, rather than reading the selection again on `enter`. With the
   list refreshing itself, the two are not the same value — and the second one would not be what
