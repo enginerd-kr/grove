@@ -16,6 +16,8 @@ export type GardenErrorCode =
   | "rebase-conflict"
   /** The repository is not in a state that allows this: dir exists, branch busy. */
   | "state-conflict"
+  /** A configured `garden.setup` command exited non-zero. The worktree is there. */
+  | "setup-failed"
   /** git failed and the reason did not match anything more specific. */
   | "git-failed"
   /** The remote was unreachable, refused us, or does not exist. */

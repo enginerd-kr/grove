@@ -42,6 +42,9 @@ export type GardenCommand =
       readonly dir?: string;
       readonly fetch: boolean;
       readonly push: boolean;
+      readonly setup: boolean;
+      /** `--trust`: run `.garden.toml`'s commands, having read them. */
+      readonly trust: boolean;
     }
   | { readonly name: "list" }
   | {
@@ -80,13 +83,18 @@ export type CliCommand =
 
 export { BIN_NAME };
 
-type ParsedValues = Record<string, string | boolean | undefined>;
+type ParsedValues = Record<string, string | boolean | (string | boolean)[] | undefined>;
 
 function optionsFor(flags: readonly FlagSpec[]) {
-  const config: Record<string, { type: "string" | "boolean"; short?: string }> = {};
+  const config: Record<string, { type: "string" | "boolean"; short?: string; multiple?: boolean }> =
+    {};
 
   for (const flag of flags) {
-    config[flag.name] = flag.short ? { type: flag.type, short: flag.short } : { type: flag.type };
+    config[flag.name] = {
+      type: flag.type,
+      ...(flag.short === undefined ? {} : { short: flag.short }),
+      ...(flag.multiple === true ? { multiple: true } : {}),
+    };
   }
 
   return config;
@@ -144,6 +152,8 @@ function buildCommand(
         dir: str(values, "dir"),
         fetch: !bool(values, "no-fetch"),
         push: bool(values, "push"),
+        setup: !bool(values, "no-setup"),
+        trust: bool(values, "trust"),
       };
     }
     case "list":

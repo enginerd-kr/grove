@@ -83,6 +83,120 @@ reconstructed, and `--dir` makes it arbitrary anyway. `remove` and `sync` look t
 `--dir` accepts a nested path but is validated rather than rewritten: no leading slash, no
 `..`, nothing that would put a worktree outside the repo folder or inside another worktree.
 
+### Setup
+
+A new worktree arrives with everything git tracks and nothing it does not, which is the whole
+point of it and also why the first thing anybody does in a fresh one is fail to build.
+`node_modules` is not there, `.env` is not there, and the fix is a `cp` from the worktree next
+door that nobody remembers the spelling of. That copy is the bookkeeping this tool exists to
+remove, so it is written down once, per repository, in a file the repository carries:
+
+```toml
+# .garden.toml, committed
+[setup]
+copy = [".env", "local.properties"]   # take a copy from main's worktree
+link = ["node_modules"]               # symlink to main's, rather than copying
+run  = ["bun install"]                # run this in the new worktree
+```
+
+**A tracked file, and that is the point.** "This project copies `.env` and runs `bun install`"
+is a property of the project, not of the laptop it is checked out on — keep it anywhere
+machine-local and every person on the team works it out again by hand. It travels, it is
+reviewed in a pull request like anything else, and somebody who has just cloned the repository
+gets a working worktree before they have been told how.
+
+TOML because Bun parses it with nothing installed, and because a file people are expected to
+read deserves comments. All three keys are optional, and a single value need not be a list
+(`copy = ".env"`). A key that is not one of the three is an error rather than something
+ignored: `cpoy = [".env"]` quietly doing nothing is exactly the failure this file exists to
+prevent.
+
+**It is read from the default branch's worktree**, which is the same place copies come from.
+The alternative — each worktree's own copy — was tenable and less uniform: a branch cut last
+month has no file in it, so the repository would be configured for the worktrees made after
+Tuesday and not the ones made before.
+
+**There is no `garden setup` command, and that is deliberate.** A worktree is filled in when it
+is made, by the command that makes it — `garden add` reads the file, copies, links, and runs, in
+that order. A second command for doing it again would be a second thing to know about, for a
+case a shell already answers: if the install fails you are standing in a directory with a
+terminal, and typing `bun install` is smaller than a command that types it for you.
+
+**What goes in it** is not a mystery the tool has to solve for you: `git status --ignored` lists
+what this worktree has that git does not track, which is exactly the set a fresh checkout comes
+without. Some of it is a copy somebody wants (`.env`) and some is a build output nobody wants
+copied anywhere (`debug.log`), and reading the list is the part no flag does better.
+
+### Trust
+
+A file that travels has one cost, and it is `run`: a `git pull` can hand you a command that
+executes on your machine. So the two halves are not treated alike. **`copy` and `link` apply on
+sight** — they move files already on your disk into a directory you asked to be created.
+**`run` waits.**
+
+```
+$ garden add feat/login
+✓ took .env, node_modules
+! 1 command in main/.garden.toml has not been trusted here — read it, then add with --trust
+
+$ garden add feat/two --trust
+✓ ran bun install
+```
+
+The command line prints them and skips them; `--trust` says you have read them. **It does not
+prompt**, and that is the same rule the rest of this tool follows: `garden add` behaves
+identically in a pipe, in CI, and under a terminal, and a question that only appeared in one of
+those would make it two commands wearing one name. The app is the surface that can hold a
+question, so [that is where the dialog is](#the-app).
+
+What is recorded is a hash of the file's contents, in `.bare/config` where the repository
+cannot reach it. So editing the file — or pulling somebody else's edit — takes the trust away
+again and the question comes back, which is the point rather than the cost: the answer is
+always about the commands as they are now. One answer serves both surfaces, so agreeing on the
+screen is agreeing for the command line.
+
+This is what `direnv allow` and editor workspace trust are, for the same reason. There is no
+"trust this repository forever"; it would turn the answer into one nobody reads.
+
+**Copies and links come from the default branch's worktree**, always. "Whichever worktree you
+happen to be standing in" would mean the `.env` you get depends on where your shell was, and the
+trunk is the checkout that always exists and that nobody is experimenting in. A link is
+relative — `../../main/node_modules` — for the same reason `.git` holds `gitdir: ./.bare`: the
+repository folder is a thing people move.
+
+Worth knowing about `link`, because it is the one that surprises people: a linked `node_modules`
+is *one* `node_modules`, so an install in one worktree is an install in all of them. That is the
+speed it buys and the correctness it costs, and which side you want depends on whether your
+branches disagree about dependencies. `copy` has neither property.
+
+**Nothing already in the worktree is overwritten**, and there is no flag that would. A path that
+is there is one the branch checked out, and replacing it with another branch's copy is how a
+colleague's experimental `.env` becomes the one your tests run against — so it is reported and
+left alone. Refreshing one by hand is a `cp`, which is smaller than a flag nobody would be sure
+of. A path the trunk does not have is reported too, rather than invented.
+
+Two things get said out loud. **A copied file that nothing ignores** makes a brand new worktree
+open dirty, and `x` in the app — `garden reset --clean` — deletes exactly the untracked files
+this just wrote, so the warning names them at the point they arrive. A linked directory trips
+this more often than it looks like it should: a `node_modules/` line in `.gitignore` is a
+directory-only rule, and the link `link` leaves behind is a symlink rather than a directory, so
+git does not consider it ignored and reports it. `node_modules` without the slash covers both.
+And **a command that fails** stops the ones after it, since they were written as a sequence and
+the second half has no business running against the first half's absence.
+
+**`garden add` warns and still succeeds** when a command fails: it was asked for a worktree and
+there is one, and exiting non-zero would tell a script the worktree is missing when it is sitting
+right there. A path in the file that could escape the worktree is a different matter and is
+refused before anything is created at all — a mistake in the file should not leave a directory
+behind for somebody to wonder about.
+
+`garden clone` does not run any of this: the repository it just made has no `.garden.toml` in
+it yet, and the commands in one it did have would not be trusted. `--no-setup` skips it on an
+`add`.
+
+None of it is a habit you have to leave the app for, either. `i` proposes the file, asks about
+the commands, and runs the lot — see [The app](#the-app).
+
 ### Reset
 
 `reset` runs `git reset --hard` inside one worktree. It is the only command here that destroys
@@ -310,6 +424,10 @@ local, or already on the remote, is checked out rather than created, which the a
 (`added feat/login-part-2 from feat/login` against `added feat/login (remote)`). Typing it out
 still works either way — `garden add <branch> --from <base>`.
 
+Whatever [setup](#setup) is configured runs here too, with its steps drawn in the activity area
+like any other work: filling the worktree in is part of making one, not a second thing to ask
+for. A command that fails says so on the screen and leaves the worktree where it is.
+
 It runs in the terminal's alternate screen, so quitting hands the terminal back exactly as it
 was found. The layout is measured against the window: the keys sit on the last row whatever the
 height, the list takes what is left and scrolls when there are more worktrees than rows — with
@@ -407,6 +525,33 @@ Red rather than amber, because it is not the same risk as the other key that ask
 worktree leaves its branch and its commits behind and `garden add` brings it back, while this
 leaves nothing at all.
 
+**`a` asks about a file's commands, where the command line cannot.** A worktree is filled in as
+it is made, here as everywhere; what the screen adds is the one question `garden add` has no
+way to put. It comes after the worktree, with the commands themselves on the row, in red,
+because that is what is being agreed to:
+
+```
+────────────────────────────────────────────────────────────────────────────────
+✓ added feat/new
+✓ took .env, node_modules
+.garden.toml wants to run "bun install", "./scripts/postinstall.sh" — run it here?
+
+y run it · n skip
+```
+
+That is [trust](#trust), and `y` writes the same record `garden add --trust` writes, so the
+next worktree — on either surface — does not ask again. `n` leaves the worktree exactly as it
+is: files in place, commands not run, and a shell one keystroke away if you would rather type
+them yourself.
+
+Nothing is asked in a repository with no `.garden.toml`, or one whose file has no commands, or
+one whose commands are already recorded — which is to say, almost always. The dialog exists for
+the moment a pull has changed what a worktree is about to run.
+
+There is no key for setting a worktree up on demand, and no screen for editing the file. Filling
+a worktree in is part of making one, and the file is a file — in the worktree, in your editor,
+reviewed like the rest of the project.
+
 The app runs the same `core/commands` the CLI does, minus the destructive spellings: no
 `--force`, no `--delete-branch`, and for `reset` no `--to`. Those stay on the command line,
 where they have to be typed out on purpose. The line it draws is that a keystroke may undo your
@@ -468,6 +613,7 @@ stderr.
 | 6    | conflicting state: directory exists, branch checked out elsewhere |
 | 7    | git failed for a reason we could not classify                     |
 | 8    | the remote was unreachable, refused us, or does not exist         |
+| 9    | filling a worktree in from `.garden.toml` failed on the disk      |
 | 130  | interrupted (Ctrl-C)                                              |
 
 They are distinct so a wrapper script can tell "the worktree was dirty" from "the remote was
@@ -551,13 +697,15 @@ src/
     exit-codes.ts      GardenErrorCode -> exit code, as a total switch
     run.ts             dispatch, and how results are printed
   core/                knows nothing about argv, stdout, or Ink
-    git.ts             the only place that spawns a process, and `--verbose`'s trace
+    git.ts             the only place that spawns a process — git, and setup commands
     errors.ts          GardenError, and classifying git's stderr
     layout.ts          pure path and naming rules
     discover.ts        which repository a command means
     worktrees.ts       porcelain parsers, and resolving a target
     branches.ts        ref questions asked of the bare repo
-    commands/          clone, add, list, remove, sync
+    setup-file.ts      `.garden.toml`: parsing it, and the trust record
+    setup.ts           what it copies, links, and runs into a new worktree
+    commands/          clone, add, list, remove, reset, sync
   report/
     reporter.ts        the Reporter interface, and the plain implementation
     lines.ts           the line store both drawn reporters share

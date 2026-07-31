@@ -35,7 +35,7 @@ test("clone takes a URL and an optional directory", () => {
   });
 });
 
-test("add defaults to fetching and not pushing", () => {
+test("add defaults to fetching, setting up, and not pushing", () => {
   expect(run(["add", "feat/login"])).toEqual({
     name: "add",
     branch: "feat/login",
@@ -43,6 +43,8 @@ test("add defaults to fetching and not pushing", () => {
     dir: undefined,
     fetch: true,
     push: false,
+    setup: true,
+    trust: false,
   });
 });
 
@@ -50,6 +52,10 @@ test("add defaults to fetching and not pushing", () => {
 // parseArgs has no notion of negatable booleans to lean on.
 test("--no-fetch, --no-abort and --no-push invert the defaults they name", () => {
   expect(run(["add", "x", "--no-fetch"])).toHaveProperty("fetch", false);
+  expect(run(["add", "x", "--no-setup"])).toHaveProperty("setup", false);
+  // Not a negation: the commands in a tracked file wait until somebody says so.
+  expect(run(["add", "x"])).toHaveProperty("trust", false);
+  expect(run(["add", "x", "--trust"])).toHaveProperty("trust", true);
   expect(run(["sync", "--no-abort"])).toHaveProperty("abortOnConflict", false);
   expect(run(["sync"])).toHaveProperty("abortOnConflict", true);
   // Publishing the rebase is part of the rebase, so it is on unless refused.

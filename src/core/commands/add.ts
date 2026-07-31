@@ -6,6 +6,14 @@ import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { contains, worktreeRelPath } from "../layout.ts";
+import {
+  failureFor,
+  repoSetupPlan,
+  runSetup,
+  type SetupPlan,
+  type SetupResult,
+  trustAndRun,
+} from "../setup.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
 /** `garden add` — give a branch a worktree, creating the branch if it does not exist. */
@@ -18,6 +26,24 @@ export type AddOptions = {
   /** Fetch before deciding the branch is missing. On by default. */
   readonly fetch: boolean;
   readonly push: boolean;
+  /**
+   * Copy, link, and run whatever `.garden.toml` asks for.
+   *
+   * On by default, and free where there is no file. A worktree that cannot
+   * build is not finished, and the alternative — remembering the `cp` every
+   * time — is the bookkeeping this tool is for.
+   */
+  readonly setup: boolean;
+  /**
+   * Record the file's commands as read, and run them.
+   *
+   * Off by default, and it has to be: `copy` and `link` move files already on
+   * your disk, while a `run` command is code that arrived with a pull. Without
+   * this the commands are printed and skipped, which is the honest thing for a
+   * command line to do — there is nothing to prompt on in a pipe, and a tool
+   * that behaved differently under a terminal would be two tools.
+   */
+  readonly trust: boolean;
 };
 
 export type AddResult = {
@@ -28,6 +54,8 @@ export type AddResult = {
   readonly upstream?: string;
   /** True when the worktree was already there and nothing was done. */
   readonly alreadyPresent: boolean;
+  /** What `garden.copy`/`link`/`setup` did, when anything was configured. */
+  readonly setup?: SetupResult;
 };
 
 const REMOTE = "origin";
@@ -53,6 +81,13 @@ export async function addWorktree(
     });
   }
 
+  // Read here rather than after the worktree exists: a path in `.garden.toml`
+  // that nobody can resolve is a mistake in the file, and finding it out
+  // afterwards would mean a directory on disk that the same command refused.
+  // The file is the trunk's, which is why it can be read before this branch has
+  // a worktree at all.
+  const plan = options.setup ? await repoSetupPlan(repo) : undefined;
+
   const source = await resolveSource(repo.bare, options, reporter);
 
   const step = reporter.step(`adding ${options.branch}`);
@@ -68,13 +103,47 @@ export async function addWorktree(
 
   if (options.push) await pushBranch(path, options.branch, reporter);
 
+  const setup = plan
+    ? await setUpWorktree(repo, path, options.branch, options.trust ? undefined : plan, reporter)
+    : undefined;
+
   return {
     path,
     branch: options.branch,
     source: source.kind,
     upstream: source.kind === "new" && !options.push ? undefined : `${REMOTE}/${options.branch}`,
     alreadyPresent: false,
+    setup,
   };
+}
+
+/**
+ * Fills the new worktree in, and warns rather than fails when that goes wrong.
+ *
+ * The line this draws: `add` was asked for a worktree and there is one, so a
+ * `bun install` that failed on a train does not get to report that the worktree
+ * is missing — a script reading the exit code would then do the wrong thing
+ * with a directory that is sitting right there. It is said out loud instead,
+ * along with the command that repeats it once the network is back.
+ */
+async function setUpWorktree(
+  repo: RepoPaths,
+  path: string,
+  branch: string,
+  /** Absent when `--trust` was passed: the plan is re-read after it is recorded. */
+  plan: SetupPlan | undefined,
+  reporter: Reporter,
+): Promise<SetupResult> {
+  const target = { path, branch };
+  const result =
+    plan === undefined
+      ? await trustAndRun(repo, target, reporter)
+      : await runSetup(repo, target, { plan }, reporter);
+  const failure = failureFor(result);
+
+  if (failure) reporter.warn(`${failure.message}; the worktree is there — ${failure.hint}`);
+
+  return result;
 }
 
 /**

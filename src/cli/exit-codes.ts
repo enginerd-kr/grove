@@ -19,6 +19,14 @@ export const ExitCode = {
   stateConflict: 6,
   gitFailed: 7,
   remote: 8,
+  /**
+   * A `garden.setup` command failed.
+   *
+   * Distinct from `gitFailed` because the worktree is there and correct — what
+   * did not happen is the install on top of it, which is a script's cue to
+   * retry that rather than to conclude it has no worktree.
+   */
+  setupFailed: 9,
   /** Ctrl-C, by the convention that an interrupt reports 128 + SIGINT. */
   interrupted: 130,
 } as const;
@@ -41,6 +49,8 @@ export function errorToExitCode(code: GardenErrorCode): ExitCodeValue {
       return ExitCode.rebaseConflict;
     case "state-conflict":
       return ExitCode.stateConflict;
+    case "setup-failed":
+      return ExitCode.setupFailed;
     case "git-failed":
       return ExitCode.gitFailed;
     case "remote":

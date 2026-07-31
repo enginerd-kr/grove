@@ -63,6 +63,8 @@ export async function runCommand(command: GardenCommand, context: CommandContext
           dir: command.dir,
           fetch: command.fetch,
           push: command.push,
+          setup: command.setup,
+          trust: command.trust,
         },
         reporter,
       );

@@ -9,6 +9,7 @@ test("every error code maps to a distinct, non-zero exit code", () => {
     "refused",
     "rebase-conflict",
     "state-conflict",
+    "setup-failed",
     "git-failed",
     "remote",
   ];
@@ -28,5 +29,8 @@ test("the codes a wrapper script is most likely to branch on are stable", () => 
   expect(errorToExitCode("not-a-repo")).toBe(3);
   expect(errorToExitCode("refused")).toBe(4);
   expect(errorToExitCode("rebase-conflict")).toBe(5);
+  // The worktree is there and only the install on top of it is not, which is a
+  // cue to retry that rather than to conclude there is no worktree.
+  expect(errorToExitCode("setup-failed")).toBe(9);
   expect(ExitCode.interrupted).toBe(130);
 });
