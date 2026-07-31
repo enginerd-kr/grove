@@ -58,8 +58,8 @@ export async function listWorktreeSummaries(
   });
 }
 
-/** The state column: the shortest true description of the worktree. */
-export function describeState(summary: WorktreeSummary): string {
+/** What is true about the working tree itself, before the remote comes into it. */
+function localParts(summary: WorktreeSummary): string[] {
   const parts: string[] = [];
 
   // Reported instead of "detached", which is technically true of a stopped
@@ -67,12 +67,58 @@ export function describeState(summary: WorktreeSummary): string {
   if (summary.rebasing) parts.push("rebasing");
   else if (summary.detached) parts.push("detached");
   if (summary.dirty) parts.push("dirty");
+
+  return parts;
+}
+
+function settle(parts: readonly string[], locked: boolean): string {
+  const all = locked ? [...parts, "locked"] : [...parts];
+  if (all.length === 0) all.push("clean");
+
+  return all.join(", ");
+}
+
+/** The state column: the shortest true description of the worktree. */
+export function describeState(summary: WorktreeSummary): string {
+  const parts = localParts(summary);
   if (summary.ahead > 0) parts.push(`${summary.ahead} ahead`);
   if (summary.behind > 0) parts.push(`${summary.behind} behind`);
+
+  return settle(parts, summary.locked);
+}
+
+/**
+ * The states that still need a word once a dot has said whether it is dirty.
+ *
+ * For the app, which draws the working tree as `○`/`●` and gives the drift its
+ * own column — leaving this with the three that are neither: a rebase stopped
+ * part-way, a detached HEAD, and a lock. All three are unusual, and all three
+ * are things you would rather read than decode.
+ */
+export function describeNotes(summary: WorktreeSummary): string {
+  const parts: string[] = [];
+
+  // Reported instead of "detached", which is technically true of a stopped
+  // rebase and tells the user nothing about what to do next.
+  if (summary.rebasing) parts.push("rebasing");
+  else if (summary.detached) parts.push("detached");
   if (summary.locked) parts.push("locked");
-  if (parts.length === 0) parts.push("clean");
 
   return parts.join(", ");
+}
+
+/**
+ * How far this branch has drifted from the remote branch it tracks.
+ *
+ * `↑` is what origin does not have, `↓` is what you do not — the direction each
+ * arrow points is the direction the commits have to travel. Both are counted
+ * against the remote-tracking ref, so they are as fresh as the last fetch and no
+ * fresher, which is why the app fetches on a timer.
+ */
+export function describeRemote(summary: WorktreeSummary): string {
+  if (summary.upstream === undefined) return "no upstream";
+
+  return `↑${summary.ahead} ↓${summary.behind}`;
 }
 
 /**

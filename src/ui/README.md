@@ -38,6 +38,32 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   has made one — which is also why `createWorktreeService` cannot be built until then. Only
   `not-a-repo` opens it; an ambiguous folder still ends the process, since the screen cannot
   answer that question either.
+- **Two timers, and neither of them is the same thing.** `REFRESH_MS` (2s) re-reads the list —
+  local, cheap, and what makes `dirty` appear without a keystroke. `FETCH_MS` (60s) updates the
+  remote-tracking refs, because `↑2 ↓1` is counted against `origin/main`, which is a local ref
+  that nothing would otherwise move. Both pause while `busy`: a command already owns the
+  repository and re-reads it when it finishes, and a `git status` racing a `git worktree add`
+  describes a state that was true for neither. Both are also guarded by a ref so a tick cannot
+  start before the last one finished, and both swallow their errors — a read nobody asked for
+  has nobody to report to, and being offline is an ordinary state of affairs.
+- **The cursor is a row, not an index.** With the list re-reading itself, a worktree appearing
+  above the selected one would slide the selection down without anybody touching a key, and the
+  next `r` would be aimed at something else. `move` still resolves inside the state updater, so
+  two arrow presses in one frame both count; the last index is kept as the fallback for when the
+  selected row is the one that vanished.
+- **The services are memoised in `Garden`.** Not a micro-optimisation: `App` fetches when its
+  service changes, so a fresh object per render would be a `git fetch` per render.
+- **`RemoteCell` and `StateCell` colour on their own contents, not on the cursor.** Every other
+  column dims when its row is not selected; these two dim a zero and a `○` wherever they are, so
+  the rows that have drifted or have changes in them are the ones that read. Both pair colour
+  with something else — direction for the arrows, fill for the dot — because a status column
+  that only works in colour does not work for everyone. Colours cannot be asserted in
+  `App.test.tsx`: `supports-color` sees the `CI` variable that `e2e-utils` sets for Ink's repaint
+  loop and turns chalk off, so the tests check text and layout and the colours were checked by
+  eye in a PTY.
+- **A column is as wide as its heading, too.** Sizing `remote` to its rows alone truncates its
+  own label the moment the rows are shorter than it — `↑0 ↓0` under `remo…`. `App.test.tsx`
+  caught that one.
 - **Anything above the list reports its own height.** `App` slices the list to what is left
   over, so every other section has to be able to say what it will take *before* it is drawn:
   `bannerRows(columns, rows)` and `statusBarRows(hints, columns)`. Both are computed from the

@@ -104,16 +104,16 @@ is a keystroke:
 │ ▝▜█▄█▛▘  ~/work/repo                                                         │
 │    ▐▌    7 worktrees · in main                                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-    worktree  state
+    worktree  remote       state
 ────────────────────────────────────────────────────────────────────────────────
-  * main      clean
+  * main      ↑0 ↓0        ○
     chore/
-      work-1  clean
-▸     work-2  dirty
+      work-1  ↑0 ↓0        ○ locked
+▸     work-2  ↑0 ↓2        ●
     feat/
-      login   2 ahead
+      login   ↑2 ↓1        ○
       api/
-        v2    clean
+        v2    no upstream  ● rebasing
 
 ────────────────────────────────────────────────────────────────────────────────
 ✓ fetched
@@ -141,13 +141,43 @@ slashes were there to express. A `branch` column appears only for a worktree who
 differs from the directory holding it, which `--dir` and a detached HEAD are the ways to
 produce.
 
+`remote` is how far the branch has drifted from the one it tracks: `↑` is what origin does not
+have, `↓` is what you do not, and the arrow points the way the commits would have to travel. The
+two are coloured apart because they are not the same news — `↑` is green, work that exists only
+here and is yours to push; `↓` is yellow, work you have not got, and the half that makes a rebase
+land on a branch that moved under it. A zero on either side is dimmed, so the rows that have
+actually drifted are the ones you see. A branch that was never pushed says `no upstream` rather
+than `↑0 ↓0`, which would be claiming it is in step with something.
+
+`state` is a dot: `●` has uncommitted changes, `○` does not. `clean` was a word on every row that
+told you nothing, and the one row that mattered was the same shape and length as the rest — a
+filled dot has weight and a hollow one does not, so the worktree you have been editing is now the
+one that looks different from across the terminal. Shape as well as colour, deliberately, since
+green-versus-yellow is invisible to a good number of people and to any terminal theme with
+opinions. The three states a dot cannot say keep their words beside it: `rebasing`, `detached`,
+`locked`.
+
+**None of it waits for a keystroke.** The list re-reads itself every two seconds, so a build
+that dirties a worktree or a branch created in another terminal shows up while you are looking
+at the screen. `↑` and `↓` are counted against `origin/main`, which is a *local* ref — so the
+app also fetches for itself, once on open and every minute after, or the column would only say
+how far you had drifted as of whenever something last fetched and a colleague's push would never
+appear at all. The fetch is quiet: offline, on a VPN, or with no key loaded it fails and the
+numbers stay as stale as they were, because a screen that reported each attempt would be
+unusable on a train while telling you nothing you could act on. Both timers pause while a
+command is running, which is going to re-read everything when it finishes anyway.
+
+The cursor holds onto its row rather than its position, so a worktree appearing above the
+selected one does not slide the selection down under your hands — the next `r` stays aimed at
+what you pointed at.
+
 Folders are destinations too, and the keys change on one:
 
 ```
 ▸   feat/
-      login   2 ahead
+      login   ↑2 ↓1   ○
       api/
-        v2    clean
+        v2    ↑0 ↓0   ●
 
 ↑↓ move · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
 ```

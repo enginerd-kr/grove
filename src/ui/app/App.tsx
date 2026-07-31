@@ -1,9 +1,10 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { describeState, type WorktreeSummary } from "../../core/commands/list.ts";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { describeNotes, describeRemote, type WorktreeSummary } from "../../core/commands/list.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
+import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
 import { type Message, messageFor } from "./message.ts";
@@ -48,6 +49,36 @@ type Props = {
 /** The most progress worth keeping on screen; older lines scroll out of it. */
 const ACTIVITY_ROWS = 6;
 
+/**
+ * How often the list re-reads itself while nothing else is going on.
+ *
+ * The state column is about a working tree, and a working tree is edited from
+ * somewhere else — an editor, a build, another terminal. Waiting for `R` means
+ * the screen is a photograph of whenever you last pressed a key, and the one
+ * column people open this to read is the one most likely to be wrong.
+ *
+ * The cost is `git status` per worktree per tick, which is a few milliseconds
+ * each and runs concurrently. Two seconds is short enough that a save shows up
+ * while you are still looking at the screen, and long enough that a repository
+ * with thirty worktrees is not being stat'd continuously.
+ */
+const REFRESH_MS = 2000;
+
+/**
+ * How often the remote-tracking refs are brought up to date.
+ *
+ * `↑2 ↓1` is counted against `origin/main`, which is a local ref: without this
+ * the column says how far you had drifted as of whenever something last
+ * fetched, and a colleague's push never appears at all. So the app fetches for
+ * itself.
+ *
+ * A minute rather than two seconds because this one crosses the network. It is
+ * also the reason the fetch is quiet: it can fail for reasons that are nobody's
+ * fault — a train, a VPN, a key that is not loaded — and a screen that reported
+ * each one would be unusable offline while telling you nothing you could act on.
+ */
+const FETCH_MS = 60_000;
+
 /** Pads or truncates to exactly `width`, so columns stay columns. */
 function padTo(text: string, width: number): string {
   if (width <= 0) return "";
@@ -56,7 +87,88 @@ function padTo(text: string, width: number): string {
   return `${text.slice(0, Math.max(0, width - 1))}…`;
 }
 
-type Widths = { readonly tree: number; readonly branch: number; readonly state: number };
+type Widths = {
+  readonly tree: number;
+  readonly branch: number;
+  readonly remote: number;
+  readonly state: number;
+};
+
+/**
+ * The remote column, with the two directions coloured apart.
+ *
+ * They are not the same news. `↑` is work that exists only here — yours to push,
+ * and yours to lose with the laptop, which is why it reads as something you have
+ * rather than something wrong. `↓` is work you have not got, and it is the half
+ * that bites: it is what makes a rebase land on top of a moving branch and what
+ * makes "it worked on my machine" true and useless. Colouring them the same
+ * would make the row a number to decode rather than a thing to glance at.
+ *
+ * A zero is dimmed whichever side it is on. A column of green `↑0` would be
+ * decoration competing with the rows that have actually moved.
+ */
+function RemoteCell({
+  summary,
+  width,
+  selected,
+}: {
+  readonly summary: WorktreeSummary;
+  readonly width: number;
+  readonly selected: boolean;
+}) {
+  const text = describeRemote(summary);
+
+  // Nothing to point at, and nothing the arrows could honestly say about it.
+  if (summary.upstream === undefined || text.length > width) {
+    return <Text dimColor={!selected}>{padTo(text, width)}</Text>;
+  }
+
+  return (
+    <>
+      <Text color={summary.ahead > 0 ? theme.ok : undefined} dimColor={summary.ahead === 0}>
+        {`↑${summary.ahead}`}
+      </Text>{" "}
+      <Text color={summary.behind > 0 ? theme.warn : undefined} dimColor={summary.behind === 0}>
+        {`↓${summary.behind}`}
+      </Text>
+      {" ".repeat(width - text.length)}
+    </>
+  );
+}
+
+/**
+ * The working tree as one glyph, and only the unusual states as words.
+ *
+ * `clean` was a word the eye had to read on every row to learn nothing — it is
+ * true of almost every worktree almost all the time, and the one row that is
+ * dirty was the same shape and length as the rest. A filled dot has weight and a
+ * hollow one does not, so the row that has changes is now the row that looks
+ * different from across the terminal.
+ *
+ * Shape as well as colour, deliberately. Green-versus-yellow is invisible to a
+ * good number of people and to anyone whose terminal theme has opinions, and a
+ * status column nobody can read is worse than the word it replaced.
+ */
+function StateCell({
+  summary,
+  width,
+  selected,
+}: {
+  readonly summary: WorktreeSummary;
+  readonly width: number;
+  readonly selected: boolean;
+}) {
+  const notes = describeNotes(summary);
+
+  return (
+    <>
+      <Text color={summary.dirty ? theme.warn : undefined} dimColor={!summary.dirty}>
+        {summary.dirty ? "●" : "○"}
+      </Text>
+      <Text dimColor={!selected}>{padTo(notes.length === 0 ? "" : ` ${notes}`, width - 1)}</Text>
+    </>
+  );
+}
 
 /** The branch, when the directory does not already say it. */
 function branchAside(summary: WorktreeSummary): string {
@@ -99,7 +211,13 @@ function Row({
           {"  "}
         </>
       ) : null}
-      <Text dimColor={!selected}>{padTo(describeState(row.summary), widths.state)}</Text>
+      {widths.remote > 0 ? (
+        <>
+          <RemoteCell summary={row.summary} width={widths.remote} selected={selected} />
+          {"  "}
+        </>
+      ) : null}
+      <StateCell summary={row.summary} width={widths.state} selected={selected} />
     </Text>
   );
 }
@@ -108,7 +226,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
   const { exit } = useApp();
   const { columns, rows: terminalRows } = useWindowSize();
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
-  const [cursor, setCursor] = useState(0);
+  const [cursorKey, setCursorKey] = useState<string | undefined>(undefined);
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
   const [message, setMessage] = useState<Message | undefined>(undefined);
 
@@ -118,10 +236,26 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
   // reach for to act on the branches under it in one go.
   const tree = useMemo(() => buildTree(rows), [rows]);
 
-  // Clamped rather than corrected on change: removing the last worktree would
-  // otherwise leave the cursor pointing past the end for one render.
-  const index = tree.length === 0 ? 0 : Math.min(cursor, tree.length - 1);
+  /**
+   * Where the cursor is, remembered as the row rather than as its position.
+   *
+   * The list re-reads itself on a timer now, so a worktree appearing above the
+   * selected one would otherwise slide the selection down a row without anybody
+   * touching a key — and the next `r` would be aimed at something else. Held by
+   * row, the selection stays on what was selected.
+   *
+   * The position is still what a vanished row falls back to: when the thing
+   * under the cursor is removed, staying near it beats jumping to the top.
+   */
+  const lastIndex = useRef(0);
+  const anchored = tree.findIndex((row) => row.key === cursorKey);
+  const index =
+    tree.length === 0 ? 0 : anchored >= 0 ? anchored : Math.min(lastIndex.current, tree.length - 1);
   const current = tree[index];
+
+  useEffect(() => {
+    lastIndex.current = index;
+  }, [index]);
   const selected = current?.kind === "leaf" ? current.summary : undefined;
   const under = useMemo(
     () => (current === undefined || current.kind !== "group" ? [] : leavesUnder(tree, current)),
@@ -134,18 +268,22 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
    *
    * Keys arrive faster than React commits: two presses in the same frame both
    * read the same `index` and the second one goes nowhere, which is exactly
-   * what holding the arrow key does. Clamping lives in here too, so a list that
-   * shrank under the cursor cannot leave it past the end.
+   * what holding the arrow key does. Resolving the pending row to its position
+   * inside the updater is what makes the second press count. Clamping lives in
+   * here too, so a list that shrank under the cursor cannot leave it past the
+   * end.
    */
   const move = useCallback(
     (delta: number) => {
-      setCursor((previous) => {
+      setCursorKey((previous) => {
         const last = Math.max(0, tree.length - 1);
+        const at = tree.findIndex((row) => row.key === previous);
+        const from = at >= 0 ? at : Math.min(lastIndex.current, last);
 
-        return Math.min(last, Math.max(0, Math.min(previous, last) + delta));
+        return tree[Math.min(last, Math.max(0, from + delta))]?.key;
       });
     },
-    [tree.length],
+    [tree],
   );
 
   const refresh = useCallback(async () => {
@@ -200,6 +338,80 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       live = false;
     };
   }, [service]);
+
+  const mounted = useRef(true);
+  useEffect(() => {
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  /**
+   * The list, re-read on a timer.
+   *
+   * Paused while `busy`, where a command already owns the repository and is
+   * going to re-read it when it finishes anyway — a `git status` racing a
+   * `git worktree add` reports a state that was true for neither.
+   *
+   * A tick that finds nothing changed costs a React render and no terminal
+   * write: Ink compares the frame it produced against the last one and returns
+   * early when they match, so an idle screen stays genuinely idle.
+   */
+  const reading = useRef(false);
+  useInterval(
+    () => {
+      // One at a time. A `git status` across thirty worktrees can outlast the
+      // interval, and ticks queueing up behind each other would never let go.
+      if (reading.current) return;
+      reading.current = true;
+
+      void (async () => {
+        try {
+          const summaries = await service.list();
+          if (mounted.current) setRows(summaries);
+        } catch {
+          // A read nobody asked for reports nothing. The next tick either
+          // succeeds, or the next keystroke runs a command that says why.
+        } finally {
+          reading.current = false;
+        }
+      })();
+    },
+    mode.kind === "busy" ? null : REFRESH_MS,
+  );
+
+  /**
+   * The remote half of the same idea, on its own much slower timer.
+   *
+   * Read back straight after rather than left to the next `REFRESH_MS` tick: a
+   * fetch that changed nothing is the common case, and one that did is the whole
+   * reason for having run it.
+   */
+  const fetching = useRef(false);
+  const catchUp = useCallback(async () => {
+    if (fetching.current) return;
+    fetching.current = true;
+
+    try {
+      if (!(await service.fetch())) return;
+
+      const summaries = await service.list();
+      if (mounted.current) setRows(summaries);
+    } catch {
+      // Offline, unauthenticated, whatever it was: the column stays as stale as
+      // it already was, which is no worse than before any of this existed.
+    } finally {
+      fetching.current = false;
+    }
+  }, [service]);
+
+  // Once on open, because opening the screen is exactly when the numbers are
+  // most likely to be from another day.
+  useEffect(() => {
+    void catchUp();
+  }, [catchUp]);
+
+  useInterval(() => void catchUp(), mode.kind === "busy" ? null : FETCH_MS);
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {
@@ -353,15 +565,33 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       Math.max(8, ...tree.map(width)),
       Math.max(8, Math.floor(columns * 0.45)),
     );
+    // The heading is content too: a column sized only to its rows truncates its
+    // own label the moment the rows are shorter than it (`↑0 ↓0` under `remo…`).
+    const LABELS = { branch: 6, remote: 6, state: 5 };
+
     // Only when something has one to show: a branch matching its directory is
     // the ordinary case, and a column of blanks would be worse than no column.
-    const asides = leavesOf(tree).map((leaf) => branchAside(leaf.summary).length);
-    const branch = Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(...asides), 24);
+    const leaves = leavesOf(tree);
+    const asides = leaves.map((leaf) => branchAside(leaf.summary).length);
+    const branch =
+      Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(LABELS.branch, ...asides), 24);
+
+    // Sized to its contents, which is at most `no upstream`. Dropped entirely
+    // when what would be left cannot hold the state column's own heading — the
+    // dot is what says a worktree has changes in it, and it goes last.
+    const widest = Math.max(
+      LABELS.remote,
+      ...leaves.map((leaf) => describeRemote(leaf.summary).length),
+    );
+    const gaps = branch > 0 ? 8 : 6;
+    const spare = columns - treeColumn - branch - widest - gaps - 2;
+    const remote = spare >= LABELS.state ? widest : 0;
 
     return {
       tree: treeColumn,
       branch,
-      state: Math.max(0, columns - treeColumn - branch - (branch > 0 ? 8 : 6)),
+      remote,
+      state: Math.max(0, columns - treeColumn - branch - remote - gaps - (remote > 0 ? 2 : 0)),
     };
   }, [tree, columns]);
 
@@ -390,6 +620,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
           {padTo("worktree", widths.tree)}
           {"  "}
           {widths.branch > 0 ? `${padTo("branch", widths.branch)}  ` : ""}
+          {widths.remote > 0 ? `${padTo("remote", widths.remote)}  ` : ""}
           state
         </Text>
       ) : null}

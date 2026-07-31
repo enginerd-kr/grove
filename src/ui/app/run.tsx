@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { render } from "ink";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { findRepoRoot } from "../../core/discover.ts";
 import { isGardenError } from "../../core/errors.ts";
 import { isEmptyOrMissing } from "../../core/fs.ts";
@@ -60,10 +60,22 @@ type GardenProps = {
 function Garden({ found, folder, inPlace, cwd, store, reporter }: GardenProps) {
   const [paths, setPaths] = useState(found);
 
-  if (paths === undefined) {
+  // Memoised, and not as a micro-optimisation: `App` starts a fetch when its
+  // service changes, so a new object on every render would be a `git fetch` on
+  // every render.
+  const setup = useMemo(
+    () => createSetupService(folder, inPlace, reporter),
+    [folder, inPlace, reporter],
+  );
+  const worktrees = useMemo(
+    () => (paths === undefined ? undefined : createWorktreeService(paths, cwd, reporter)),
+    [paths, cwd, reporter],
+  );
+
+  if (paths === undefined || worktrees === undefined) {
     return (
       <Setup
-        service={createSetupService(folder, inPlace, reporter)}
+        service={setup}
         folder={folder}
         inPlace={inPlace}
         store={store}
@@ -73,14 +85,7 @@ function Garden({ found, folder, inPlace, cwd, store, reporter }: GardenProps) {
     );
   }
 
-  return (
-    <App
-      service={createWorktreeService(paths, cwd, reporter)}
-      repoRoot={paths.root}
-      store={store}
-      onCancel={killRunningGit}
-    />
-  );
+  return <App service={worktrees} repoRoot={paths.root} store={store} onCancel={killRunningGit} />;
 }
 
 export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<void> {
