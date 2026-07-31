@@ -148,11 +148,18 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     args: "[target]",
     summary: "fetch, then bring a worktree up to date with the default branch",
     description: [
-      "Fast-forwards the default branch's own worktree and rebases every other",
-      "one onto it. Stops without changing anything if the worktree is dirty.",
+      "Fast-forwards the default branch's own worktree. Every other one is",
+      "rebased onto its own remote first and then onto the default branch, and",
+      "the result is force-pushed back with --force-with-lease. Stops without",
+      "changing anything if the worktree is dirty.",
     ],
     flags: [
       { name: "all", type: "boolean", summary: "sync every worktree instead of one" },
+      {
+        name: "no-push",
+        type: "boolean",
+        summary: "leave the rebased commits local, diverged from the branch's remote",
+      },
       {
         name: "no-abort",
         type: "boolean",

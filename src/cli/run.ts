@@ -141,7 +141,12 @@ export async function runCommand(command: GardenCommand, context: CommandContext
       const outcomes = await syncWorktrees(
         repo,
         cwd,
-        { target: command.target, all: command.all, abortOnConflict: command.abortOnConflict },
+        {
+          target: command.target,
+          all: command.all,
+          abortOnConflict: command.abortOnConflict,
+          push: command.push,
+        },
         reporter,
       );
 

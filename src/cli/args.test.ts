@@ -48,10 +48,13 @@ test("add defaults to fetching and not pushing", () => {
 
 // `--no-fetch` is a declared flag rather than a negation of `--fetch`, because
 // parseArgs has no notion of negatable booleans to lean on.
-test("--no-fetch and --no-abort invert the defaults they name", () => {
+test("--no-fetch, --no-abort and --no-push invert the defaults they name", () => {
   expect(run(["add", "x", "--no-fetch"])).toHaveProperty("fetch", false);
   expect(run(["sync", "--no-abort"])).toHaveProperty("abortOnConflict", false);
   expect(run(["sync"])).toHaveProperty("abortOnConflict", true);
+  // Publishing the rebase is part of the rebase, so it is on unless refused.
+  expect(run(["sync", "--no-push"])).toHaveProperty("push", false);
+  expect(run(["sync"])).toHaveProperty("push", true);
 });
 
 test("sync's target is optional and --all is separate", () => {
@@ -60,6 +63,7 @@ test("sync's target is optional and --all is separate", () => {
     target: undefined,
     all: false,
     abortOnConflict: true,
+    push: true,
   });
   expect(run(["sync", "--all"])).toHaveProperty("all", true);
   expect(run(["sync", "feat/login"])).toHaveProperty("target", "feat/login");

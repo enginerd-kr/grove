@@ -109,10 +109,33 @@ reflog remembers. Finish or abort the rebase first.
 
 ### Sync
 
-`sync` fetches, then **fast-forwards** the default branch's worktree and **rebases** every
-other one onto it. The asymmetry is deliberate: rebasing `main` onto `origin/main` would
-rewrite local commits nobody asked to have rewritten, so a diverged default branch is refused
-instead.
+`sync` fetches, then **fast-forwards** the default branch's worktree. The asymmetry is
+deliberate: rebasing `main` onto `origin/main` would rewrite local commits nobody asked to have
+rewritten, so a diverged default branch is refused instead.
+
+Every other worktree goes through three steps, in this order:
+
+1. **rebase onto its own remote** (`origin/<branch>`), if it has one
+2. **rebase onto the default branch** (`origin/main`)
+3. **push back** with `--force-with-lease --force-if-includes`
+
+The order is the whole of why it works, and it is [Git Town's rebase sync
+strategy](https://www.git-town.com/preferences/sync-feature-strategy.html) — the closest thing
+to a standard for a command called `sync`. Step 2 rewrites every commit it moves, so a colleague's
+commit sitting on `origin/<branch>` would be left behind if step 1 had not already taken it — and
+step 3 would then be refused, correctly, for trying to drop their work. Taking theirs first means
+ours replay on top and the push has nothing to destroy.
+
+Step 3 is not optional decoration. A rebase leaves the branch diverged from the remote it tracks,
+and a `sync` that stops at step 2 reports "up-to-date" over a branch two commits adrift with
+nothing able to close the gap. `--force-with-lease` refuses if the remote moved since the fetch,
+and `--force-if-includes` refuses if what would be overwritten is not already in your history, so
+a refusal is a report that somebody else's work is in the way rather than a failure — it is warned
+about, the local rebase stands, and with `--all` one contended branch does not bury the news about
+the other nine. `--no-push` stops at step 2 and leaves the divergence.
+
+A branch nobody has pushed has no step 1 and no step 3: there is nothing to take and nowhere to
+put it, and inventing a remote branch is `garden add --push`'s decision rather than this one's.
 
 Every check runs before anything is executed. A dirty worktree is skipped without being
 touched, and a rebase that conflicts is rolled back by default — pass `--no-abort` to leave it
@@ -254,7 +277,9 @@ would have removed open — the worktrees it holds travel on the row itself rath
 back off the rows below it, which is the shape of bug this would otherwise have.
 
 `*` is the worktree you started from, `▸` the one the keys act on. `a` prompts for a branch
-name; `r` asks before deleting anything; `s` syncs the selected worktree and `S` syncs them all.
+name; `r` asks before deleting anything; `s` syncs the selected worktree and `S` syncs them all —
+including the lease-guarded push that finishes a rebase, since a sync that stops half-way is the
+thing that leaves a branch adrift.
 Progress is drawn in place — the same spinner and clone percentage a command line gets — and a
 refusal ("worktree is dirty") lands on the screen instead of ending the session.
 
