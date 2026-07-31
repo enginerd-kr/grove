@@ -160,6 +160,19 @@ export function leavesOf(rows: readonly TreeRow[]): readonly TreeLeaf[] {
 }
 
 /**
+ * The first row nested directly under `row`, when there is one on screen.
+ *
+ * The mirror of `parentOf`, and read off the emitted rows for the same reason:
+ * a folded folder has nothing under it here, and `→` should treat that as the
+ * dead end it looks like rather than the one it would find in the tree.
+ */
+export function firstChildOf(rows: readonly TreeRow[], row: TreeRow): TreeRow | undefined {
+  const next = rows[rows.indexOf(row) + 1];
+
+  return next !== undefined && next.depth > row.depth ? next : undefined;
+}
+
+/**
  * The folder a row belongs to, or nothing at the top level.
  *
  * The nearest row above it that sits one level out — which is what `←` walks

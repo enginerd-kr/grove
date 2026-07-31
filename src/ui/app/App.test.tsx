@@ -690,6 +690,42 @@ test("`←` from a worktree walks out to its folder, and `→` steps back in", a
   expect(await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f))).toMatch(/▸ +login/);
 });
 
+// They have to be a pair. `←` used to walk out through as many levels as there
+// were while `→` stopped at the first worktree it met, so holding one travelled
+// and holding the other did nothing — and a key that sometimes moves and
+// sometimes does not is a key you have to look at the screen to use.
+test("`←` and `→` both keep moving when there is no level to step through", async () => {
+  const { service } = stub({
+    list: async () => [
+      summary({ dir: "main", isDefault: true, current: true }),
+      summary({ dir: "feat/login" }),
+      summary({ dir: "feat/search" }),
+    ],
+  });
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  // Down the tree with `→` alone: into the folder, then on through its rows.
+  ui.stdin.write(keys.right);
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+  ui.stdin.write(keys.right);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+  // A worktree has nothing nested under it, and `→` carries on rather than
+  // stopping — which is what it used to do here.
+  ui.stdin.write(keys.right);
+  await waitFor(ui.lastFrame, (f) => /▸ +search/.test(f));
+
+  // And back out with `←` alone, past the folder and on up.
+  ui.stdin.write(keys.left);
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+  // The folder is open, so this shuts it rather than moving.
+  ui.stdin.write(keys.left);
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\/\s+2/.test(f));
+  // Shut and at the top level: nothing to step out to, so it keeps going up.
+  ui.stdin.write(keys.left);
+  expect(await waitFor(ui.lastFrame, (f) => /▸ \* main/.test(f))).toMatch(/▸ \* main/);
+});
+
 // The failure this prevents: folding a folder quietly changing what `r` there
 // does, because what it removes was read off rows the fold had taken away.
 test("`r` on a folded folder still removes everything inside it", async () => {
