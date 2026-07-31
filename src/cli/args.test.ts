@@ -230,6 +230,30 @@ test("--version reports the package version", () => {
   expect(parseCliArgs(["-v"])).toEqual({ kind: "text", output: version });
 });
 
+// The one command that destroys work, so what it was asked to destroy has to
+// survive parsing exactly — a dropped `--to` would reset to the wrong place.
+test("reset takes a worktree, and its two spellings for going further", () => {
+  expect(run(["reset", "feat/login"])).toEqual({
+    name: "reset",
+    target: "feat/login",
+    to: undefined,
+    clean: false,
+  });
+  expect(run(["reset", "feat/login", "--to", "origin/main", "--clean"])).toEqual({
+    name: "reset",
+    target: "feat/login",
+    to: "origin/main",
+    clean: true,
+  });
+});
+
+test("reset without a worktree is a usage error rather than a guess", () => {
+  const parsed = parseCliArgs(["reset"]);
+
+  expect(parsed.kind).toBe("error");
+  expect(parsed.kind === "error" && parsed.message).toContain("needs a worktree");
+});
+
 test("every command in the table parses without a special case", () => {
   // Guards the declarative table against gaining an entry that `buildCommand`
   // has no arm for, which would otherwise only show up at runtime.
@@ -238,6 +262,7 @@ test("every command in the table parses without a special case", () => {
     add: ["add", "branch"],
     list: ["list"],
     remove: ["remove", "target"],
+    reset: ["reset", "target"],
     sync: ["sync"],
   };
 

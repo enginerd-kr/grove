@@ -1,0 +1,106 @@
+import type { Reporter } from "../../report/reporter.ts";
+import { GardenError } from "../errors.ts";
+import { runGit, runGitOrThrow } from "../git.ts";
+import type { RepoPaths } from "../layout.ts";
+import { listWorktrees, resolveTarget, statusOf, worktreeDir } from "../worktrees.ts";
+
+/**
+ * `garden reset` — throw away what a worktree has changed.
+ *
+ * The one command here that destroys work rather than moving it about, and the
+ * only reason it exists as a command at all is that the alternative is worse:
+ * without it people `cd` into the worktree and type `git reset --hard` from
+ * memory, in whichever directory the shell happened to be in.
+ *
+ * So the whole command is about being specific. It names the worktree it is
+ * resetting rather than trusting the current directory, it reads the status
+ * first so the answer can say what went, and it refuses a worktree in the middle
+ * of a rebase — where `reset --hard` does not mean "undo my changes", it means
+ * "leave the rebase half-applied and unrecoverable".
+ */
+
+export type ResetOptions = {
+  readonly target: string;
+  /**
+   * What to reset to. Defaults to the worktree's own HEAD, which discards
+   * changes without moving the branch — a rewind is a different, bigger thing
+   * and has to be asked for.
+   */
+  readonly to?: string;
+  /** Also delete untracked files. `git reset --hard` leaves those alone. */
+  readonly clean: boolean;
+};
+
+export type ResetResult = {
+  readonly path: string;
+  readonly dir: string;
+  readonly branch?: string;
+  /** What the reset threw away. Capped — this is for reading, not for auditing. */
+  readonly discarded: readonly string[];
+  /** How many paths differed, of which `discarded` is the first few. */
+  readonly changed: number;
+  /** Untracked files still sitting there because `--clean` was not asked for. */
+  readonly untracked: readonly string[];
+  /** Where it ended up, so a rewind can be undone from the reflog if need be. */
+  readonly head: string;
+};
+
+/** Enough to recognise what went, without printing someone's whole tree back. */
+const LISTED = 5;
+
+export async function resetWorktree(
+  repo: RepoPaths,
+  cwd: string,
+  options: ResetOptions,
+  reporter: Reporter,
+): Promise<ResetResult> {
+  const worktrees = await listWorktrees(repo.bare);
+  const target = resolveTarget(options.target, worktrees, { root: repo.root, cwd });
+  const dir = worktreeDir(repo.root, target.path);
+
+  // Not overridable, and the one refusal here. A stopped rebase has commits
+  // half-applied and its own HEAD; resetting through that abandons them
+  // somewhere only the reflog remembers, which is not what anybody typing
+  // "throw away my changes" is asking for.
+  if (target.rebasing === true) {
+    throw new GardenError("refused", `${dir} is in the middle of a rebase`, {
+      hint: `finish or abandon it first: git -C ${target.path} rebase --abort`,
+    });
+  }
+
+  // Read before, because after the reset there is nothing left to report and
+  // "discarded 3 files" is the part worth saying.
+  const before = await statusOf(target.path);
+  const to = options.to ?? "HEAD";
+
+  const step = reporter.step(`resetting ${dir}`);
+  try {
+    await runGitOrThrow(["reset", "--hard", to], { cwd: target.path });
+    // `-d` for directories as well: a build output tree is the usual reason a
+    // reset leaves a worktree still dirty, and it is never one file.
+    if (options.clean) await runGitOrThrow(["clean", "-fd"], { cwd: target.path });
+    step.succeed(`reset ${dir}`);
+  } catch (error) {
+    step.fail(`could not reset ${dir}`);
+    throw error;
+  }
+
+  const untracked = options.clean ? [] : before.untracked;
+  if (untracked.length > 0) {
+    reporter.warn(
+      `${dir} still has ${untracked.length} untracked file(s); --clean would delete them too`,
+    );
+  }
+
+  const head = await runGit(["rev-parse", "--short", "HEAD"], { cwd: target.path });
+
+  return {
+    path: target.path,
+    dir,
+    branch: target.branch,
+    discarded: before.changed.slice(0, LISTED),
+    changed: before.changed.length,
+    untracked: untracked.slice(0, LISTED),
+    head: head.stdout.trim(),
+  };
+}

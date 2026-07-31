@@ -85,6 +85,8 @@ test("status reports cleanliness and drift from one call", () => {
 
   expect(status).toMatchObject({ dirty: true, upstream: "origin/main", ahead: 2, behind: 3 });
   expect(status.changed).toEqual(["README.md", "untracked.txt"]);
+  // Kept apart because `reset --hard` leaves this one where it is.
+  expect(status.untracked).toEqual(["untracked.txt"]);
 });
 
 test("a clean worktree is not dirty", () => {
@@ -92,7 +94,14 @@ test("a clean worktree is not dirty", () => {
     ["# branch.oid a1e77c9", "# branch.head main", "# branch.ab +0 -0", ""].join("\0"),
   );
 
-  expect(status).toEqual({ dirty: false, changed: [], upstream: undefined, ahead: 0, behind: 0 });
+  expect(status).toEqual({
+    dirty: false,
+    changed: [],
+    untracked: [],
+    upstream: undefined,
+    ahead: 0,
+    behind: 0,
+  });
 });
 
 // Every entry type has a different field count before the path, and a path may

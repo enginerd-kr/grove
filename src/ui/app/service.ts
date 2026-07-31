@@ -3,6 +3,7 @@ import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
+import { resetWorktree } from "../../core/commands/reset.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import type { Reporter } from "../../report/reporter.ts";
@@ -43,6 +44,15 @@ export type WorktreeService = {
    * refuses does not stop the rest; the answer says how many did what.
    */
   readonly removeMany: (targets: readonly string[]) => Promise<string>;
+  /**
+   * `git reset --hard` in one worktree, and nothing further.
+   *
+   * The two spellings that make it bigger stay on the command line: `--to`,
+   * which drops commits rather than only changes, and `--clean`, which deletes
+   * files git never knew about. A keystroke can undo your afternoon; it should
+   * not be able to undo your week or take your `.env` with it.
+   */
+  readonly reset: (target: string) => Promise<string>;
   /** `target` omitted means every worktree — the app's `S`. */
   readonly sync: (target?: string) => Promise<string>;
 };
@@ -160,6 +170,18 @@ export function createWorktreeService(
       if (refusals.length === 0) return `removed ${removed} worktree${plural}`;
 
       return `removed ${removed} worktree${plural}, ${refusals.length} refused`;
+    },
+
+    reset: async (target) => {
+      const result = await resetWorktree(repo, cwd, { target, clean: false }, reporter);
+
+      if (result.changed === 0) return `${result.dir} had nothing to discard`;
+
+      const plural = result.changed === 1 ? "" : "s";
+      const left =
+        result.untracked.length === 0 ? "" : `, ${result.untracked.length} untracked left`;
+
+      return `discarded ${result.changed} change${plural} in ${result.dir}${left}`;
     },
 
     sync: async (target) => {

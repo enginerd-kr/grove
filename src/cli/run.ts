@@ -3,6 +3,7 @@ import { addWorktree } from "../core/commands/add.ts";
 import { cloneRepo } from "../core/commands/clone.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
+import { resetWorktree } from "../core/commands/reset.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
@@ -114,6 +115,24 @@ export async function runCommand(command: GardenCommand, context: CommandContext
       }
 
       reporter.out(display(cwd, result.path));
+      return;
+    }
+
+    case "reset": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await resetWorktree(
+        repo,
+        cwd,
+        { target: command.target, to: command.to, clean: command.clean },
+        reporter,
+      );
+
+      if (global.json) {
+        reporter.out(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      reporter.out(`${display(cwd, result.path)}\t${result.head}`);
       return;
     }
 

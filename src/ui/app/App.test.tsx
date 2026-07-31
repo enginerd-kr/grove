@@ -21,6 +21,7 @@ function summary(overrides: Partial<WorktreeSummary> & { dir: string }): Worktre
     branch: overrides.dir,
     detached: false,
     dirty: false,
+    changed: 0,
     // Tracking by default, because git only reports ahead/behind for a branch
     // that has an upstream — a summary with counts and no upstream is a state
     // no repository can be in.
@@ -48,6 +49,7 @@ type Calls = {
   readonly added: { branch: string; from?: string }[];
   readonly removed: string[];
   readonly removedMany: (readonly string[])[];
+  readonly resetted: string[];
   readonly synced: (string | undefined)[];
 };
 
@@ -55,7 +57,14 @@ function stub(overrides: Partial<WorktreeService> = {}): {
   service: WorktreeService;
   calls: Calls;
 } {
-  const calls: Calls = { fetched: 0, added: [], removed: [], removedMany: [], synced: [] };
+  const calls: Calls = {
+    fetched: 0,
+    added: [],
+    removed: [],
+    removedMany: [],
+    resetted: [],
+    synced: [],
+  };
 
   return {
     calls,
@@ -81,6 +90,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       removeMany: async (targets) => {
         calls.removedMany.push(targets);
         return `removed ${targets.length} worktrees`;
+      },
+      reset: async (target) => {
+        calls.resetted.push(target);
+        return `discarded 2 changes in ${target}`;
       },
       sync: async (target) => {
         calls.synced.push(target);
@@ -330,6 +343,57 @@ test("`r` confirms before removing, and `n` means no", async () => {
   ui.stdin.write("y");
   await waitFor(ui.lastFrame, (f) => f.includes("removed"));
   expect(calls.removed).toEqual(["/repo/main"]);
+});
+
+// The one key that destroys work rather than moving it about, so it asks first
+// and says what it costs — a removed worktree leaves its branch behind and
+// `garden add` brings it back, where this leaves nothing at all.
+test("`x` asks before discarding, and says how much is at stake", async () => {
+  const { service, calls } = stub({
+    list: async () => [
+      summary({ dir: "main", isDefault: true, current: true }),
+      summary({ dir: "feat/login", dirty: true, changed: 3 }),
+    ],
+  });
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+  expect(ui.frame()).toContain("x discard");
+
+  ui.stdin.write("x");
+  const asked = await waitFor(ui.lastFrame, (f) => f.includes("discard 3 changes"));
+  expect(asked).toContain("feat/login");
+  expect(asked).toContain("no undo");
+
+  ui.stdin.write("n");
+  await waitFor(ui.lastFrame, (f) => !f.includes("no undo"));
+  expect(calls.resetted).toEqual([]);
+
+  ui.stdin.write("x");
+  await waitFor(ui.lastFrame, (f) => f.includes("no undo"));
+  ui.stdin.write("y");
+  await waitFor(ui.lastFrame, (f) => f.includes("discarded 2 changes"));
+
+  expect(calls.resetted).toEqual(["/repo/feat/login"]);
+});
+
+// A confirmation for a reset that would do nothing is a prompt that teaches
+// people to answer `y` without reading it.
+test("`x` is absent, and does nothing, on a worktree with nothing to discard", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  expect(ui.frame()).not.toContain("x discard");
+
+  ui.stdin.write("x");
+  await waitFor(ui.lastFrame, (f) => f.includes("q quit"));
+
+  expect(ui.frame()).not.toContain("no undo");
+  expect(calls.resetted).toEqual([]);
 });
 
 // A folder is a destination, not just a heading: it is what you reach for to

@@ -25,10 +25,17 @@ import { buildTree, leavesOf, parentOf, type TreeRow } from "./tree.ts";
  * always on the last row and nothing reflows as work scrolls past.
  */
 
-/** What a `r` is about to delete: one worktree, or a folder's worth of them. */
-type Removal =
+/**
+ * What a key is about to do that cannot be undone, held until it is confirmed.
+ *
+ * Everything in here goes through the same `y`/`n`, because the question is
+ * always the same one — is this the row you meant — and the answer should not
+ * depend on remembering which destructive key you pressed.
+ */
+type Pending =
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
-  | { readonly kind: "many"; readonly label: string; readonly paths: readonly string[] };
+  | { readonly kind: "many"; readonly label: string; readonly paths: readonly string[] }
+  | { readonly kind: "reset"; readonly summary: WorktreeSummary };
 
 type Mode =
   | { readonly kind: "list" }
@@ -40,7 +47,7 @@ type Mode =
    * prompt said.
    */
   | { readonly kind: "add"; readonly value: string; readonly from?: string }
-  | { readonly kind: "confirm"; readonly target: Removal }
+  | { readonly kind: "confirm"; readonly target: Pending }
   | { readonly kind: "busy"; readonly label: string };
 
 type Props = {
@@ -184,6 +191,27 @@ function StateCell({
       <Text dimColor={!selected}>{padTo(notes.length === 0 ? "" : ` ${notes}`, width - 1)}</Text>
     </>
   );
+}
+
+/**
+ * The question a destructive key asks, and what it costs to answer `y`.
+ *
+ * Each one says what survives, since that is what the person is actually
+ * weighing — and for the reset the honest answer is nothing, so it says that
+ * rather than something softer.
+ */
+function describePending(target: Pending): string {
+  if (target.kind === "one") {
+    return `remove ${target.summary.dir}? the directory goes, the branch stays`;
+  }
+
+  if (target.kind === "many") {
+    return `remove all ${target.paths.length} under ${target.label}? the directories go, the branches stay`;
+  }
+
+  const plural = target.summary.changed === 1 ? "" : "s";
+
+  return `discard ${target.summary.changed} change${plural} in ${target.summary.dir}? there is no undo`;
 }
 
 /** The branch, when the directory does not already say it. */
@@ -472,6 +500,12 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     if (mode.kind === "confirm") {
       const target = mode.target;
       if (input === "y" || input === "Y") {
+        if (target.kind === "reset") {
+          return void perform(`resetting ${target.summary.dir}`, () =>
+            service.reset(target.summary.path),
+          );
+        }
+
         return void (target.kind === "one"
           ? perform(`removing ${target.summary.dir}`, () => service.remove(target.summary.path))
           : perform(`removing ${target.paths.length} under ${target.label}`, () =>
@@ -536,6 +570,12 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
         target: { kind: "many", label: current.key, paths: under.map((summary) => summary.path) },
       });
     }
+    // Only where there is something to throw away. A confirmation for a reset
+    // that would do nothing is a prompt that teaches people to answer `y`
+    // without reading, which is the last habit this key should be building.
+    if (input === "x" && selected?.dirty === true) {
+      return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
+    }
     if (input === "s" && selected) {
       return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
     }
@@ -575,16 +615,19 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       ];
     }
 
+    // `x` only where it would do something. Offering it on a clean worktree
+    // would be a menu entry whose whole effect is to say "nothing to discard".
     return [
       { keys: "↑↓", action: "move" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },
+      ...(selected?.dirty === true ? [{ keys: "x", action: "discard" }] : []),
       { keys: "s", action: "sync" },
       { keys: "S", action: "sync all" },
       { keys: "R", action: "refresh" },
       { keys: "q", action: "quit" },
     ];
-  }, [mode.kind, current, under.length]);
+  }, [mode.kind, current, under.length, selected?.dirty]);
 
   // Every section's height, decided here rather than left to the renderer: the
   // list can only be sliced to fit if something knows what "fit" is.
@@ -724,10 +767,11 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       ) : null}
 
       {mode.kind === "confirm" ? (
-        <Text color={theme.warn} wrap="truncate">
-          {mode.target.kind === "one"
-            ? `remove ${mode.target.summary.dir}? the directory goes, the branch stays`
-            : `remove all ${mode.target.paths.length} under ${mode.target.label}? the directories go, the branches stay`}
+        // Red for the reset, amber for the removals, because they are not the
+        // same risk: a removed worktree leaves its branch and its commits behind
+        // and `garden add` brings it back, while a reset leaves nothing at all.
+        <Text color={mode.target.kind === "reset" ? theme.danger : theme.warn} wrap="truncate">
+          {describePending(mode.target)}
         </Text>
       ) : null}
 

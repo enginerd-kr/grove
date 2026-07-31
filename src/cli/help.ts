@@ -123,6 +123,26 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     ],
   },
   {
+    name: "reset",
+    aliases: [],
+    args: "<target>",
+    summary: "throw away a worktree's uncommitted changes",
+    description: [
+      "Runs `git reset --hard` inside the worktree. Every change to a tracked",
+      "file goes, and there is no undo. Untracked files are left where they are",
+      "unless --clean says otherwise.",
+    ],
+    flags: [
+      {
+        name: "to",
+        type: "string",
+        placeholder: "<ref>",
+        summary: "reset to <ref> rather than the worktree's own HEAD, dropping commits too",
+      },
+      { name: "clean", type: "boolean", summary: "also delete untracked files and directories" },
+    ],
+  },
+  {
     name: "sync",
     aliases: [],
     args: "[target]",

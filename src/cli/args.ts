@@ -45,6 +45,12 @@ export type GardenCommand =
     }
   | { readonly name: "list" }
   | {
+      readonly name: "reset";
+      readonly target: string;
+      readonly to?: string;
+      readonly clean: boolean;
+    }
+  | {
       readonly name: "remove";
       readonly target: string;
       readonly force: boolean;
@@ -141,6 +147,15 @@ function buildCommand(
     }
     case "list":
       return { name: "list" };
+    case "reset": {
+      if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to reset`);
+      return {
+        name: "reset",
+        target: first,
+        to: str(values, "to"),
+        clean: bool(values, "clean"),
+      };
+    }
     case "remove": {
       if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to remove`);
       return {

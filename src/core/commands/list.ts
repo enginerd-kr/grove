@@ -11,6 +11,14 @@ export type WorktreeSummary = {
   readonly branch?: string;
   readonly detached: boolean;
   readonly dirty: boolean;
+  /**
+   * How many paths differ from HEAD — what a `reset` would throw away.
+   *
+   * `dirty` says whether there is anything; this says how much, which is the
+   * difference between a confirmation someone can weigh and one they wave
+   * through.
+   */
+  readonly changed: number;
   readonly ahead: number;
   readonly behind: number;
   readonly upstream?: string;
@@ -39,6 +47,7 @@ export async function listWorktreeSummaries(
         branch: record.branch,
         detached: record.detached,
         dirty: status.dirty,
+        changed: status.changed.length,
         ahead: status.ahead,
         behind: status.behind,
         upstream: status.upstream,
