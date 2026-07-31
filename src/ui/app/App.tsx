@@ -18,7 +18,7 @@ import { rank } from "./filter.ts";
 import { type Message, messageFor } from "./message.ts";
 import { bodyOf, modeOf, PROMPT_ROWS, Prompt, tokenize } from "./Prompt.tsx";
 import type { WorktreeService } from "./service.ts";
-import { buildTree, leavesOf, parentOf, type TreeRow } from "./tree.ts";
+import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tree.ts";
 
 /**
  * `garden` with nothing to do: the worktrees, and the five commands as keystrokes.
@@ -616,19 +616,28 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     if (key.downArrow || input === "j") return move(1);
 
     /**
-     * Folding, the way every other tree does it.
+     * Folding and traversing, as one pair of keys that mirror each other.
      *
-     * `→` opens a shut folder and steps into an open one; `←` shuts an open one
-     * and otherwise walks out to the folder you are in. The second half is what
-     * makes it feel like a tree rather than a pair of toggles: from six rows
-     * deep, `←←←` is how you get back out and fold up what you came from,
-     * without counting rows on the way.
+     * `→` opens a shut folder, and otherwise goes in: to the first row nested
+     * under this one. `←` shuts an open folder, and otherwise goes out: to the
+     * folder this row is in. From six rows deep, `←←←` is how you get back out
+     * and fold up what you came from without counting rows on the way.
+     *
+     * And when there is nothing to go into or out of, they keep going the way
+     * they point rather than stopping dead. Without that they are not a pair:
+     * `←` walks out through as many levels as there are while `→` stops at the
+     * first worktree it meets, so holding one of them travels and holding the
+     * other does nothing. A key that sometimes moves and sometimes does not is
+     * a key you have to look at the screen to use.
      */
     if (key.rightArrow || input === "l") {
-      if (current?.kind !== "group") return;
-      if (current.collapsed) return setCollapsed(without(collapsed, current.key));
+      if (current?.kind === "group" && current.collapsed) {
+        return setCollapsed(without(collapsed, current.key));
+      }
 
-      return move(1);
+      const child = current === undefined ? undefined : firstChildOf(tree, current);
+
+      return child === undefined ? move(1) : setCursorKey(child.key);
     }
 
     if (key.leftArrow || input === "h") {
@@ -638,7 +647,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
 
       const parent = current === undefined ? undefined : parentOf(tree, current);
 
-      return parent === undefined ? undefined : setCursorKey(parent.key);
+      return parent === undefined ? move(-1) : setCursorKey(parent.key);
     }
 
     // On a folder, `a` starts the name where the cursor already is: reaching for

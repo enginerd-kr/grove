@@ -43,6 +43,11 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   following it — so `r` there would have found nothing to remove and folding would have quietly
   changed what a key does. Folds themselves are held in a `Set` of folder *keys*, not rows, so
   they survive the list re-reading itself.
+- **`←` and `→` mirror each other, including when there is no level to step through.** `→` opens
+  a shut folder or goes to its first child; `←` shuts an open one or goes to its parent; and each
+  falls back to moving one row its own way rather than doing nothing. `firstChildOf` is
+  `parentOf`'s mirror and reads the emitted rows for the same reason — a folded folder has
+  nothing under it *here*, and `→` should treat that as the dead end it looks like.
 - **A shut folder is indicated by its count, and nothing else.** It reads `feat/  3`; open, it
   reads `feat/` with its worktrees indented underneath. A chevron as well would say the same
   thing twice, and the count says the part a chevron cannot — how much is behind it.

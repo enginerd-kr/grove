@@ -266,11 +266,18 @@ That count is the whole indicator. A chevron beside it would be saying the same 
 folder with its worktrees indented underneath is visibly open, and one with a number and nothing
 under it is visibly not.
 
-`→` opens a shut folder and steps into an open one; `←` shuts an open one and otherwise walks out
-to the folder you are in. The second half is what makes it a tree rather than a pair of toggles:
-from six rows deep, `←←←` gets you back out and folds up what you came from without counting rows
-on the way. `h` and `l` do the same, next to the `j` and `k` that already move. A fold inside a
-fold is remembered, so opening the outer one does not spill rows you had already put away.
+`→` opens a shut folder, and otherwise goes in — to the first row nested under this one. `←` shuts
+an open folder, and otherwise goes out, to the folder this row is in. From six rows deep, `←←←`
+gets you back out and folds up what you came from without counting rows on the way.
+
+When there is nothing to go into or out of they keep going the way they point, rather than
+stopping dead. Without that they are not a pair: `←` walks out through as many levels as there
+are while `→` stops at the first worktree it meets, so holding one travels and holding the other
+does nothing — and a key that sometimes moves and sometimes does not is a key you have to look at
+the screen to use.
+
+`h` and `l` do the same, next to the `j` and `k` that already move. A fold inside a fold is
+remembered, so opening the outer one does not spill rows you had already put away.
 
 Folding changes what is on screen and nothing else. `r` on a shut folder removes exactly what it
 would have removed open — the worktrees it holds travel on the row itself rather than being read
