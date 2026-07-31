@@ -116,6 +116,27 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   and the answer should not depend on remembering which key you pressed. `x` is also hidden and
   inert on a clean worktree — a confirmation whose only possible outcome is "nothing to discard"
   is training people to answer `y` without reading.
+- **The prompt reads its line from a ref, not from `mode`.** Keys arrive faster than React
+  commits, and a paste is a whole line and an `enter` inside one frame — reading `mode.value`
+  there acts on the line as it was *before* the paste, which is empty. The same branch splits a
+  pasted newline into "text, then submit", because the printable-only filter would otherwise
+  drop the entire paste for containing a `\r`. Both are pinned by a test that pastes.
+- **The prompt does not take the list's keys away.** The arrows still move the cursor while it is
+  open — the list is what is being looked at, and narrowing then picking should be one motion.
+  Only the real arrows, since `j`/`k` are letters in a text line. `esc` peels one layer: the line,
+  then the box. `enter` pins the selected row and clears the filter, so the filter only ever
+  exists while the box is open — it pins the row explicitly rather than trusting the cursor's
+  anchor, because typing a name until one row is left never moved the cursor, and it resolves
+  past a folder heading, which is where that leaves it.
+- **Filtering swaps the shape of the list, not just its contents** (`filter.ts`). With no filter
+  it is `buildTree`; with one it is `rank` — flat, whole paths, best first. A tree cannot be
+  ranked, and the two jobs are different: folders group the whole set for reading, a ranked list
+  answers a name. `rank` returns `TreeLeaf[]` rather than `TreeRow[]`, which is what lets the
+  screen keep drawing rows without caring which shape produced them.
+- **The prompt's modes are its first character** (`Prompt.tsx`: `modeOf`, `bodyOf`). No mode
+  state to get out of step with what is on screen, and no chrome to switch between them.
+  `tokenize` is quotes-only on purpose: the result goes straight to `git` as an argument list,
+  so there is no shell for a `;` or a `|` to mean anything to.
 - **One `useInput`, one `mode`.** Every key goes through a single handler that switches on
   `list | add | confirm | busy`, rather than each component claiming its own input. The failure
   that prevents: `a` opening the branch prompt and the next keypress being read as a command.

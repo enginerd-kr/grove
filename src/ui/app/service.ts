@@ -5,6 +5,7 @@ import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
+import { runGit } from "../../core/git.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import type { Reporter } from "../../report/reporter.ts";
 
@@ -64,6 +65,21 @@ export type WorktreeService = {
   readonly reset: (target: string) => Promise<string>;
   /** `target` omitted means every worktree — the app's `S`. */
   readonly sync: (target?: string) => Promise<string>;
+  /**
+   * Any git command at all, in one worktree.
+   *
+   * The deliberate hole in everything above. The rest of this interface is four
+   * commands with their destructive spellings filed off, which is right for a
+   * keystroke and wrong as the whole story — `git stash`, `git bisect`, and
+   * `git push --force-with-lease` are not things this tool is going to grow
+   * keys for, and being unable to reach them from the screen would just mean
+   * quitting it to type them.
+   *
+   * So: typed out in full, on purpose, prefixed with a `!` that nothing else
+   * uses. `args` is an argument list handed straight to `git` with no shell in
+   * between, so a `;` in there is an argument and not a second command.
+   */
+  readonly git: (args: readonly string[], cwd: string) => Promise<string>;
 };
 
 /**
@@ -99,6 +115,14 @@ export function createSetupService(
     },
   };
 }
+
+/**
+ * How much of a `!` command's output reaches the screen.
+ *
+ * The activity area holds six rows, and a `git log` is thousands — so the
+ * cut-off is stated rather than left to look like the whole answer.
+ */
+const GIT_OUTPUT_LINES = 40;
 
 /** How a finished sync reads: counts by outcome, worst first. */
 function describeSync(outcomes: readonly { kind: string; dir: string }[]): string {
@@ -189,6 +213,28 @@ export function createWorktreeService(
       const tracked = result.changed - result.untracked;
 
       return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
+    },
+
+    git: async (args, at) => {
+      const result = await runGit(args, { cwd: at });
+
+      // Reported whichever stream it came on and whatever the exit code: git
+      // says useful things on stderr when it succeeds, and the exit code is
+      // information rather than a reason to hide the output.
+      const output = [result.stdout, result.stderr]
+        .join("\n")
+        .split("\n")
+        .map((line) => line.trimEnd())
+        .filter((line) => line.length > 0);
+
+      for (const line of output.slice(0, GIT_OUTPUT_LINES)) reporter.info(line);
+
+      const trimmed = output.length - GIT_OUTPUT_LINES;
+      if (trimmed > 0) reporter.info(`… ${trimmed} more line(s)`);
+
+      if (result.code !== 0) return `git ${args.join(" ")} exited ${result.code}`;
+
+      return output.length === 0 ? `git ${args.join(" ")} — no output` : `git ${args[0] ?? ""} ok`;
     },
 
     sync: async (target) => {
