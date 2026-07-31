@@ -16,11 +16,22 @@ import type { WorktreeSummary } from "../../core/commands/list.ts";
 export type TreeRow =
   | {
       readonly kind: "group";
-      /** Stable across renders; React keys and nothing else. */
+      /** Stable across renders; React keys, and what "is this one folded?" is keyed on. */
       readonly key: string;
       /** The directory segment, with its trailing slash: `feat/`. */
       readonly label: string;
       readonly depth: number;
+      /** True when its contents are folded away and no rows follow it here. */
+      readonly collapsed: boolean;
+      /**
+       * Every worktree beneath it, at any depth — carried on the row rather than
+       * read back off the rows that follow it.
+       *
+       * A folded folder has no rows following it, and `r` there still has to
+       * remove the same worktrees it would have removed unfolded. Reading the
+       * emitted rows would quietly make folding change what a key does.
+       */
+      readonly leaves: readonly WorktreeSummary[];
     }
   | {
       readonly kind: "leaf";
@@ -73,7 +84,21 @@ function insert(root: Node, summary: WorktreeSummary): void {
  * a folder is a heading — headings after the plain rows keeps the top of each
  * level scannable rather than making you step over `chore/` to reach it.
  */
-function emit(node: Node, depth: number, path: string, into: TreeRow[]): void {
+/** Every worktree beneath a node, at any depth, in no particular order. */
+function allLeaves(node: Node): readonly WorktreeSummary[] {
+  return [
+    ...node.leaves.map((leaf) => leaf.summary),
+    ...[...node.groups.values()].flatMap(allLeaves),
+  ];
+}
+
+function emit(
+  node: Node,
+  depth: number,
+  path: string,
+  collapsed: ReadonlySet<string>,
+  into: TreeRow[],
+): void {
   const leaves = node.leaves.toSorted((a, b) => {
     if (a.summary.isDefault !== b.summary.isDefault) return a.summary.isDefault ? -1 : 1;
 
@@ -95,43 +120,59 @@ function emit(node: Node, depth: number, path: string, into: TreeRow[]): void {
     if (group === undefined) continue;
 
     const key = `${path}${name}/`;
-    into.push({ kind: "group", key, label: `${name}/`, depth });
-    emit(group, depth + 1, key, into);
+    const folded = collapsed.has(key);
+
+    into.push({
+      kind: "group",
+      key,
+      label: `${name}/`,
+      depth,
+      collapsed: folded,
+      leaves: allLeaves(group),
+    });
+
+    // Folded folders below a folded one are still folded when it opens again:
+    // recursion stops here, so nothing under it is emitted and nothing about it
+    // is forgotten either.
+    if (!folded) emit(group, depth + 1, key, collapsed, into);
   }
 }
 
-export function buildTree(summaries: readonly WorktreeSummary[]): readonly TreeRow[] {
+/** `collapsed` holds the keys of the folders whose contents are folded away. */
+export function buildTree(
+  summaries: readonly WorktreeSummary[],
+  collapsed: ReadonlySet<string> = new Set(),
+): readonly TreeRow[] {
   const root = emptyNode();
   for (const summary of summaries) insert(root, summary);
 
   const rows: TreeRow[] = [];
-  emit(root, 0, "", rows);
+  emit(root, 0, "", collapsed, rows);
 
   return rows;
 }
 
 export type TreeLeaf = Extract<TreeRow, { kind: "leaf" }>;
 
+/** The worktrees on screen — what the columns are sized against. */
 export function leavesOf(rows: readonly TreeRow[]): readonly TreeLeaf[] {
   return rows.filter((row): row is TreeLeaf => row.kind === "leaf");
 }
 
 /**
- * The worktrees a folder row stands for — everything nested beneath it.
+ * The folder a row belongs to, or nothing at the top level.
  *
- * Read off the emitted rows rather than the tree it came from: the rows are
- * what the cursor is sitting in, so "under this one" means the run that follows
- * it, up to the first row back at its own depth.
+ * The nearest row above it that sits one level out — which is what `←` walks
+ * towards, from a worktree or from a folder already folded shut.
  */
-export function leavesUnder(rows: readonly TreeRow[], group: TreeRow): readonly TreeLeaf[] {
-  const start = rows.indexOf(group);
-  if (start < 0) return [];
+export function parentOf(rows: readonly TreeRow[], row: TreeRow): TreeRow | undefined {
+  const start = rows.indexOf(row);
+  if (start < 0 || row.depth === 0) return undefined;
 
-  const under: TreeLeaf[] = [];
-  for (const row of rows.slice(start + 1)) {
-    if (row.depth <= group.depth) break;
-    if (row.kind === "leaf") under.push(row);
+  for (let i = start - 1; i >= 0; i -= 1) {
+    const candidate = rows[i];
+    if (candidate !== undefined && candidate.depth < row.depth) return candidate;
   }
 
-  return under;
+  return undefined;
 }

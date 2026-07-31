@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
-import { buildTree, leavesOf } from "./tree.ts";
+import { buildTree, leavesOf, parentOf } from "./tree.ts";
 
 function summary(dir: string, overrides: Partial<WorktreeSummary> = {}): WorktreeSummary {
   return {
@@ -72,4 +72,55 @@ test("a worktree keeps its own name even where a folder shares it", () => {
 
 test("an empty list is an empty tree rather than a stray row", () => {
   expect(buildTree([])).toEqual([]);
+});
+
+test("a folded folder keeps its row and loses the rows under it", () => {
+  const summaries = [summary("main", { isDefault: true }), summary("feat/a"), summary("feat/b")];
+
+  expect(shape(summaries)).toEqual(["main", "feat/", "  a", "  b"]);
+  expect(
+    buildTree(summaries, new Set(["feat/"])).map((row) => `${"  ".repeat(row.depth)}${row.label}`),
+  ).toEqual(["main", "feat/"]);
+});
+
+// The failure this prevents: `r` on a folded folder finding nothing to remove,
+// because what it removes was read off rows that folding had taken away.
+test("a folder knows what it holds whether it is folded or not", () => {
+  const summaries = [summary("feat/api/v2"), summary("feat/login")];
+
+  for (const collapsed of [new Set<string>(), new Set(["feat/"]), new Set(["feat/api/"])]) {
+    const feat = buildTree(summaries, collapsed).find((row) => row.key === "feat/");
+
+    expect(feat?.kind === "group" && feat.leaves.map((leaf) => leaf.dir).toSorted()).toEqual([
+      "feat/api/v2",
+      "feat/login",
+    ]);
+  }
+});
+
+// Folding an outer folder must not forget what was folded inside it, or opening
+// it again would spill rows the user had already put away.
+test("a fold inside a fold survives the outer one opening again", () => {
+  const summaries = [summary("feat/api/v2"), summary("feat/login")];
+  const collapsed = new Set(["feat/", "feat/api/"]);
+
+  expect(buildTree(summaries, collapsed).map((row) => row.label)).toEqual(["feat/"]);
+
+  const reopened = buildTree(summaries, new Set(["feat/api/"]));
+  expect(reopened.map((row) => row.label)).toEqual(["feat/", "login", "api/"]);
+  expect(reopened.find((row) => row.key === "feat/api/")?.kind === "group").toBe(true);
+});
+
+test("parentOf walks out one level, and stops at the top", () => {
+  const rows = buildTree([summary("main", { isDefault: true }), summary("feat/api/v2")]);
+  const byLabel = (label: string) => rows.find((row) => row.label === label);
+
+  const v2 = byLabel("v2");
+  const api = byLabel("api/");
+
+  expect(v2 && parentOf(rows, v2)).toBe(api);
+  expect(api && parentOf(rows, api)?.label).toBe("feat/");
+  // `main` and `feat/` are both at the top; there is nothing to walk out to.
+  const main = byLabel("main");
+  expect(main && parentOf(rows, main)).toBeUndefined();
 });

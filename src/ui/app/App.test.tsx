@@ -60,7 +60,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
   return {
     calls,
     service: {
-      list: async () => ROWS,
+      // A fresh array per call, as the real service gives: it rebuilds every
+      // summary from git each time. Returning the same reference would let React
+      // skip the re-render and quietly make the polling tests prove nothing.
+      list: async () => [...ROWS],
       // Answering "nothing changed" keeps the background fetch out of every
       // other test: no re-read, so no frame nobody was waiting for.
       fetch: async () => {
@@ -337,7 +340,7 @@ test("landing on a folder changes the keys to what a folder can do", async () =>
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  const frame = await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+  const frame = await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
 
   expect(frame).toContain("remove all 2");
   expect(frame).toContain("add under feat/");
@@ -346,13 +349,89 @@ test("landing on a folder changes the keys to what a folder can do", async () =>
   expect(frame).not.toMatch(/s sync\b/);
 });
 
+test("`←` folds a folder shut and `→` opens it again", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+
+  ui.stdin.write(keys.left);
+  // `▸` in the fold column rather than `▾`, and the count of what it is holding
+  // back — which is the thing the folded rows were telling you.
+  const folded = await waitFor(ui.lastFrame, (f) => /▸ ▸ feat\/\s+2/.test(f));
+  expect(folded).not.toContain("login");
+  expect(folded).toContain("←→ open");
+
+  ui.stdin.write(keys.right);
+  expect(await waitFor(ui.lastFrame, (f) => f.includes("login"))).toMatch(/▸ ▾ feat\//);
+}, 10_000);
+
+// The keys have to feel like a tree rather than a pair of toggles: `←` from
+// inside a folder is how you get back out to it without counting rows.
+test("`←` from a worktree walks out to its folder, and `→` steps back in", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+
+  ui.stdin.write(keys.left);
+  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+
+  ui.stdin.write(keys.right);
+  expect(await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f))).toMatch(/▸ +login/);
+});
+
+// The failure this prevents: folding a folder quietly changing what `r` there
+// does, because what it removes was read off rows the fold had taken away.
+test("`r` on a folded folder still removes everything inside it", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  ui.stdin.write(keys.left);
+  await waitFor(ui.lastFrame, (f) => /▸ ▸ feat\//.test(f));
+
+  ui.stdin.write("r");
+  await waitFor(ui.lastFrame, (f) => f.includes("remove all 2 under feat/"));
+  ui.stdin.write("y");
+  await waitFor(ui.lastFrame, (f) => f.includes("removed 2 worktrees"));
+
+  expect(calls.removedMany).toEqual([["/repo/feat/login", "/repo/feat/search"]]);
+}, 10_000);
+
+// The list re-reads itself every couple of seconds. A fold held by row rather
+// than by key would spring open on the next tick.
+test("a fold survives the list re-reading itself", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
+  ui.stdin.write(keys.left);
+  await waitFor(ui.lastFrame, (f) => /▸ ▸ feat\//.test(f));
+
+  // Long enough for two refresh ticks to have come and gone.
+  await new Promise((resolve) => setTimeout(resolve, 4500));
+
+  expect(ui.frame()).not.toContain("login");
+  expect(ui.frame()).toMatch(/▸ ▸ feat\//);
+}, 15_000);
+
 test("`r` on a folder removes every worktree under it, after asking", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
 
   ui.stdin.write("r");
   await waitFor(ui.lastFrame, (f) => f.includes("remove all 2 under feat/"));
@@ -371,7 +450,7 @@ test("`a` on a folder starts the branch name inside it", async () => {
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
-  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+  await waitFor(ui.lastFrame, (f) => /▸ ▾ feat\//.test(f));
 
   ui.stdin.write("a");
   await waitFor(ui.lastFrame, (f) => f.includes("new branch feat/"));
