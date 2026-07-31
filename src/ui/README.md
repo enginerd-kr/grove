@@ -4,7 +4,7 @@
 instead of the DOM. `Box` is flexbox (via Yoga), `Text` is the only leaf that may contain
 strings.
 
-Two things live here. `app/` is the interactive screen a bare `wt` opens — the worktrees, with
+Two things live here. `app/` is the interactive screen a bare `garden` opens — the worktrees, with
 the five commands bound to keys. `components/` is the parts list, shared with
 `src/report/ink-reporter.tsx`, which draws progress for a one-shot command and nothing else.
 
@@ -13,6 +13,7 @@ theme.ts          shared colors
 components/       Spinner, ProgressBar, StatusBar, StepRow
 hooks/            useInterval
 app/App.tsx       the screen: rows, keys, and one mode at a time
+app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
 app/tree.ts       the worktree paths as the tree they are on disk
 app/service.ts    what the screen is allowed to do, as four functions
 app/run.tsx       discovery, the reporter, and render()
@@ -28,6 +29,22 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   *sliced* to the rows left over after the header, activity, and key bar — a layout that only
   works because something computes how many rows fit rather than leaving it to the renderer to
   overflow.
+- **Anything above the list reports its own height.** `App` slices the list to what is left
+  over, so every other section has to be able to say what it will take *before* it is drawn:
+  `bannerRows(columns, rows)` and `statusBarRows(hints, columns)`. Both are computed from the
+  same predicate the component renders from, so the two cannot disagree, and both are tested by
+  rendering and counting lines rather than against a literal. The failure they prevent shows up
+  at one window size only — the key bar drawn one row below the bottom of the terminal.
+- **The key bar packs its own lines** (`packHints`). A `Box` of one `Text` per hint does not
+  break between hints when the terminal is too narrow for the row; it squeezes every box until
+  the keys and their actions land on separate lines (`↑↓ ⏎ move` reading as `↑↓`/`move`). Each
+  packed line is drawn as a single `Text` with the hints as inline spans, which is what welds a
+  key to its action. `columns` is optional: the progress reporter draws one short hint into a
+  log, where there is no width to pack against and nothing underneath to protect.
+- **`StepRow` truncates only for the app** (`truncate`). The app reserves a fixed number of rows
+  for activity and would lose the bottom of its layout to a `--verbose` git line long enough to
+  wrap; the reporter draws into a log with nothing under it, so wrapping there costs nothing and
+  truncating would throw text away.
 - **The tree is pure and lives in `app/tree.ts`.** Ordering is the part worth testing —
   worktrees before folders at each level, the default branch before its siblings — and none of
   it needs a terminal. The screen draws what it returns and the cursor walks every row it
@@ -73,7 +90,7 @@ way — arrows, `a` and a typed branch name, `r` then `y` — against a stubbed 
 **A PTY** (`app/App.e2e.test.ts`, `src/report/ink-reporter.e2e.test.ts`) runs the real binary
 via `Bun.spawn({ terminal })` — native since Bun 1.3.5, so no `node-pty`, whose C++ addon Bun
 cannot load. It exists because `ink-testing-library` fakes stdout with `columns` pinned to 100
-and no `isTTY`, and both "is the Ink reporter selected at all" and "does a bare `wt` open
+and no `isTTY`, and both "is the Ink reporter selected at all" and "does a bare `garden` open
 anything" are answers that depend on `isTTY`. POSIX only — the tests skip themselves on Windows.
 
 Three details in `e2e-utils.ts` are load-bearing and were each found the hard way:

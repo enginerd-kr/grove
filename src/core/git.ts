@@ -1,4 +1,4 @@
-import { classifyGitError, stderrDetails, WtError } from "./errors.ts";
+import { classifyGitError, GardenError, stderrDetails } from "./errors.ts";
 
 /**
  * The only place in this codebase that spawns a process.
@@ -191,7 +191,7 @@ export async function runGitOrThrow(
   const result = await runGit(args, options);
   if (result.code === 0) return result.stdout;
 
-  throw new WtError(
+  throw new GardenError(
     classifyGitError(result.stderr),
     `git ${args.join(" ")} failed (exit ${result.code})`,
     { details: stderrDetails(result.stderr) },

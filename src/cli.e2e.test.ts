@@ -21,7 +21,7 @@ onPosix(
   async () => {
     const help = await runCli(["--help"]);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain("Usage: wt <command>");
+    expect(help.stdout).toContain("Usage: garden <command>");
     expect(help.stdout).toContain("clone");
     expect(help.stderr).toBe("");
 
@@ -52,7 +52,7 @@ onPosix(
 
     expect(exitCode).toBe(2);
     expect(stderr).toContain("branch name");
-    // `wt list --json | jq` depends on stdout carrying nothing but results, so
+    // `garden list --json | jq` depends on stdout carrying nothing but results, so
     // even a failure must not write there.
     expect(stdout).toBe("");
   },
@@ -79,7 +79,7 @@ onPosix(
     const { exitCode, stdout, stderr } = await runCli(["list"], { cwd: import.meta.dir });
 
     expect(exitCode).toBe(3);
-    expect(stderr).toContain("wt clone");
+    expect(stderr).toContain("garden clone");
     expect(stdout).toBe("");
   },
   20_000,

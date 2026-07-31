@@ -11,7 +11,7 @@ export type { WorktreeService } from "./app/service.ts";
 export { ProgressBar } from "./components/ProgressBar.tsx";
 export { Spinner } from "./components/Spinner.tsx";
 export type { Hint } from "./components/StatusBar.tsx";
-export { StatusBar } from "./components/StatusBar.tsx";
+export { StatusBar, statusBarRows } from "./components/StatusBar.tsx";
 export { StepRow } from "./components/StepRow.tsx";
 export { useInterval } from "./hooks/useInterval.ts";
 export { theme } from "./theme.ts";

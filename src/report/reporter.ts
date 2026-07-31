@@ -2,7 +2,7 @@
  * How commands talk to the user.
  *
  * The rule the whole interface exists to enforce: **stdout is data, stderr is
- * progress**. `wt list --json | jq` has to work while a spinner is on screen, so
+ * progress**. `garden list --json | jq` has to work while a spinner is on screen, so
  * results go through `out()` and absolutely nothing else does.
  *
  * Commands depend on this interface, never on a concrete reporter — which is
@@ -42,7 +42,7 @@ const defaultWriters: Writers = {
 /**
  * One line when a step starts, one when it ends.
  *
- * No cursor tricks, no colour, no spinner. Drawing is what `wt` does by
+ * No cursor tricks, no colour, no spinner. Drawing is what `garden` does by
  * default, so this runs only when `--headless` asks for it — for a log file, a
  * CI transcript, or anything else that wants plain lines that survive being
  * read a week later.

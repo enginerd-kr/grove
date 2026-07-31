@@ -1,16 +1,17 @@
-import { Box, Spacer, Text, useApp, useInput, useWindowSize } from "ink";
+import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { describeState, type WorktreeSummary } from "../../core/commands/list.ts";
-import { isWtError } from "../../core/errors.ts";
+import { isGardenError } from "../../core/errors.ts";
 import type { LineStore } from "../../report/lines.ts";
-import { StatusBar } from "../components/StatusBar.tsx";
+import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { theme } from "../theme.ts";
+import { Banner, bannerRows } from "./Banner.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, leavesOf, leavesUnder, type TreeRow } from "./tree.ts";
 
 /**
- * `wt` with nothing to do: the worktrees, and the five commands as keystrokes.
+ * `garden` with nothing to do: the worktrees, and the five commands as keystrokes.
  *
  * The screen owns no git knowledge — it asks a `WorktreeService` — and it runs
  * exactly the commands the command line does, with the destructive spellings
@@ -53,21 +54,6 @@ type Props = {
 /** The most progress worth keeping on screen; older lines scroll out of it. */
 const ACTIVITY_ROWS = 6;
 
-/**
- * The header is a label, not a path to copy: `~` for home, and the front cut
- * away when it is long, because a repository path that wraps costs a line of
- * the list and the tail is the part that identifies it anyway.
- */
-function shortenPath(path: string, max: number): string {
-  const home = process.env.HOME;
-  const short =
-    home !== undefined && home.length > 0 && path.startsWith(home)
-      ? `~${path.slice(home.length)}`
-      : path;
-
-  return short.length <= max ? short : `…${short.slice(short.length - max + 1)}`;
-}
-
 /** Pads or truncates to exactly `width`, so columns stay columns. */
 function padTo(text: string, width: number): string {
   if (width <= 0) return "";
@@ -77,7 +63,7 @@ function padTo(text: string, width: number): string {
 }
 
 function messageFor(error: unknown): Message {
-  if (isWtError(error)) return { kind: "error", text: error.message, hint: error.hint };
+  if (isGardenError(error)) return { kind: "error", text: error.message, hint: error.hint };
 
   return { kind: "error", text: error instanceof Error ? error.message : String(error) };
 }
@@ -300,51 +286,6 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
 
   const activity = lines.slice(-ACTIVITY_ROWS);
 
-  // Every section's height, decided here rather than left to the renderer: the
-  // list can only be sliced to fit if something knows what "fit" is.
-  const labelled = rows.length > 0;
-  // A blank row above the labels, and another between the last thing reported
-  // and the keys: the two places the screen would otherwise start and end hard
-  // against the terminal's own output.
-  const headerRows = (labelled ? 2 : 1) + 1;
-  const footerRows = 2 + 1;
-  const activityRows = activity.length > 0 ? activity.length + 1 : 0;
-  const detailRows =
-    (mode.kind === "add" ? 3 : 0) +
-    (mode.kind === "confirm" ? 1 : 0) +
-    (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
-  const listHeight = Math.max(
-    1,
-    terminalRows - headerRows - activityRows - detailRows - footerRows,
-  );
-
-  // A window onto the tree that keeps the cursor roughly centred, and stops
-  // scrolling once the end is on screen. Measured in drawn rows, which include
-  // the folder headings the cursor itself skips over.
-  const start = Math.min(
-    Math.max(0, index - Math.floor(listHeight / 2)),
-    Math.max(0, tree.length - listHeight),
-  );
-  const visible = tree.slice(start, start + listHeight);
-
-  const widths = useMemo((): Widths => {
-    const width = (row: TreeRow) => row.depth * 2 + row.label.length;
-    const treeColumn = Math.min(
-      Math.max(8, ...tree.map(width)),
-      Math.max(8, Math.floor(columns * 0.45)),
-    );
-    // Only when something has one to show: a branch matching its directory is
-    // the ordinary case, and a column of blanks would be worse than no column.
-    const asides = leavesOf(tree).map((leaf) => branchAside(leaf.summary).length);
-    const branch = Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(...asides), 24);
-
-    return {
-      tree: treeColumn,
-      branch,
-      state: Math.max(0, columns - treeColumn - branch - (branch > 0 ? 8 : 6)),
-    };
-  }, [tree, columns]);
-
   const hints = useMemo(() => {
     if (mode.kind === "busy") return [{ keys: "ctrl+c", action: "cancel" }];
     if (mode.kind === "add") {
@@ -384,16 +325,75 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     ];
   }, [mode.kind, current, under.length]);
 
+  // Every section's height, decided here rather than left to the renderer: the
+  // list can only be sliced to fit if something knows what "fit" is.
+  const labelled = rows.length > 0;
+  // The banner shrinks to one line on a small terminal, so its height is asked
+  // for rather than assumed — getting it wrong is a row of the list drawn off
+  // the bottom of the screen.
+  const banner = bannerRows(columns, terminalRows);
+  // A blank row above the banner, and another between the last thing reported
+  // and the keys: the two places the screen would otherwise start and end hard
+  // against the terminal's own output.
+  const headerRows = banner + (labelled ? 2 : 1) + 1;
+  // The key bar is one row until the terminal is too narrow to hold the keys on
+  // one, which the folder hints (`a add under feat/`) reach first. Asked for
+  // rather than assumed, for the same reason as the banner.
+  const footerRows = 1 + statusBarRows(hints, columns) + 1;
+  const activityRows = activity.length > 0 ? activity.length + 1 : 0;
+  const detailRows =
+    (mode.kind === "add" ? 3 : 0) +
+    (mode.kind === "confirm" ? 1 : 0) +
+    (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
+  const listHeight = Math.max(
+    1,
+    terminalRows - headerRows - activityRows - detailRows - footerRows,
+  );
+
+  // A window onto the tree that keeps the cursor roughly centred, and stops
+  // scrolling once the end is on screen. Measured in drawn rows, which include
+  // the folder headings the cursor itself skips over.
+  const start = Math.min(
+    Math.max(0, index - Math.floor(listHeight / 2)),
+    Math.max(0, tree.length - listHeight),
+  );
+  const visible = tree.slice(start, start + listHeight);
+
+  const widths = useMemo((): Widths => {
+    const width = (row: TreeRow) => row.depth * 2 + row.label.length;
+    const treeColumn = Math.min(
+      Math.max(8, ...tree.map(width)),
+      Math.max(8, Math.floor(columns * 0.45)),
+    );
+    // Only when something has one to show: a branch matching its directory is
+    // the ordinary case, and a column of blanks would be worse than no column.
+    const asides = leavesOf(tree).map((leaf) => branchAside(leaf.summary).length);
+    const branch = Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(...asides), 24);
+
+    return {
+      tree: treeColumn,
+      branch,
+      state: Math.max(0, columns - treeColumn - branch - (branch > 0 ? 8 : 6)),
+    };
+  }, [tree, columns]);
+
   const rule = "─".repeat(Math.max(0, columns));
-  const counted =
-    rows.length === 0
-      ? "no worktrees"
-      : visible.length < tree.length
-        ? `${index + 1} of ${rows.length}`
-        : `${rows.length} worktree${rows.length === 1 ? "" : "s"}`;
+  // The banner already says how many there are, so the last row is left with
+  // the one thing it cannot answer: where the cursor is in a list too long to
+  // show at once. Counted in drawn rows, which is what the cursor walks.
+  const position = visible.length < tree.length ? `${index + 1} of ${tree.length}` : "";
+  const here = rows.find((summary) => summary.current)?.dir;
 
   return (
     <Box flexDirection="column" width={columns} height={terminalRows} paddingTop={1}>
+      <Banner
+        repoRoot={repoRoot}
+        worktrees={rows.length}
+        here={here}
+        columns={columns}
+        rows={terminalRows}
+      />
+
       {/* The branch column appears only when some worktree's branch differs from
           the directory it sits in, so the label has to come and go with it. */}
       {labelled ? (
@@ -422,7 +422,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
           <Text dimColor>{rule}</Text>
           <Box flexDirection="column">
             {activity.map((line) => (
-              <StepRow key={line.id} line={line} />
+              <StepRow key={line.id} line={line} truncate />
             ))}
           </Box>
         </>
@@ -460,23 +460,14 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       ) : null}
 
       <Box marginTop={1}>
-        <StatusBar hints={hints} />
+        <StatusBar hints={hints} columns={columns} />
       </Box>
 
-      {/* Last row, under the keys: which repository this is, and how much of it
-          is on screen. It sits here rather than on top because it is the answer
-          to a question nobody asks twice — the list is what the eye starts on. */}
-      <Box>
-        <Box marginRight={1}>
-          <Text bold color={theme.accent}>
-            wt
-          </Text>
-        </Box>
-        <Text dimColor wrap="truncate">
-          {shortenPath(repoRoot, Math.max(10, columns - 24))}
-        </Text>
-        <Spacer />
-        <Text dimColor>{counted}</Text>
+      {/* Last row, under the keys: how far into the list the cursor is. The row
+          is kept even when there is nothing to say, so that a list scrolling
+          past the bottom does not shift everything above it by a line. */}
+      <Box justifyContent="flex-end">
+        <Text dimColor>{position}</Text>
       </Box>
     </Box>
   );

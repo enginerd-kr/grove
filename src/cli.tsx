@@ -2,7 +2,7 @@
 import { parseCliArgs } from "./cli/args.ts";
 import { ExitCode, errorToExitCode } from "./cli/exit-codes.ts";
 import { runCommand } from "./cli/run.ts";
-import { isWtError } from "./core/errors.ts";
+import { isGardenError } from "./core/errors.ts";
 import { killRunningGit, traceGit } from "./core/git.ts";
 import { createInkReporter } from "./report/ink-reporter.tsx";
 import { createPlainReporter } from "./report/reporter.ts";
@@ -12,7 +12,7 @@ const command = parseCliArgs(Bun.argv.slice(2));
 
 if (command.kind === "error") {
   // Usage problems go to stderr even though they are not results, so that a
-  // mistyped `wt list --json | jq` fails loudly instead of feeding jq garbage.
+  // mistyped `garden list --json | jq` fails loudly instead of feeding jq garbage.
   console.error(command.message);
   if (command.usage) console.error(`\n${command.usage}`);
   process.exit(ExitCode.usage);
@@ -25,7 +25,7 @@ if (command.kind === "text") {
 
 /** The one place that decides what a thrown thing costs the process. */
 function fail(error: unknown): never {
-  if (isWtError(error)) {
+  if (isGardenError(error)) {
     console.error(error.message);
     for (const detail of error.details) console.error(`  ${detail}`);
     if (error.hint) console.error(`\n${error.hint}`);
@@ -40,8 +40,8 @@ function fail(error: unknown): never {
 
 if (command.kind === "app") {
   // The screen needs a terminal to draw on and a keyboard to read from. Without
-  // both — piped, scripted, or `--headless` — `wt` prints what it always did,
-  // which is also what makes `wt | head` and `wt > usage.txt` keep working.
+  // both — piped, scripted, or `--headless` — `garden` prints what it always did,
+  // which is also what makes `garden | head` and `garden > usage.txt` keep working.
   const watched = process.stdin.isTTY === true && process.stdout.isTTY === true;
 
   if (!watched || command.global.headless) {

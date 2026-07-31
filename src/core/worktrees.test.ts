@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { WtError } from "./errors.ts";
+import { GardenError } from "./errors.ts";
 import { parseStatus, parseWorktreeList, resolveTarget, type WorktreeRecord } from "./worktrees.ts";
 
 /** Real output shapes, copied from git rather than imagined. */
@@ -148,7 +148,7 @@ test("a target resolves by branch, by directory, or by path", () => {
 // `feat` is a folder holding worktrees, not a worktree — so naming it is a
 // miss, not a partial match on everything beneath it.
 test("a parent directory is not a target", () => {
-  expect(() => resolveTarget("feat", WORKTREES, { root: ROOT, cwd: ROOT })).toThrow(WtError);
+  expect(() => resolveTarget("feat", WORKTREES, { root: ROOT, cwd: ROOT })).toThrow(GardenError);
 });
 
 test("branch wins over a directory of the same name", () => {
@@ -172,7 +172,7 @@ test("an unknown target lists what is actually there", () => {
     }
   })();
 
-  expect(thrown).toBeInstanceOf(WtError);
-  expect((thrown as WtError).code).toBe("not-a-repo");
-  expect((thrown as WtError).details.join("\n")).toContain("feat/login");
+  expect(thrown).toBeInstanceOf(GardenError);
+  expect((thrown as GardenError).code).toBe("not-a-repo");
+  expect((thrown as GardenError).details.join("\n")).toContain("feat/login");
 });

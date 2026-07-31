@@ -6,7 +6,7 @@ import { removeWorktree } from "../core/commands/remove.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
-import type { GlobalOptions, WtCommand } from "./args.ts";
+import type { GardenCommand, GlobalOptions } from "./args.ts";
 
 /**
  * Everything a command needs that it must not go looking for itself.
@@ -32,7 +32,7 @@ function display(cwd: string, path: string): string {
   return rel.length < path.length ? rel : path;
 }
 
-export async function runCommand(command: WtCommand, context: CommandContext): Promise<void> {
+export async function runCommand(command: GardenCommand, context: CommandContext): Promise<void> {
   const { cwd, global, reporter } = context;
 
   switch (command.name) {

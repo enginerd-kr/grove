@@ -28,7 +28,7 @@ export type GlobalOptions = {
   readonly headless: boolean;
 };
 
-export type WtCommand =
+export type GardenCommand =
   | {
       readonly name: "clone";
       readonly url: string;
@@ -58,9 +58,9 @@ export type WtCommand =
     };
 
 export type CliCommand =
-  | { readonly kind: "run"; readonly command: WtCommand; readonly global: GlobalOptions }
+  | { readonly kind: "run"; readonly command: GardenCommand; readonly global: GlobalOptions }
   /**
-   * A bare `wt`: open the interactive screen.
+   * A bare `garden`: open the interactive screen.
    *
    * `usage` travels with it because the screen needs a terminal — piped, or
    * `--headless`, the entry point prints this instead.
@@ -117,7 +117,7 @@ function buildCommand(
   spec: SubcommandSpec,
   values: ParsedValues,
   positionals: readonly string[],
-): CliCommand | WtCommand {
+): CliCommand | GardenCommand {
   // The usage strings in `help.ts` are the contract; these checks enforce the
   // same arity so a typo lands as "wrong number of arguments" rather than as a
   // branch named after a flag the user misspelled.
@@ -187,10 +187,10 @@ function takesNextValue(token: string): boolean {
  * Splits global flags written *before* the subcommand from the rest.
  *
  * `-C` is spelled after git's own, and `git -C dir status` puts it first — so
- * that is where people type it. Supporting only `wt list -C dir` would be a
+ * that is where people type it. Supporting only `garden list -C dir` would be a
  * wart in exactly the flag most likely to be reached for out of habit.
  *
- * The scan has to know which flags take a value, or `wt -C repo list` would
+ * The scan has to know which flags take a value, or `garden -C repo list` would
  * read `repo` as the subcommand.
  */
 function splitLeadingGlobals(argv: readonly string[]): {
@@ -239,7 +239,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
     }
   }
 
-  // Answered before a subcommand is required, so `wt --help` and `wt -v` work.
+  // Answered before a subcommand is required, so `garden --help` and `garden -v` work.
   if (bool(leadingValues, "help")) return text(formatGlobalHelp());
   if (bool(leadingValues, "version")) return text(version);
 
@@ -298,7 +298,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
     return usageError(spec, error instanceof Error ? error.message : String(error));
   }
 
-  // Checked before arity so `wt add --help` explains itself instead of
+  // Checked before arity so `garden add --help` explains itself instead of
   // complaining about the branch name it is missing.
   if (bool(values, "help")) return text(formatSubcommandHelp(spec));
   if (bool(values, "version")) return text(version);
@@ -316,7 +316,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   if ("kind" in built) return built;
 
   // Written either side of the subcommand; the later spelling wins, which is
-  // what `wt -C a list -C b` reads as.
+  // what `garden -C a list -C b` reads as.
   const global = { ...leadingValues, ...values };
 
   return {
