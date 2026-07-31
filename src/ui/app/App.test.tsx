@@ -113,8 +113,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
 
 // The app refreshes once a minute. The tests that are *about* the refreshing
 // drive it faster; the rest inherit it and are simply never ticked.
-function mount(service: WorktreeService, refreshMs?: number) {
-  const store = new LineStore();
+function mount(service: WorktreeService, refreshMs?: number, store = new LineStore()) {
   const instance = render(
     <App service={service} repoRoot="/repo" store={store} refreshMs={refreshMs} />,
   );
@@ -633,6 +632,76 @@ test("a command pasted with its newline runs, rather than vanishing", async () =
   await waitFor(ui.lastFrame, (f) => f.includes("git stash ok"));
 
   expect(calls.ran[0]?.args).toEqual(["stash", "list"]);
+});
+
+// Six rows is right for a command narrating itself and wrong for output you
+// asked for: `git status` is seven lines before it says anything unusual, and it
+// was losing `On branch …` off the top — the line that says which worktree you
+// are even looking at.
+//
+// Asserted as the difference between the two paths rather than as a count, since
+// how many rows there are to divide depends on the terminal the tests run in.
+test("a `!` command's output gets room that progress does not", async () => {
+  const store = new LineStore();
+  const seven = () => {
+    for (let line = 1; line <= 7; line += 1) store.addNote("info", `line ${line}`);
+  };
+  const { service } = stub({
+    sync: async () => {
+      seven();
+      return "synced";
+    },
+    git: async () => {
+      seven();
+      return "git status ok";
+    },
+  });
+  const ui = mount(service, undefined, store);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  // Progress keeps the last six, so the first of seven falls off the top.
+  ui.stdin.write("S");
+  const progress = await waitFor(ui.lastFrame, (f) => f.includes("synced"));
+  expect(progress).toContain("line 7");
+  expect(progress).not.toContain("line 1");
+
+  // The same seven lines, asked for rather than narrated, arrive whole.
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write("!status\r");
+  const output = await waitFor(ui.lastFrame, (f) => f.includes("git status ok"));
+
+  expect(output).toContain("line 1");
+  expect(output).toContain("line 7");
+  expect(output).not.toContain("earlier line");
+});
+
+// What does not fit is said. The whole reason this changed is that a line went
+// missing off the top without the screen admitting it.
+test("output too long for the room says how much went above it", async () => {
+  const store = new LineStore();
+  const { service } = stub({
+    git: async () => {
+      for (let line = 1; line <= 200; line += 1) store.addNote("info", `line ${line}`);
+
+      return "git log ok";
+    },
+  });
+  const ui = mount(service, undefined, store);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write("?");
+  await waitFor(ui.lastFrame, (f) => f.includes("❯"));
+  ui.stdin.write("!log\r");
+
+  const shown = await waitFor(ui.lastFrame, (f) => f.includes("git log ok"));
+
+  expect(shown).toMatch(/… \d+ earlier lines/);
+  expect(shown).toContain("line 200");
+  // And the screen still fits: the list is not squeezed out to make room, and
+  // nothing is drawn over the banner.
+  expect(shown).toContain("garden v");
+  expect(shown).toMatch(/▸ \* main/);
 });
 
 // A folder is a destination, not just a heading: it is what you reach for to

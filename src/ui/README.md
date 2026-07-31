@@ -138,6 +138,14 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   ranked, and the two jobs are different: folders group the whole set for reading, a ranked list
   answers a name. `rank` returns `TreeLeaf[]` rather than `TreeRow[]`, which is what lets the
   screen keep drawing rows without caring which shape produced them.
+- **The activity area is budgeted out of the leftovers, not out of the terminal.** A `!`
+  command's output asks for half the screen and progress asks for six rows, but both are then
+  capped by what is actually free once the banner, prompt, message and key bar have taken theirs,
+  with `MIN_LIST_ROWS` held back for the list. A share of the *whole* is a number that can exceed
+  the space there is — 200 lines of `git log` against a `Math.max(1, …)` floor under the list adds
+  up to more rows than exist, and Ink draws the overflow on top of the banner. Anything clipped is
+  counted on a leading row rather than dropped, since a line going missing off the top without the
+  screen admitting it is what started this.
 - **The prompt's modes are its first character** (`Prompt.tsx`: `modeOf`, `bodyOf`). No mode
   state to get out of step with what is on screen, and no chrome to switch between them.
   `tokenize` is quotes-only on purpose: the result goes straight to `git` as an argument list,

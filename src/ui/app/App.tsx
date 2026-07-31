@@ -73,8 +73,34 @@ type Props = {
   readonly refreshMs?: number;
 };
 
-/** The most progress worth keeping on screen; older lines scroll out of it. */
+/**
+ * The most progress worth keeping on screen; older lines scroll out of it.
+ *
+ * Six is right for what a command reports about itself — a spinner, a clone
+ * percentage, a line per step — where the last thing said is the interesting
+ * one and the rest is history.
+ */
 const ACTIVITY_ROWS = 6;
+
+/**
+ * The share of the screen a `!` command's output may take instead.
+ *
+ * Six rows is wrong for that. `git status` is seven lines before it has said
+ * anything unusual, so it lost `On branch …` off the top — the one line that
+ * says which worktree you are even looking at. Output you asked for by typing a
+ * command is the thing on the screen at that moment, not a footnote under the
+ * list, so it gets half the terminal and the list keeps the rest.
+ */
+const OUTPUT_SHARE = 0.5;
+
+/**
+ * The rows the list keeps whatever else wants them.
+ *
+ * The list is the thing being worked in. A screen that answers "what did that
+ * command say" by hiding "which worktree am I on" has moved the problem rather
+ * than solved it.
+ */
+const MIN_LIST_ROWS = 3;
 
 /**
  * How often the screen brings itself up to date, in the absence of any reason
@@ -318,6 +344,8 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
   // Kept outside the prompt, because it outlives it: you narrow the list in
   // order to work in what is left, and closing the box should not undo that.
   const [filter, setFilter] = useState("");
+  /** Whether what the activity area is holding is command output rather than progress. */
+  const [roomy, setRoomy] = useState(false);
   // What is on the prompt line right now, as opposed to at the last render. See
   // the `prompt` branch of `useInput` for why the difference matters.
   const typed = useRef("");
@@ -399,9 +427,13 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
    * then say what happened whether it worked or not.
    */
   const perform = useCallback(
-    async (label: string, action: () => Promise<string>) => {
+    async (label: string, action: () => Promise<string>, isOutput = false) => {
       store.clear();
       setMessage(undefined);
+      // Held as a flag rather than a row count, so a terminal resized while the
+      // output is on screen re-divides what it has instead of keeping a number
+      // that was right for the old height.
+      setRoomy(isOutput);
       setMode({ kind: "busy", label });
 
       try {
@@ -579,7 +611,9 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
         // which is also where a `git worktree`-ish command wants to be run from.
         const at = selected?.path ?? repoRoot;
 
-        return void perform(`git ${args[0]}`, () => service.git(args, at));
+        // The one action whose output *is* the result, rather than a note about
+        // how the result was reached — so it gets the room to be read in.
+        return void perform(`git ${args[0]}`, () => service.git(args, at), true);
       }
 
       // The row survives, the narrowing does not. Filtering is how you found
@@ -694,7 +728,6 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     if (input === "q" || key.escape) return exit();
   });
 
-  const activity = lines.slice(-ACTIVITY_ROWS);
   // The heading of the trunk column, and the branch it compares against. Read
   // off the rows rather than assumed, because `master` and `trunk` are both
   // things people call it.
@@ -772,12 +805,33 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
   // one, which the folder hints (`a add under feat/`) reach first. Asked for
   // rather than assumed, for the same reason as the banner.
   const footerRows = 1 + statusBarRows(hints, columns) + 1;
-  const activityRows = activity.length > 0 ? activity.length + 1 : 0;
   const detailRows =
     (mode.kind === "prompt" ? PROMPT_ROWS : 0) +
     (mode.kind === "add" ? 3 : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
+
+  /**
+   * How many rows the activity area may take, out of what is actually left.
+   *
+   * Asked of the leftovers rather than of the terminal, because a share of the
+   * whole is a number that can exceed the space there is: 200 lines of `git log`
+   * with `Math.max(1, …)` holding the list open underneath adds up to more rows
+   * than the terminal has, and Ink draws the overflow on top of the banner.
+   *
+   * The list keeps a floor either way. It is the thing being worked in, and a
+   * screen that answers one question by hiding the other is not an improvement.
+   */
+  const spare = terminalRows - headerRows - detailRows - footerRows - MIN_LIST_ROWS - 1;
+  const wanted = roomy ? Math.floor(terminalRows * OUTPUT_SHARE) : ACTIVITY_ROWS;
+  const room = Math.max(0, Math.min(wanted, spare));
+
+  // What did not fit is said rather than silently dropped — the whole reason
+  // this exists is that a line went missing off the top without saying so.
+  const clipped = Math.max(0, lines.length - room);
+  const activity = clipped > 0 ? lines.slice(-Math.max(0, room - 1)) : lines;
+  const activityRows = activity.length > 0 ? activity.length + (clipped > 0 ? 1 : 0) + 1 : 0;
+
   const listHeight = Math.max(
     1,
     terminalRows - headerRows - activityRows - detailRows - footerRows,
@@ -892,6 +946,12 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
         <>
           <Text dimColor>{rule}</Text>
           <Box flexDirection="column">
+            {clipped > 0 ? (
+              <Text
+                dimColor
+                wrap="truncate"
+              >{`… ${clipped} earlier line${clipped === 1 ? "" : "s"}`}</Text>
+            ) : null}
             {activity.map((line) => (
               <StepRow key={line.id} line={line} truncate />
             ))}
