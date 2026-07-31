@@ -21,6 +21,44 @@ export function fetchRemotes(bare: string): Promise<boolean> {
   return gitSucceeds(["fetch", "--all", "--prune", "--tags"], { cwd: bare });
 }
 
+export type Drift = { readonly ahead: number; readonly behind: number };
+
+/**
+ * How far every local branch has drifted from `base`, in one call.
+ *
+ * One call rather than one per branch, because this is read on a timer: a
+ * `rev-list` per worktree every couple of seconds is a cost that grows with the
+ * repository, and `for-each-ref` walks the whole set once.
+ *
+ * `%(ahead-behind:)` arrived in git 2.41. On anything older the format is not a
+ * field name and git refuses the whole command, which is reported here as "no
+ * answer" rather than as a failure — the column it feeds simply stays empty,
+ * and nothing else about the screen depends on it.
+ */
+export async function driftFrom(bare: string, base: string): Promise<Map<string, Drift>> {
+  const result = await runGit(
+    ["for-each-ref", `--format=%(refname:short) %(ahead-behind:${base})`, "refs/heads/"],
+    { cwd: bare },
+  );
+
+  const drift = new Map<string, Drift>();
+  if (result.code !== 0) return drift;
+
+  for (const line of result.stdout.split("\n")) {
+    // `<branch> <ahead> <behind>`, and a branch name may contain spaces in
+    // nothing git allows — but the counts are the last two fields either way.
+    const match = /^(.+) (\d+) (\d+)$/.exec(line.trim());
+    if (!match) continue;
+
+    const [, branch, ahead, behind] = match;
+    if (branch === undefined) continue;
+
+    drift.set(branch, { ahead: Number(ahead), behind: Number(behind) });
+  }
+
+  return drift;
+}
+
 /**
  * The branch everything else is measured against.
  *

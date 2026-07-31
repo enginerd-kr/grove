@@ -41,8 +41,8 @@ function summary(overrides: Partial<WorktreeSummary> & { dir: string }): Worktre
 // which one is a folder.
 const ROWS: readonly WorktreeSummary[] = [
   summary({ dir: "main", isDefault: true, current: true }),
-  summary({ dir: "feat/login", ahead: 2 }),
-  summary({ dir: "feat/search" }),
+  summary({ dir: "feat/login", ahead: 2, trunk: { ahead: 5, behind: 3 } }),
+  summary({ dir: "feat/search", trunk: { ahead: 1, behind: 0 } }),
 ];
 
 type Calls = {
@@ -124,7 +124,7 @@ test("lists the worktrees, marking where you are and where the cursor is", async
   expect(frame).toContain(`garden v${version}`);
   expect(frame).toContain("/repo");
   expect(frame).toContain("3 worktrees · in main");
-  expect(frame).toMatch(/worktree\s+remote\s+state/);
+  expect(frame).toMatch(/worktree\s+origin\s+main\s+state/);
   // `*` is the worktree you are standing in, `▸` the one the keys act on.
   expect(frame).toMatch(/▸ \* main/);
   expect(frame).toContain("q quit");
@@ -141,22 +141,31 @@ test("the remote column says how far each worktree has drifted from origin", asy
   const { service } = stub({
     list: async () => [
       summary({ dir: "main", isDefault: true, current: true }),
-      summary({ dir: "feat/login", ahead: 2, behind: 1, dirty: true }),
-      summary({ dir: "feat/local", upstream: undefined }),
+      summary({
+        dir: "feat/login",
+        ahead: 2,
+        behind: 1,
+        dirty: true,
+        trunk: { ahead: 5, behind: 3 },
+      }),
+      summary({ dir: "feat/local", upstream: undefined, trunk: { ahead: 1, behind: 0 } }),
     ],
   });
   const ui = mount(service);
 
   const frame = await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
-  // `●` has changes in it, `○` does not. The word `clean` was on every row and
-  // told you nothing; the dot is what makes the one that changed look different.
-  expect(frame).toMatch(/login\s+↑2 ↓1\s+●/);
+  // Two questions, two columns, one shape: what is there to push, and how far
+  // the trunk has moved out from under you. `●` has changes in it, `○` does not.
+  expect(frame).toMatch(/login\s+↑2 ↓1\s+↑5 ↓3\s+●/);
+  // Nothing to compare the trunk against but itself, so its own column is blank
+  // rather than a `↑0 ↓0` answering a question nobody asked.
   expect(frame).toMatch(/main\s+↑0 ↓0\s+○/);
-  // A branch that was never pushed has no answer to give, which is itself worth
-  // saying — `↑0 ↓0` there would claim it is in step with something.
-  expect(frame).toMatch(/local\s+no upstream/);
-  // The drift is said once, in the column that exists for it.
+  // A branch that was never pushed has no answer to give about its remote —
+  // `↑0 ↓0` there would claim it is in step with something — but it still has
+  // one about the trunk, which is the half that used to be missing entirely.
+  expect(frame).toMatch(/local\s+no upstream\s+↑1 ↓0/);
+  // The drift is said once per column, in the columns that exist for it.
   expect(frame).not.toContain("2 ahead");
 });
 
@@ -175,7 +184,7 @@ test("the state column keeps up with the worktrees without a keypress", async ()
   listed = ROWS.map((row) => (row.dir === "feat/login" ? { ...row, dirty: true } : row));
 
   expect(await waitFor(ui.lastFrame, (f) => f.includes("●"), { timeoutMs: 6000 })).toMatch(
-    /login\s+↑2 ↓0\s+●/,
+    /login\s+↑2 ↓0\s+↑5 ↓3\s+●/,
   );
 }, 10_000);
 

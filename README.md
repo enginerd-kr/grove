@@ -129,16 +129,16 @@ is a keystroke:
 │ ▝▜█▄█▛▘  ~/work/repo                                                         │
 │    ▐▌    7 worktrees · in main                                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-    worktree  remote       state
+    worktree  origin       main    state
 ────────────────────────────────────────────────────────────────────────────────
-  * main      ↑0 ↓0        ○
+  * main      ↑0 ↓1                ○
   ▾ chore/
-      work-1  ↑0 ↓0        ○ locked
-▸     work-2  ↑0 ↓2        ●
+      work-1  ↑0 ↓0        ↑1 ↓1   ○ locked
+▸     work-2  ↑0 ↓2        ↑3 ↓1   ●
   ▾ feat/
-      login   ↑2 ↓1        ○
+      login   ↑2 ↓1        ↑8 ↓1   ○
     ▾   api/
-          v2  no upstream  ● rebasing
+          v2  no upstream  ↑2 ↓4   ● rebasing
 
 ────────────────────────────────────────────────────────────────────────────────
 ✓ fetched
@@ -166,13 +166,27 @@ slashes were there to express. A `branch` column appears only for a worktree who
 differs from the directory holding it, which `--dir` and a detached HEAD are the ways to
 produce.
 
-`remote` is how far the branch has drifted from the one it tracks: `↑` is what origin does not
-have, `↓` is what you do not, and the arrow points the way the commits would have to travel. The
-two are coloured apart because they are not the same news — `↑` is green, work that exists only
-here and is yours to push; `↓` is yellow, work you have not got, and the half that makes a rebase
-land on a branch that moved under it. A zero on either side is dimmed, so the rows that have
-actually drifted are the ones you see. A branch that was never pushed says `no upstream` rather
-than `↑0 ↓0`, which would be claiming it is in step with something.
+**Two drift columns, because working in a worktree you have two questions.** `origin` is how far
+the branch has drifted from the one it tracks — is there anything to push, anything to pull.
+`main` is how far it has drifted from the default branch — how much this branch adds, and how far
+the trunk has moved out from under it, which is the one `sync` exists to close. Neither answers
+the other: a branch perfectly in step with its remote can still be twenty commits stale.
+
+Both are drawn the same way, so it is one convention rather than two. `↑` is what the other side
+does not have, `↓` is what you do not, and the arrow points the way the commits would have to
+travel. `↑` is green — work that exists only here, yours to push or to merge. `↓` is yellow —
+work you have not got, and the half that makes a rebase land on a branch that moved under it. A
+zero on either side is dimmed, so the rows that have actually drifted are the ones you see.
+
+A branch nobody has pushed says `no upstream` rather than `↑0 ↓0`, which would be claiming it is
+in step with something. It still has a `main` column, which is the half that used to be missing
+entirely for exactly the branches you are most likely to be working in. The default branch's own
+`main` column is blank: there is nothing to compare it against but itself. The heading is
+whatever the trunk is actually called, so a repository on `master` says `master`.
+
+The whole set is read with one `git for-each-ref --format='%(ahead-behind:main)'` rather than a
+`rev-list` per worktree, which matters because it is on the two-second refresh. That format
+arrived in git 2.41; on anything older the column is simply empty and nothing else changes.
 
 `state` is a dot: `●` has uncommitted changes, `○` does not. `clean` was a word on every row that
 told you nothing, and the one row that mattered was the same shape and length as the rest — a
@@ -200,9 +214,9 @@ Folders are destinations too, and the keys change on one:
 
 ```
 ▸ ▾ feat/
-      login   ↑2 ↓1   ○
+      login   ↑2 ↓1   ↑8 ↓1   ○
     ▾   api/
-          v2  ↑0 ↓0   ●
+          v2  ↑0 ↓0   ↑2 ↓4   ●
 
 ↑↓ move · ←→ fold · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
 ```
