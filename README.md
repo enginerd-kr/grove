@@ -193,6 +193,26 @@ name; `r` asks before deleting anything; `s` syncs the selected worktree and `S`
 Progress is drawn in place — the same spinner and clone percentage a command line gets — and a
 refusal ("worktree is dirty") lands on the screen instead of ending the session.
 
+**`a` starts the branch where the cursor is.** Branching off the remote's default is what
+`garden add` does from a command line, because there is nothing there to point at. In the app
+there is: the worktree you are looking at when you decide you want another one is almost always
+the one you mean to carry on from, unpushed commits and all. So the prompt says where it starts,
+and starting somewhere else is a matter of moving the cursor first:
+
+```
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ new branch from feat/login   feat/login-part-2▌                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+The base is read when the prompt opens, not when you press enter — the list refreshes itself, and
+a base that changed while you were still typing the name would not be the one the prompt promised.
+A folder is not a branch and a detached HEAD has no name to pass, so both fall back to the
+remote's default. And it only applies to a branch that does not exist yet: one that is already
+local, or already on the remote, is checked out rather than created, which the answer says
+(`added feat/login-part-2 from feat/login` against `added feat/login (remote)`). Typing it out
+still works either way — `garden add <branch> --from <base>`.
+
 It runs in the terminal's alternate screen, so quitting hands the terminal back exactly as it
 was found. The layout is measured against the window: the keys sit on the last row whatever the
 height, the list takes what is left and scrolls when there are more worktrees than rows — with

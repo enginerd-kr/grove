@@ -26,8 +26,14 @@ export type WorktreeService = {
    * they were, which is what the previous behaviour was anyway.
    */
   readonly fetch: () => Promise<boolean>;
-  /** Each action answers with the one line worth showing afterwards. */
-  readonly add: (branch: string) => Promise<string>;
+  /**
+   * Each action answers with the one line worth showing afterwards.
+   *
+   * `from` is where a *new* branch starts. It is ignored when the branch already
+   * exists locally or on the remote, because those are checked out rather than
+   * created — which is why the answer only mentions a base when there was one.
+   */
+  readonly add: (branch: string, from?: string) => Promise<string>;
   readonly remove: (target: string) => Promise<string>;
   /**
    * Every worktree under one folder, removed one at a time.
@@ -100,10 +106,15 @@ export function createWorktreeService(
 
     fetch: () => fetchRemotes(repo.bare),
 
-    add: async (branch) => {
-      const result = await addWorktree(repo, { branch, fetch: true, push: false }, reporter);
+    add: async (branch, from) => {
+      const result = await addWorktree(repo, { branch, from, fetch: true, push: false }, reporter);
 
       if (result.alreadyPresent) return `${result.branch} already has a worktree`;
+      // Said back rather than assumed: `from` is only honoured for a branch that
+      // did not already exist, and the difference is worth a word.
+      if (result.source === "new" && from !== undefined) {
+        return `added ${result.branch} from ${from}`;
+      }
 
       return `added ${result.branch} (${result.source})`;
     },

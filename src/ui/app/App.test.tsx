@@ -45,7 +45,7 @@ const ROWS: readonly WorktreeSummary[] = [
 
 type Calls = {
   fetched: number;
-  readonly added: string[];
+  readonly added: { branch: string; from?: string }[];
   readonly removed: string[];
   readonly removedMany: (readonly string[])[];
   readonly synced: (string | undefined)[];
@@ -67,8 +67,8 @@ function stub(overrides: Partial<WorktreeService> = {}): {
         calls.fetched += 1;
         return false;
       },
-      add: async (branch) => {
-        calls.added.push(branch);
+      add: async (branch, from) => {
+        calls.added.push({ branch, from });
         return `added ${branch}`;
       },
       remove: async (target) => {
@@ -228,7 +228,57 @@ test("`a` takes a branch name and hands it to add", async () => {
   ui.stdin.write(keys.enter);
   await waitFor(ui.lastFrame, (f) => f.includes("added fix/crash"));
 
-  expect(calls.added).toEqual(["fix/crash"]);
+  // `main` because that is where the cursor was, which is the whole point.
+  expect(calls.added).toEqual([{ branch: "fix/crash", from: "main" }]);
+});
+
+// Branching off the remote's default was right when there was nothing to point
+// at. The cursor is already pointing at something, and the worktree you are
+// looking at when you decide you want another one is almost always the one you
+// mean to carry on from — including whatever is committed there and not pushed.
+test("a new branch starts from the worktree the cursor is on", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+
+  ui.stdin.write("a");
+  // Said on the prompt, not left to be discovered from the result: `a` on one
+  // row and `a` on another now start the branch in different places.
+  await waitFor(ui.lastFrame, (f) => f.includes("new branch from feat/login"));
+
+  ui.stdin.write("feat/login-part-2");
+  await waitFor(ui.lastFrame, (f) => f.includes("feat/login-part-2"));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("added feat/login-part-2"));
+
+  expect(calls.added).toEqual([{ branch: "feat/login-part-2", from: "feat/login" }]);
+});
+
+// Nothing to carry on from: a detached HEAD has no branch name to pass, so the
+// base falls back to the remote's default rather than being invented.
+test("a detached worktree offers no base", async () => {
+  const { service, calls } = stub({
+    list: async () => [
+      summary({ dir: "main", isDefault: true, detached: true, branch: undefined }),
+    ],
+  });
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("main"));
+
+  ui.stdin.write("a");
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
+  expect(frame).not.toContain("new branch from");
+
+  ui.stdin.write("fix/crash");
+  await waitFor(ui.lastFrame, (f) => f.includes("fix/crash"));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("added fix/crash"));
+
+  expect(calls.added).toEqual([{ branch: "fix/crash", from: undefined }]);
 });
 
 // The failure this prevents: `a` opening the prompt and the very next keypress
@@ -241,7 +291,7 @@ test("keys typed into the prompt are text, not commands", async () => {
   ui.stdin.write("a");
   await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
   ui.stdin.write("s");
-  await waitFor(ui.lastFrame, (f) => /new branch s/.test(f));
+  await waitFor(ui.lastFrame, (f) => /new branch from main\s+s/.test(f));
 
   expect(calls.synced).toEqual([]);
 });
@@ -331,7 +381,8 @@ test("`a` on a folder starts the branch name inside it", async () => {
   ui.stdin.write(keys.enter);
   await waitFor(ui.lastFrame, (f) => f.includes("added feat/chat"));
 
-  expect(calls.added).toEqual(["feat/chat"]);
+  // A folder is not a branch, so there is nothing to carry on from.
+  expect(calls.added).toEqual([{ branch: "feat/chat", from: undefined }]);
 });
 
 test("a refused action is reported on the screen instead of ending the app", async () => {

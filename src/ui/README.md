@@ -38,6 +38,10 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   has made one — which is also why `createWorktreeService` cannot be built until then. Only
   `not-a-repo` opens it; an ambiguous folder still ends the process, since the screen cannot
   answer that question either.
+- **The `add` mode carries its base.** `a` reads the selected worktree's branch when the prompt
+  opens and keeps it on the mode, rather than reading the selection again on `enter`. With the
+  list refreshing itself, the two are not the same value — and the second one would not be what
+  the prompt said while the name was being typed.
 - **Two timers, and neither of them is the same thing.** `REFRESH_MS` (2s) re-reads the list —
   local, cheap, and what makes `dirty` appear without a keystroke. `FETCH_MS` (60s) updates the
   remote-tracking refs, because `↑2 ↓1` is counted against `origin/main`, which is a local ref
