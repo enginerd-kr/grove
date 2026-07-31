@@ -105,9 +105,13 @@ function stub(overrides: Partial<WorktreeService> = {}): {
   };
 }
 
-function mount(service: WorktreeService) {
+// The app refreshes once a minute. The tests that are *about* the refreshing
+// drive it faster; the rest inherit it and are simply never ticked.
+function mount(service: WorktreeService, refreshMs?: number) {
   const store = new LineStore();
-  const instance = render(<App service={service} repoRoot="/repo" store={store} />);
+  const instance = render(
+    <App service={service} repoRoot="/repo" store={store} refreshMs={refreshMs} />,
+  );
 
   return { ...instance, frame: () => plain(instance.lastFrame()) };
 }
@@ -175,7 +179,7 @@ test("the remote column says how far each worktree has drifted from origin", asy
 test("the state column keeps up with the worktrees without a keypress", async () => {
   let listed: readonly WorktreeSummary[] = ROWS;
   const { service } = stub({ list: async () => listed });
-  const ui = mount(service);
+  const ui = mount(service, 50);
 
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
   expect(ui.frame()).not.toContain("●");
@@ -518,8 +522,9 @@ test("`r` on a folded folder still removes everything inside it", async () => {
 // The list re-reads itself every couple of seconds. A fold held by row rather
 // than by key would spring open on the next tick.
 test("a fold survives the list re-reading itself", async () => {
-  const { service } = stub();
-  const ui = mount(service);
+  let listed: readonly WorktreeSummary[] = ROWS;
+  const { service } = stub({ list: async () => listed });
+  const ui = mount(service, 50);
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   ui.stdin.write(keys.down);
@@ -527,12 +532,16 @@ test("a fold survives the list re-reading itself", async () => {
   ui.stdin.write(keys.left);
   await waitFor(ui.lastFrame, (f) => /▸ +feat\/\s+2/.test(f));
 
-  // Long enough for two refresh ticks to have come and gone.
-  await new Promise((resolve) => setTimeout(resolve, 4500));
+  // Something only a refresh can bring in, so what follows is an assertion
+  // about a tick that demonstrably happened rather than one that may not have.
+  // Waiting and then finding the fold intact would pass just as well if the
+  // timer had never fired at all.
+  listed = [...ROWS, summary({ dir: "zebra" })];
+  await waitFor(ui.lastFrame, (f) => f.includes("zebra"));
 
   expect(ui.frame()).not.toContain("login");
   expect(ui.frame()).toMatch(/▸ +feat\/\s+2/);
-}, 15_000);
+});
 
 test("`r` on a folder removes every worktree under it, after asking", async () => {
   const { service, calls } = stub();
