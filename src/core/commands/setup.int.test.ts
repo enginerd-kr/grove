@@ -314,6 +314,43 @@ onPosix("an ignored one is not", async () => {
   });
 });
 
+// The first worktree is the one nothing sets up: `copy` and `link` have no
+// source — it *is* the source — and `run` is a command from a repository
+// downloaded ten seconds ago, which is the worst moment to decide it may
+// execute. Saying nothing was the wrong half of that.
+onPosix("clone says what the file wants to run, and runs none of it", async () => {
+  await withRepo(async (repo) => {
+    await configure(repo, 'run = ["touch installed.txt"]');
+    const main = join(repo.root, "main");
+    await seedGit(main, ["add", SETUP_FILE]);
+    await seedGit(main, ["-c", "commit.gpgsign=false", "commit", "-m", "Add a garden file"]);
+    await seedGit(main, ["push", "-q"]);
+
+    // A second clone of the same remote: the file arrives with the checkout,
+    // which is exactly what the old "there is no configuration yet" was wrong
+    // about.
+    const { reporter, lines } = recording();
+    const fresh = await cloneRepo(
+      join(repo.root, ".."),
+      { url: repo.root, dir: "clone" },
+      reporter,
+    );
+
+    expect(lines.join("\n")).toContain('wants to run "touch installed.txt"');
+    expect(await pathExists(join(fresh.worktree, SETUP_FILE))).toBe(true);
+    expect(await pathExists(join(fresh.worktree, "installed.txt"))).toBe(false);
+  });
+});
+
+onPosix("a repository with nothing to run is cloned in silence", async () => {
+  await withRepo(async (repo) => {
+    const { reporter, lines } = recording();
+    await cloneRepo(join(repo.root, ".."), { url: repo.root, dir: "clone" }, reporter);
+
+    expect(lines.join("\n")).not.toContain("wants to run");
+  });
+});
+
 // Trust is per-repository and the commands are per-worktree, so this is what
 // the screen's `y` calls once the worktree it just made is on the row.
 onPosix("trustAndRun records the answer and then does the work", async () => {
