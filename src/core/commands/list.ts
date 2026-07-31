@@ -19,6 +19,14 @@ export type WorktreeSummary = {
    * through.
    */
   readonly changed: number;
+  /**
+   * How many of `changed` git is not tracking.
+   *
+   * Counted apart because they are destroyed by a different command — `reset
+   * --hard` leaves them and `clean` takes them — so a confirmation that lumped
+   * them together would be promising one thing and doing another.
+   */
+  readonly untracked: number;
   readonly ahead: number;
   readonly behind: number;
   readonly upstream?: string;
@@ -48,6 +56,7 @@ export async function listWorktreeSummaries(
         detached: record.detached,
         dirty: status.dirty,
         changed: status.changed.length,
+        untracked: status.untracked.length,
         ahead: status.ahead,
         behind: status.behind,
         upstream: status.upstream,

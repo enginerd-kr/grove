@@ -87,7 +87,8 @@ onPosix(
         silent(),
       );
 
-      expect(result.untracked).toEqual(["scratch.txt"]);
+      expect(result.untracked).toBe(1);
+      expect(result.cleaned).toBe(false);
       expect(await pathExists(join(worktree, "scratch.txt"))).toBe(true);
       // Still dirty afterwards, which is exactly why the result mentions it.
       expect((await statusOf(worktree)).dirty).toBe(true);
@@ -111,7 +112,8 @@ onPosix(
         silent(),
       );
 
-      expect(result.untracked).toEqual([]);
+      expect(result.untracked).toBe(2);
+      expect(result.cleaned).toBe(true);
       expect(await pathExists(join(worktree, "scratch.txt"))).toBe(false);
       // `-d` rather than `-f` alone: a build output tree is the usual reason a
       // reset leaves a worktree dirty, and it is never one file.

@@ -3,7 +3,7 @@ import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
-import { resetWorktree } from "../../core/commands/reset.ts";
+import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import type { Reporter } from "../../report/reporter.ts";
@@ -45,12 +45,21 @@ export type WorktreeService = {
    */
   readonly removeMany: (targets: readonly string[]) => Promise<string>;
   /**
-   * `git reset --hard` in one worktree, and nothing further.
+   * Everything one worktree has changed, thrown away: `git reset --hard` and
+   * `git clean -fd`.
    *
-   * The two spellings that make it bigger stay on the command line: `--to`,
-   * which drops commits rather than only changes, and `--clean`, which deletes
-   * files git never knew about. A keystroke can undo your afternoon; it should
-   * not be able to undo your week or take your `.env` with it.
+   * Both halves, because "discard" that leaves files behind is a label that
+   * lies — and a worktree still marked dirty after you discarded its changes is
+   * exactly the confusion the dot was added to prevent. The confirmation is
+   * where the care goes: it counts the two kinds separately, so what is about to
+   * disappear is on screen before anyone answers.
+   *
+   * `.gitignore` still protects what it protects — `clean -fd` does not touch
+   * ignored files, only ones git was never told about.
+   *
+   * `--to` is the spelling that stays on the command line. Discarding changes is
+   * one thing; discarding commits is another, and only one of them belongs on a
+   * key.
    */
   readonly reset: (target: string) => Promise<string>;
   /** `target` omitted means every worktree — the app's `S`. */
@@ -173,15 +182,13 @@ export function createWorktreeService(
     },
 
     reset: async (target) => {
-      const result = await resetWorktree(repo, cwd, { target, clean: false }, reporter);
+      const result = await resetWorktree(repo, cwd, { target, clean: true }, reporter);
 
       if (result.changed === 0) return `${result.dir} had nothing to discard`;
 
-      const plural = result.changed === 1 ? "" : "s";
-      const left =
-        result.untracked.length === 0 ? "" : `, ${result.untracked.length} untracked left`;
+      const tracked = result.changed - result.untracked;
 
-      return `discarded ${result.changed} change${plural} in ${result.dir}${left}`;
+      return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
     },
 
     sync: async (target) => {

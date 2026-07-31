@@ -1,6 +1,7 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { describeNotes, describeRemote, type WorktreeSummary } from "../../core/commands/list.ts";
+import { describeDiscard } from "../../core/commands/reset.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
@@ -209,9 +210,12 @@ function describePending(target: Pending): string {
     return `remove all ${target.paths.length} under ${target.label}? the directories go, the branches stay`;
   }
 
-  const plural = target.summary.changed === 1 ? "" : "s";
+  // Both kinds, counted apart. `x` deletes untracked files too, and one of
+  // those may be work git has never seen a copy of — folding it into "3
+  // changes" would be the sentence someone regrets having skimmed.
+  const { changed, untracked, dir } = target.summary;
 
-  return `discard ${target.summary.changed} change${plural} in ${target.summary.dir}? there is no undo`;
+  return `discard ${describeDiscard(changed - untracked, untracked)} in ${dir}? there is no undo`;
 }
 
 /** The branch, when the directory does not already say it. */
