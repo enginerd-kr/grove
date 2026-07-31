@@ -74,6 +74,51 @@ onPosix(
       expect(await gitOutput(["rev-parse", "HEAD"], { cwd: result.path })).toBe(
         await gitOutput(["rev-parse", "origin/main"], { cwd: repo.bare }),
       );
+
+      // And tracks nothing. The base is `origin/main`, and git's
+      // `branch.autoSetupMerge` would otherwise have this branch tracking it —
+      // so its drift would be reported against *main* under the heading of its
+      // own remote, and `push` would refuse an upstream by another name.
+      expect(result.upstream).toBeUndefined();
+      expect(
+        (
+          await runGit(
+            ["for-each-ref", "--format=%(upstream:short)", "refs/heads/feat/brand-new"],
+            {
+              cwd: repo.bare,
+            },
+          )
+        ).stdout.trim(),
+      ).toBe("");
+    });
+  },
+  30_000,
+);
+
+// The same branch, cut from a local one instead. Both are branches nobody has
+// pushed, and they were reporting different things about their remotes.
+onPosix(
+  "a branch based on a local branch tracks nothing either",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const repo = await cloned(work, originUrl);
+      await addWorktree(repo, { branch: "test", fetch: true, push: false }, silent());
+
+      const result = await addWorktree(
+        repo,
+        { branch: "test-2", from: "test", fetch: true, push: false },
+        silent(),
+      );
+
+      expect(result.source).toBe("new");
+      expect(result.upstream).toBeUndefined();
+      expect(
+        (
+          await runGit(["for-each-ref", "--format=%(upstream:short)", "refs/heads/test-2"], {
+            cwd: repo.bare,
+          })
+        ).stdout.trim(),
+      ).toBe("");
     });
   },
   30_000,
