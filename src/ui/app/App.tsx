@@ -65,40 +65,34 @@ type Props = {
   readonly store: LineStore;
   /** Ctrl-C while busy: stop the git child before the screen goes away. */
   readonly onCancel?: () => void;
+  /** How often to refresh, in ms. Defaults to `REFRESH_MS`; tests drive it faster. */
+  readonly refreshMs?: number;
 };
 
 /** The most progress worth keeping on screen; older lines scroll out of it. */
 const ACTIVITY_ROWS = 6;
 
 /**
- * How often the list re-reads itself while nothing else is going on.
+ * How often the screen brings itself up to date, in the absence of any reason
+ * to think it needs to.
  *
- * The state column is about a working tree, and a working tree is edited from
- * somewhere else — an editor, a build, another terminal. Waiting for `R` means
- * the screen is a photograph of whenever you last pressed a key, and the one
- * column people open this to read is the one most likely to be wrong.
+ * Both halves are on this one clock. The local half — is anything dirty, has a
+ * worktree appeared — is edited from somewhere else, an editor or a build or
+ * another terminal, so waiting for `R` would make the screen a photograph of
+ * whenever you last pressed a key. The remote half is counted against
+ * `origin/main`, which is a *local* ref: without a fetch of our own, a
+ * colleague's push never appears at all.
  *
- * The cost is `git status` per worktree per tick, which is a few milliseconds
- * each and runs concurrently. Two seconds is short enough that a save shows up
- * while you are still looking at the screen, and long enough that a repository
- * with thirty worktrees is not being stat'd continuously.
- */
-const REFRESH_MS = 2000;
-
-/**
- * How often the remote-tracking refs are brought up to date.
+ * A minute because that is the pace the slower half sets, and running the
+ * cheaper half faster buys little: an action you take refreshes immediately, `R`
+ * refreshes on demand, and the rest is other people's work arriving, which does
+ * not arrive by the second.
  *
- * `↑2 ↓1` is counted against `origin/main`, which is a local ref: without this
- * the column says how far you had drifted as of whenever something last
- * fetched, and a colleague's push never appears at all. So the app fetches for
- * itself.
- *
- * A minute rather than two seconds because this one crosses the network. It is
- * also the reason the fetch is quiet: it can fail for reasons that are nobody's
+ * The fetch is also why this is quiet. It can fail for reasons that are nobody's
  * fault — a train, a VPN, a key that is not loaded — and a screen that reported
  * each one would be unusable offline while telling you nothing you could act on.
  */
-const FETCH_MS = 60_000;
+const REFRESH_MS = 60_000;
 
 /** A new set with `key` in it, and one without — `Set` is mutable and state is not. */
 function with_(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
@@ -311,7 +305,7 @@ function Row({
   );
 }
 
-export function App({ service, repoRoot, store, onCancel }: Props) {
+export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS }: Props) {
   const { exit } = useApp();
   const { columns, rows: terminalRows } = useWindowSize();
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
@@ -440,7 +434,12 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
   }, []);
 
   /**
-   * The list, re-read on a timer.
+   * One tick: bring the remote refs up to date, then re-read everything.
+   *
+   * The fetch first, so the read behind it sees what it brought. Its failure is
+   * not the read's problem — offline, on a VPN, or with no key loaded, the local
+   * half of the screen is still worth refreshing, and swallowing the error here
+   * is what keeps that true.
    *
    * Paused while `busy`, where a command already owns the repository and is
    * going to re-read it when it finishes anyway — a `git status` racing a
@@ -451,60 +450,32 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
    * early when they match, so an idle screen stays genuinely idle.
    */
   const reading = useRef(false);
-  useInterval(
-    () => {
-      // One at a time. A `git status` across thirty worktrees can outlast the
-      // interval, and ticks queueing up behind each other would never let go.
-      if (reading.current) return;
-      reading.current = true;
-
-      void (async () => {
-        try {
-          const summaries = await service.list();
-          if (mounted.current) setRows(summaries);
-        } catch {
-          // A read nobody asked for reports nothing. The next tick either
-          // succeeds, or the next keystroke runs a command that says why.
-        } finally {
-          reading.current = false;
-        }
-      })();
-    },
-    mode.kind === "busy" ? null : REFRESH_MS,
-  );
-
-  /**
-   * The remote half of the same idea, on its own much slower timer.
-   *
-   * Read back straight after rather than left to the next `REFRESH_MS` tick: a
-   * fetch that changed nothing is the common case, and one that did is the whole
-   * reason for having run it.
-   */
-  const fetching = useRef(false);
   const catchUp = useCallback(async () => {
-    if (fetching.current) return;
-    fetching.current = true;
+    // One at a time. A fetch over a slow link, or a `git status` across thirty
+    // worktrees, can outlast the interval — and ticks queueing up behind each
+    // other would never let go.
+    if (reading.current) return;
+    reading.current = true;
 
     try {
-      if (!(await service.fetch())) return;
-
+      await service.fetch();
       const summaries = await service.list();
       if (mounted.current) setRows(summaries);
     } catch {
-      // Offline, unauthenticated, whatever it was: the column stays as stale as
-      // it already was, which is no worse than before any of this existed.
+      // A read nobody asked for reports nothing. The next tick either succeeds,
+      // or the next keystroke runs a command that says why.
     } finally {
-      fetching.current = false;
+      reading.current = false;
     }
   }, [service]);
 
-  // Once on open, because opening the screen is exactly when the numbers are
-  // most likely to be from another day.
+  // Once on open, because opening the screen is exactly when what it is showing
+  // is most likely to be from another day.
   useEffect(() => {
     void catchUp();
   }, [catchUp]);
 
-  useInterval(() => void catchUp(), mode.kind === "busy" ? null : FETCH_MS);
+  useInterval(() => void catchUp(), mode.kind === "busy" ? null : refreshMs);
 
   useInput((input, key) => {
     if (key.ctrl && input === "c") {

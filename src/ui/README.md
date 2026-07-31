@@ -42,7 +42,7 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   off the rows that follow it. `leavesUnder` did the latter, and a folded folder has no rows
   following it — so `r` there would have found nothing to remove and folding would have quietly
   changed what a key does. Folds themselves are held in a `Set` of folder *keys*, not rows, so
-  they survive the list re-reading itself every two seconds.
+  they survive the list re-reading itself.
 - **A shut folder is indicated by its count, and nothing else.** It reads `feat/  3`; open, it
   reads `feat/` with its worktrees indented underneath. A chevron as well would say the same
   thing twice, and the count says the part a chevron cannot — how much is behind it.
@@ -50,14 +50,14 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   opens and keeps it on the mode, rather than reading the selection again on `enter`. With the
   list refreshing itself, the two are not the same value — and the second one would not be what
   the prompt said while the name was being typed.
-- **Two timers, and neither of them is the same thing.** `REFRESH_MS` (2s) re-reads the list —
-  local, cheap, and what makes `dirty` appear without a keystroke. `FETCH_MS` (60s) updates the
-  remote-tracking refs, because `↑2 ↓1` is counted against `origin/main`, which is a local ref
-  that nothing would otherwise move. Both pause while `busy`: a command already owns the
-  repository and re-reads it when it finishes, and a `git status` racing a `git worktree add`
-  describes a state that was true for neither. Both are also guarded by a ref so a tick cannot
-  start before the last one finished, and both swallow their errors — a read nobody asked for
-  has nobody to report to, and being offline is an ordinary state of affairs.
+- **One timer, doing both halves in order.** `REFRESH_MS` (60s) fetches and then re-reads, so
+  the read behind the fetch sees what it brought. The fetch's failure is deliberately not the
+  read's problem: offline, the local half is still worth refreshing. It pauses while `busy` — a
+  command already owns the repository and re-reads it when it finishes, and a `git status`
+  racing a `git worktree add` describes a state that was true for neither — and it is guarded by
+  a ref, so a tick cannot start before the last one finished. `refreshMs` is a prop with that
+  default: the tests that are *about* the refreshing drive it in milliseconds, and the rest
+  inherit it and are simply never ticked.
 - **The cursor is a row, not an index.** With the list re-reading itself, a worktree appearing
   above the selected one would slide the selection down without anybody touching a key, and the
   next `r` would be aimed at something else. `move` still resolves inside the state updater, so
@@ -70,7 +70,7 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   same shape of thing in each, so it is one convention to learn. The trunk's own row is blank
   rather than `↑0 ↓0`, and the column's heading is read off `isDefault` so a repository on
   `master` says `master`. `driftFrom` reads the whole set in one `for-each-ref`, because this is
-  on the two-second refresh and a `rev-list` per worktree would grow with the repository.
+  on the refresh tick and a `rev-list` per worktree would grow with the repository.
 - **`DriftCell` and `StateCell` colour on their own contents, not on the cursor.** Every other
   column dims when its row is not selected; these two dim a zero and a `○` wherever they are, so
   the rows that have drifted or have changes in them are the ones that read. Both pair colour

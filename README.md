@@ -185,7 +185,7 @@ entirely for exactly the branches you are most likely to be working in. The defa
 whatever the trunk is actually called, so a repository on `master` says `master`.
 
 The whole set is read with one `git for-each-ref --format='%(ahead-behind:main)'` rather than a
-`rev-list` per worktree, which matters because it is on the two-second refresh. That format
+`rev-list` per worktree, which matters because it is on the refresh tick. That format
 arrived in git 2.41; on anything older the column is simply empty and nothing else changes.
 
 `state` is a dot: `●` has uncommitted changes, `○` does not. `clean` was a word on every row that
@@ -196,15 +196,19 @@ green-versus-yellow is invisible to a good number of people and to any terminal 
 opinions. The three states a dot cannot say keep their words beside it: `rebasing`, `detached`,
 `locked`.
 
-**None of it waits for a keystroke.** The list re-reads itself every two seconds, so a build
-that dirties a worktree or a branch created in another terminal shows up while you are looking
-at the screen. `↑` and `↓` are counted against `origin/main`, which is a *local* ref — so the
-app also fetches for itself, once on open and every minute after, or the column would only say
-how far you had drifted as of whenever something last fetched and a colleague's push would never
-appear at all. The fetch is quiet: offline, on a VPN, or with no key loaded it fails and the
-numbers stay as stale as they were, because a screen that reported each attempt would be
-unusable on a train while telling you nothing you could act on. Both timers pause while a
-command is running, which is going to re-read everything when it finishes anyway.
+**None of it waits for a keystroke.** Once on open and every minute after, the app fetches and
+then re-reads everything — so a build that dirtied a worktree, a branch created in another
+terminal, and a colleague's push all arrive on their own. The fetch is the reason it fetches at
+all: `↑` and `↓` are counted against `origin/main`, which is a *local* ref, so without one the
+column would only ever say how far you had drifted as of whenever something last fetched.
+
+A minute is the pace the slower half sets, and running the cheaper half faster buys little: an
+action you take refreshes immediately, `R` refreshes on demand, and the rest is other people's
+work arriving, which does not arrive by the second. The fetch is also quiet — offline, on a VPN,
+or with no key loaded it fails, the numbers stay as stale as they were, and the local half of
+the refresh happens anyway, because a screen that reported each attempt would be unusable on a
+train while telling you nothing you could act on. The whole tick pauses while a command is
+running, which is going to re-read everything when it finishes.
 
 The cursor holds onto its row rather than its position, so a worktree appearing above the
 selected one does not slide the selection down under your hands — the next `r` stays aimed at
