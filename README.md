@@ -132,13 +132,13 @@ is a keystroke:
     worktree  origin       main    state
 ────────────────────────────────────────────────────────────────────────────────
   * main      ↑0 ↓1                ○
-  ▾ chore/
+    chore/
       work-1  ↑0 ↓0        ↑1 ↓1   ○ locked
 ▸     work-2  ↑0 ↓2        ↑3 ↓1   ●
-  ▾ feat/
+    feat/
       login   ↑2 ↓1        ↑8 ↓1   ○
-    ▾   api/
-          v2  no upstream  ↑2 ↓4   ● rebasing
+      api/
+        v2    no upstream  ↑2 ↓4   ● rebasing
 
 ────────────────────────────────────────────────────────────────────────────────
 ✓ fetched
@@ -213,10 +213,10 @@ what you pointed at.
 Folders are destinations too, and the keys change on one:
 
 ```
-▸ ▾ feat/
+▸   feat/
       login   ↑2 ↓1   ↑8 ↓1   ○
-    ▾   api/
-          v2  ↑0 ↓0   ↑2 ↓4   ●
+      api/
+        v2    ↑0 ↓0   ↑2 ↓4   ●
 
 ↑↓ move · ←→ fold · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
 ```
@@ -227,13 +227,17 @@ stop the rest, and the answer counts both: `removed 2 worktrees, 1 refused`. `a`
 branch name inside the folder you are standing on. `s` is absent, because syncing is a thing you
 do to a worktree and a menu that offered it there would be lying.
 
-**`←` and `→` fold them.** `▾` is a folder showing its contents and `▸` one holding them back,
-with a count of what it is holding — which is what the folded rows were telling you:
+**`←` and `→` fold them.** A shut folder says how many worktrees it is holding, which is what the
+folded rows were telling you:
 
 ```
   * main      ↑0 ↓0   ○
-▸ ▸ feat/  3
+▸   feat/  3
 ```
+
+That count is the whole indicator. A chevron beside it would be saying the same thing twice — a
+folder with its worktrees indented underneath is visibly open, and one with a number and nothing
+under it is visibly not.
 
 `→` opens a shut folder and steps into an open one; `←` shuts an open one and otherwise walks out
 to the folder you are in. The second half is what makes it a tree rather than a pair of toggles:
