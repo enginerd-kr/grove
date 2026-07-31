@@ -32,7 +32,14 @@ type Removal =
 
 type Mode =
   | { readonly kind: "list" }
-  | { readonly kind: "add"; readonly value: string }
+  /**
+   * `from` is the branch the new one starts on, taken from wherever the cursor
+   * was when the prompt opened — not from wherever it is when you press enter.
+   * The list re-reads itself on a timer, and a base that could change while you
+   * were still typing the name would be a different branch than the one the
+   * prompt said.
+   */
+  | { readonly kind: "add"; readonly value: string; readonly from?: string }
   | { readonly kind: "confirm"; readonly target: Removal }
   | { readonly kind: "busy"; readonly label: string };
 
@@ -429,15 +436,15 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
         const branch = mode.value.trim();
         if (branch.length === 0) return setMode({ kind: "list" });
 
-        return void perform(`adding ${branch}`, () => service.add(branch));
+        return void perform(`adding ${branch}`, () => service.add(branch, mode.from));
       }
       if (key.backspace || key.delete) {
-        return setMode({ kind: "add", value: mode.value.slice(0, -1) });
+        return setMode({ ...mode, value: mode.value.slice(0, -1) });
       }
       // Control sequences arrive here as multi-character strings; taking only
       // printable input keeps an arrow key from typing itself into the name.
       if (input.length > 0 && !key.ctrl && !key.meta && /^[\x20-\x7e]+$/.test(input)) {
-        return setMode({ kind: "add", value: mode.value + input });
+        return setMode({ ...mode, value: mode.value + input });
       }
 
       return;
@@ -461,10 +468,18 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
 
     // On a folder, `a` starts the name where the cursor already is: reaching for
     // it there is how you say "another one of these".
+    //
+    // And it starts the *branch* where the cursor is too. Branching off the
+    // remote's default was right when there was nothing to point at, but the
+    // cursor is already pointing at something: the worktree you are looking at
+    // when you decide you want another one is almost always the one you want to
+    // carry on from, unpushed commits and all. A folder is not a branch and a
+    // detached HEAD has no name to pass, so both fall back to the default.
     if (input === "a") {
       return setMode({
         kind: "add",
         value: current?.kind === "group" ? current.key : "",
+        from: selected?.branch,
       });
     }
     if (input === "r" && selected) {
@@ -648,9 +663,14 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
       ) : null}
 
       {mode.kind === "add" ? (
+        // The base is on the label rather than left to be inferred: `a` on one
+        // row and `a` on another now start the branch in different places, and
+        // that is not something to find out from the result line.
         <Box borderStyle="round" borderColor={theme.accent} paddingX={1}>
-          <Text>
-            <Text dimColor>new branch </Text>
+          <Text wrap="truncate">
+            <Text dimColor>
+              {mode.from === undefined ? "new branch " : `new branch from ${mode.from}   `}
+            </Text>
             <Text color={theme.accent}>{mode.value}</Text>
             <Text inverse> </Text>
           </Text>
