@@ -38,6 +38,15 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   has made one — which is also why `createWorktreeService` cannot be built until then. Only
   `not-a-repo` opens it; an ambiguous folder still ends the process, since the screen cannot
   answer that question either.
+- **A folder row carries the worktrees it holds** (`leaves`), rather than them being read back
+  off the rows that follow it. `leavesUnder` did the latter, and a folded folder has no rows
+  following it — so `r` there would have found nothing to remove and folding would have quietly
+  changed what a key does. Folds themselves are held in a `Set` of folder *keys*, not rows, so
+  they survive the list re-reading itself every two seconds.
+- **The marker column is column 2.** `*` for the worktree you are standing in, `▾`/`▸` for a
+  folder's fold state — the label column stays aligned across both, which is what makes the
+  indentation readable as a tree. A chevron sitting next to a nested label instead would push
+  that label out of line with the worktrees around it.
 - **The `add` mode carries its base.** `a` reads the selected worktree's branch when the prompt
   opens and keeps it on the mode, rather than reading the selection again on `enter`. With the
   list refreshing itself, the two are not the same value — and the second one would not be what

@@ -9,7 +9,7 @@ import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
 import { type Message, messageFor } from "./message.ts";
 import type { WorktreeService } from "./service.ts";
-import { buildTree, leavesOf, leavesUnder, type TreeRow } from "./tree.ts";
+import { buildTree, leavesOf, parentOf, type TreeRow } from "./tree.ts";
 
 /**
  * `garden` with nothing to do: the worktrees, and the five commands as keystrokes.
@@ -85,6 +85,15 @@ const REFRESH_MS = 2000;
  * each one would be unusable offline while telling you nothing you could act on.
  */
 const FETCH_MS = 60_000;
+
+/** A new set with `key` in it, and one without — `Set` is mutable and state is not. */
+function with_(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  return new Set([...set, key]);
+}
+
+function without(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  return new Set([...set].filter((each) => each !== key));
+}
 
 /** Pads or truncates to exactly `width`, so columns stay columns. */
 function padTo(text: string, width: number): string {
@@ -200,9 +209,15 @@ function Row({
   if (row.kind === "group") {
     return (
       <Text color={selected ? theme.accent : undefined} dimColor={!selected} wrap="truncate">
-        {`${selected ? "▸" : " "}   `}
-        {indent}
+        {`${selected ? "▸" : " "} `}
+        {/* Where a worktree carries its `*`. `▾` points at the rows below it and
+            `▸` at the ones it is holding back, which is the convention every
+            other tree uses and the reason it needs no legend. */}
+        {row.collapsed ? "▸" : "▾"} {indent}
         {row.label}
+        {/* Only when shut: the count is the thing the folded rows were telling
+            you, and a running total beside an open folder is just noise. */}
+        {row.collapsed ? `  ${row.leaves.length}` : ""}
       </Text>
     );
   }
@@ -234,6 +249,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
   const { columns, rows: terminalRows } = useWindowSize();
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
   const [cursorKey, setCursorKey] = useState<string | undefined>(undefined);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
   const [message, setMessage] = useState<Message | undefined>(undefined);
 
@@ -241,7 +257,11 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
 
   // The cursor walks every drawn row, folders included: a folder is what you
   // reach for to act on the branches under it in one go.
-  const tree = useMemo(() => buildTree(rows), [rows]);
+  //
+  // Folded folders are held by key rather than by row, so a fold survives the
+  // list re-reading itself — which it does every two seconds, and which would
+  // otherwise flick every folder back open while you were looking at it.
+  const tree = useMemo(() => buildTree(rows, collapsed), [rows, collapsed]);
 
   /**
    * Where the cursor is, remembered as the row rather than as its position.
@@ -264,10 +284,9 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     lastIndex.current = index;
   }, [index]);
   const selected = current?.kind === "leaf" ? current.summary : undefined;
-  const under = useMemo(
-    () => (current === undefined || current.kind !== "group" ? [] : leavesUnder(tree, current)),
-    [tree, current],
-  );
+  // Off the row itself, not read back from the rows below it: a folded folder
+  // has none, and `r` there still removes everything it holds.
+  const under = current?.kind === "group" ? current.leaves : [];
 
   /**
    * Cursor movement, computed from the previous cursor rather than from the
@@ -466,6 +485,32 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     if (key.upArrow || input === "k") return move(-1);
     if (key.downArrow || input === "j") return move(1);
 
+    /**
+     * Folding, the way every other tree does it.
+     *
+     * `→` opens a shut folder and steps into an open one; `←` shuts an open one
+     * and otherwise walks out to the folder you are in. The second half is what
+     * makes it feel like a tree rather than a pair of toggles: from six rows
+     * deep, `←←←` is how you get back out and fold up what you came from,
+     * without counting rows on the way.
+     */
+    if (key.rightArrow || input === "l") {
+      if (current?.kind !== "group") return;
+      if (current.collapsed) return setCollapsed(without(collapsed, current.key));
+
+      return move(1);
+    }
+
+    if (key.leftArrow || input === "h") {
+      if (current?.kind === "group" && !current.collapsed) {
+        return setCollapsed(with_(collapsed, current.key));
+      }
+
+      const parent = current === undefined ? undefined : parentOf(tree, current);
+
+      return parent === undefined ? undefined : setCursorKey(parent.key);
+    }
+
     // On a folder, `a` starts the name where the cursor already is: reaching for
     // it there is how you say "another one of these".
     //
@@ -488,7 +533,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     if (input === "r" && current?.kind === "group" && under.length > 0) {
       return setMode({
         kind: "confirm",
-        target: { kind: "many", label: current.key, paths: under.map((leaf) => leaf.summary.path) },
+        target: { kind: "many", label: current.key, paths: under.map((summary) => summary.path) },
       });
     }
     if (input === "s" && selected) {
@@ -521,6 +566,7 @@ export function App({ service, repoRoot, store, onCancel }: Props) {
     if (current?.kind === "group") {
       return [
         { keys: "↑↓", action: "move" },
+        { keys: "←→", action: current.collapsed ? "open" : "fold" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
         { keys: "S", action: "sync all" },

@@ -107,13 +107,13 @@ is a keystroke:
     worktree  remote       state
 ────────────────────────────────────────────────────────────────────────────────
   * main      ↑0 ↓0        ○
-    chore/
+  ▾ chore/
       work-1  ↑0 ↓0        ○ locked
 ▸     work-2  ↑0 ↓2        ●
-    feat/
+  ▾ feat/
       login   ↑2 ↓1        ○
-      api/
-        v2    no upstream  ● rebasing
+    ▾   api/
+          v2  no upstream  ● rebasing
 
 ────────────────────────────────────────────────────────────────────────────────
 ✓ fetched
@@ -174,12 +174,12 @@ what you pointed at.
 Folders are destinations too, and the keys change on one:
 
 ```
-▸   feat/
+▸ ▾ feat/
       login   ↑2 ↓1   ○
-      api/
-        v2    ↑0 ↓0   ●
+    ▾   api/
+          v2  ↑0 ↓0   ●
 
-↑↓ move · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
+↑↓ move · ←→ fold · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
 ```
 
 `r` there removes every worktree beneath it, after asking, deepest first — which is `garden remove`
@@ -187,6 +187,24 @@ run once per worktree, with each one still facing its own refusals. One that say
 stop the rest, and the answer counts both: `removed 2 worktrees, 1 refused`. `a` starts the
 branch name inside the folder you are standing on. `s` is absent, because syncing is a thing you
 do to a worktree and a menu that offered it there would be lying.
+
+**`←` and `→` fold them.** `▾` is a folder showing its contents and `▸` one holding them back,
+with a count of what it is holding — which is what the folded rows were telling you:
+
+```
+  * main      ↑0 ↓0   ○
+▸ ▸ feat/  3
+```
+
+`→` opens a shut folder and steps into an open one; `←` shuts an open one and otherwise walks out
+to the folder you are in. The second half is what makes it a tree rather than a pair of toggles:
+from six rows deep, `←←←` gets you back out and folds up what you came from without counting rows
+on the way. `h` and `l` do the same, next to the `j` and `k` that already move. A fold inside a
+fold is remembered, so opening the outer one does not spill rows you had already put away.
+
+Folding changes what is on screen and nothing else. `r` on a shut folder removes exactly what it
+would have removed open — the worktrees it holds travel on the row itself rather than being read
+back off the rows below it, which is the shape of bug this would otherwise have.
 
 `*` is the worktree you started from, `▸` the one the keys act on. `a` prompts for a branch
 name; `r` asks before deleting anything; `s` syncs the selected worktree and `S` syncs them all.
