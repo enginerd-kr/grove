@@ -219,8 +219,17 @@ function argsFor(source: Source, options: AddOptions, path: string): readonly st
         path,
         `${REMOTE}/${options.branch}`,
       ];
+    // `--no-track` is load-bearing. The default base is `origin/<default>`, and
+    // git's `branch.autoSetupMerge` — on unless someone turned it off — sets a
+    // branch cut from a remote-tracking ref to track that ref. So a brand new
+    // `feat/x` would quietly come out tracking `origin/main`: the remote column
+    // would report its drift from *main* under the heading of its own remote,
+    // `push` would refuse it for having an upstream by another name, and the
+    // unpushed-commit warning on `remove` would count against the wrong branch.
+    // A branch nobody has pushed has no remote to be measured against, and
+    // saying so is the honest answer.
     case "new":
-      return ["worktree", "add", "-b", options.branch, path, source.base];
+      return ["worktree", "add", "--no-track", "-b", options.branch, path, source.base];
   }
 }
 
