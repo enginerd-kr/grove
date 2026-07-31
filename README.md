@@ -379,7 +379,15 @@ things this is going to grow keys for, and being unable to reach them would only
 type them. Quotes are respected, so `!commit -m "two words"` arrives as three arguments; `!git log`
 means `!log`. It is not a shell — no pipes, no expansion, no globbing — because the arguments go
 straight to `git` with nothing in between, which is also what makes `!log; rm -rf ~` one argument
-list and not two commands. Output lands in the activity area, capped, with the cut-off stated.
+list and not two commands.
+
+Output gets half the screen, where a command narrating its own progress gets six rows. Six is
+right for a spinner and a clone percentage, where the last thing said is the interesting one — and
+wrong for something you asked for: `git status` is seven lines before it says anything unusual, so
+it used to lose `On branch …` off the top, the one line saying which worktree you were looking at.
+Whatever still does not fit is counted rather than dropped in silence (`… 12 earlier lines`), and
+the list keeps a floor of its own, because a screen that answers "what did that say" by hiding
+"where am I" has moved the problem rather than solved it.
 
 **`x` throws away everything a worktree has changed**, which is `garden reset --clean` and the
 one key here that destroys work. It appears only on a worktree that has something to throw away
