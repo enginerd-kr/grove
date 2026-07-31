@@ -132,8 +132,12 @@ export async function readSetupPlan(worktree: string): Promise<SetupPlan> {
  * not, and what is being agreed to is on the row in front of you. An empty
  * answer is every ordinary repository, and nothing is drawn for it.
  */
-export async function pendingCommands(repo: RepoPaths): Promise<readonly string[]> {
-  const plan = await repoSetupPlan(repo);
+export async function pendingCommands(
+  repo: RepoPaths,
+  /** Where to read from when the trunk has no worktree yet — `clone`'s case. */
+  fallback?: string,
+): Promise<readonly string[]> {
+  const plan = await repoSetupPlan(repo, fallback);
   if (plan.commands.length === 0 || plan.fingerprint === undefined) return [];
 
   return (await isTrusted(repo.bare, plan.fingerprint)) ? [] : plan.commands;

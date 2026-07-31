@@ -8,10 +8,13 @@ import { gitOutput, parseGitProgress, runGit, runGitOrThrow } from "../git.ts";
 import {
   GIT_FILE_CONTENTS,
   looksLikeRepoUrl,
+  type RepoPaths,
   repoNameFromUrl,
   repoPaths,
   worktreeRelPath,
 } from "../layout.ts";
+import { pendingCommands } from "../setup.ts";
+import { SETUP_FILE } from "../setup-file.ts";
 
 /**
  * `garden clone` — turn a remote URL into a managed repository.
@@ -107,6 +110,7 @@ export async function cloneRepo(
     await pruneUnusedHeads(paths.bare, branch);
 
     reporter.info(`${relative(cwd, root) || root} is ready`);
+    await sayWhatTheFileWants(paths, worktree, reporter);
 
     return { root, bare: paths.bare, defaultBranch: trunk, branch, worktree };
   } catch (error) {
@@ -117,6 +121,35 @@ export async function cloneRepo(
     await rm(rootExisted ? paths.bare : root, { recursive: true, force: true });
     throw error;
   }
+}
+
+/**
+ * Says what the repository's `.garden.toml` wants to run, and runs none of it.
+ *
+ * The first worktree is the one nothing sets up, and both halves of that are
+ * deliberate. `copy` and `link` have nothing to say here — this worktree *is*
+ * the one everything else is copied from. And `run` is a command that arrived
+ * with a repository downloaded ten seconds ago, which is the worst moment there
+ * has ever been to decide it may execute: nobody has read it yet.
+ *
+ * So it is said rather than done. Not saying it was the old behaviour and it
+ * was wrong for a different reason than it looked: with the configuration in
+ * git config, a fresh clone genuinely had none. A tracked file arrives with the
+ * checkout, so from here on the file is there and staying quiet about it would
+ * mean the only people who ever find out are the ones who go looking.
+ */
+async function sayWhatTheFileWants(
+  paths: RepoPaths,
+  worktree: string,
+  reporter: Reporter,
+): Promise<void> {
+  const commands = await pendingCommands(paths, worktree);
+  if (commands.length === 0) return;
+
+  const where = relative(paths.root, join(worktree, SETUP_FILE));
+  const what = commands.map((command) => JSON.stringify(command)).join(", ");
+
+  reporter.warn(`${where} wants to run ${what} — nothing has; read it, then run it yourself`);
 }
 
 async function configureRemote(bare: string, reporter: Reporter): Promise<void> {

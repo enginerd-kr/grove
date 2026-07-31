@@ -190,9 +190,17 @@ right there. A path in the file that could escape the worktree is a different ma
 refused before anything is created at all — a mistake in the file should not leave a directory
 behind for somebody to wonder about.
 
-`garden clone` does not run any of this: the repository it just made has no `.garden.toml` in
-it yet, and the commands in one it did have would not be trusted. `--no-setup` skips it on an
-`add`.
+**The first worktree is the one nothing sets up**, and it says so rather than leaving you to
+notice. `copy` and `link` have no source there — that worktree *is* the source — and a `run`
+command in a repository downloaded ten seconds ago is the worst possible moment to decide
+something may execute, since nobody has read it yet. So `garden clone` reports and does not run:
+
+```
+· repo is ready
+! main/.garden.toml wants to run "bun install" — nothing has; read it, then run it yourself
+```
+
+`--no-setup` skips the lot on an `add`.
 
 None of it is a habit you have to leave the app for, either. `i` proposes the file, asks about
 the commands, and runs the lot — see [The app](#the-app).
