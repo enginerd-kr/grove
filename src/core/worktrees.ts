@@ -93,6 +93,14 @@ export type WorktreeStatus = {
   readonly dirty: boolean;
   /** A few changed paths, for telling the user what is in the way. */
   readonly changed: readonly string[];
+  /**
+   * The subset of `changed` that git is not tracking.
+   *
+   * Kept apart because `reset --hard` does not touch these: a worktree can come
+   * out of a reset still dirty, and saying which files those are beats leaving
+   * someone to wonder why the dot stayed filled.
+   */
+  readonly untracked: readonly string[];
   readonly upstream?: string;
   readonly ahead: number;
   readonly behind: number;
@@ -124,6 +132,7 @@ function afterSpaces(line: string, n: number): string {
 export function parseStatus(output: string): WorktreeStatus {
   const fields = output.split("\0").filter((field) => field.length > 0);
   const changed: string[] = [];
+  const untracked: string[] = [];
   let upstream: string | undefined;
   let ahead = 0;
   let behind = 0;
@@ -155,10 +164,13 @@ export function parseStatus(output: string): WorktreeStatus {
       // stops that path being read as another entry.
       i += 1;
     } else if (field.startsWith("u ")) changed.push(afterSpaces(field, 10));
-    else if (field.startsWith("? ") || field.startsWith("! ")) changed.push(field.slice(2));
+    else if (field.startsWith("? ") || field.startsWith("! ")) {
+      changed.push(field.slice(2));
+      untracked.push(field.slice(2));
+    }
   }
 
-  return { dirty: changed.length > 0, changed, upstream, ahead, behind };
+  return { dirty: changed.length > 0, changed, untracked, upstream, ahead, behind };
 }
 
 /**
@@ -219,7 +231,7 @@ export async function statusOf(path: string): Promise<WorktreeStatus> {
 
   // A worktree whose directory was deleted behind git's back still appears in
   // the list; reporting it as clean-and-unknown beats failing the whole command.
-  if (result.code !== 0) return { dirty: false, changed: [], ahead: 0, behind: 0 };
+  if (result.code !== 0) return { dirty: false, changed: [], untracked: [], ahead: 0, behind: 0 };
 
   return parseStatus(result.stdout);
 }

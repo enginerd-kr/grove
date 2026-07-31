@@ -17,7 +17,7 @@ app/Setup.tsx     the screen when there is no repository yet: ask, clone, hand o
 app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths as the tree they are on disk
-app/service.ts    what the screens are allowed to do, as five functions
+app/service.ts    what the screens are allowed to do, as six functions
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
 e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
@@ -106,6 +106,11 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   answering with the line to show afterwards. That is what lets `App.test.tsx` drive every key
   with a stub and no repository, and it is why a keystroke cannot grow a capability the command
   line does not have.
+- **Every destructive key goes through the same `confirm`.** `Pending` covers a removal, a
+  folder's worth of removals, and a reset; the question is always "is this the row you meant",
+  and the answer should not depend on remembering which key you pressed. `x` is also hidden and
+  inert on a clean worktree — a confirmation whose only possible outcome is "nothing to discard"
+  is training people to answer `y` without reading.
 - **One `useInput`, one `mode`.** Every key goes through a single handler that switches on
   `list | add | confirm | busy`, rather than each component claiming its own input. The failure
   that prevents: `a` opening the branch prompt and the next keypress being read as a command.

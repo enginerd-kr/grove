@@ -9,6 +9,7 @@ function summary(dir: string, overrides: Partial<WorktreeSummary> = {}): Worktre
     branch: dir,
     detached: false,
     dirty: false,
+    changed: 0,
     ahead: 0,
     behind: 0,
     locked: false,
