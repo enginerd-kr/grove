@@ -1,12 +1,12 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { describeState, type WorktreeSummary } from "../../core/commands/list.ts";
-import { isGardenError } from "../../core/errors.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
+import { type Message, messageFor } from "./message.ts";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, leavesOf, leavesUnder, type TreeRow } from "./tree.ts";
 
@@ -35,12 +35,6 @@ type Mode =
   | { readonly kind: "confirm"; readonly target: Removal }
   | { readonly kind: "busy"; readonly label: string };
 
-type Message = {
-  readonly kind: "info" | "error";
-  readonly text: string;
-  readonly hint?: string;
-};
-
 type Props = {
   readonly service: WorktreeService;
   /** Shown in the header; the repository the keystrokes act on. */
@@ -60,12 +54,6 @@ function padTo(text: string, width: number): string {
   if (text.length <= width) return text.padEnd(width);
 
   return `${text.slice(0, Math.max(0, width - 1))}…`;
-}
-
-function messageFor(error: unknown): Message {
-  if (isGardenError(error)) return { kind: "error", text: error.message, hint: error.hint };
-
-  return { kind: "error", text: error instanceof Error ? error.message : String(error) };
 }
 
 type Widths = { readonly tree: number; readonly branch: number; readonly state: number };

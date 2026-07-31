@@ -13,10 +13,12 @@ theme.ts          shared colors
 components/       Spinner, ProgressBar, StatusBar, StepRow
 hooks/            useInterval
 app/App.tsx       the screen: rows, keys, and one mode at a time
+app/Setup.tsx     the screen when there is no repository yet: ask, clone, hand over
 app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
+app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths as the tree they are on disk
-app/service.ts    what the screen is allowed to do, as four functions
-app/run.tsx       discovery, the reporter, and render()
+app/service.ts    what the screens are allowed to do, as five functions
+app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
 e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
 ```
@@ -29,6 +31,13 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   *sliced* to the rows left over after the header, activity, and key bar — a layout that only
   works because something computes how many rows fit rather than leaving it to the renderer to
   overflow.
+- **Two screens, not another `mode`.** `Setup` is what a bare `garden` opens where discovery
+  found nothing, and `run.tsx`'s `Garden` swaps it for `App` the moment it produces a repository.
+  They are separate components because they share nothing but the banner: there is no list to
+  move a cursor through in `Setup`, and no repository for `App`'s keys to act on until `Setup`
+  has made one — which is also why `createWorktreeService` cannot be built until then. Only
+  `not-a-repo` opens it; an ambiguous folder still ends the process, since the screen cannot
+  answer that question either.
 - **Anything above the list reports its own height.** `App` slices the list to what is left
   over, so every other section has to be able to say what it will take *before* it is drawn:
   `bannerRows(columns, rows)` and `statusBarRows(hints, columns)`. Both are computed from the

@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { mkdir } from "node:fs/promises";
+import { pathExists } from "../../core/fs.ts";
 import { withTempRepo } from "../../core/test-utils.ts";
 import { runCli, startUi, type UiSession } from "../e2e-utils.ts";
 
@@ -48,6 +50,46 @@ onPosix(
       ui.clear();
       const synced = await ui.pressUntil("S", (frame) => frame.includes("up-to-date"), 20_000);
       expect(synced).toContain("fetched");
+
+      expect(await ui.pressUntilExit("q")).toBe(0);
+    });
+  },
+  60_000,
+);
+
+// The whole point of the setup screen: `garden` used to exit 3 here. Driven end
+// to end because what it produces — `.bare`, the `.git` pointer, a worktree for
+// the default branch — is the part a stubbed clone could not vouch for.
+onPosix(
+  "a bare `garden` in an empty folder clones into it and becomes the app",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const empty = `${work}/garden`;
+      await mkdir(empty, { recursive: true });
+
+      const ui = start({ cwd: empty, rows: 28 });
+      await ui.waitForFrame((frame) => frame.includes("enter clone"));
+
+      // Written once, not through `pressUntil`: a URL typed twice is a URL twice.
+      ui.clear();
+      ui.press(originUrl);
+      await ui.waitForFrame((frame) => frame.includes("repository file://"));
+
+      ui.clear();
+      ui.press("\r");
+      const opened = await ui.waitForFrame((frame) => frame.includes("q quit"), 30_000);
+      // The newest repaint only. The setup frames are still in the buffer behind
+      // it, and the point of this assertion is that they are behind it.
+      const screen = opened.split("\n").slice(-28).join("\n");
+
+      // The list, not the prompt: the screen became the app on its own.
+      expect(screen).toContain("main");
+      expect(screen).toContain("1 worktree");
+      expect(screen).not.toContain("no repository here yet");
+
+      expect(await pathExists(`${empty}/.bare`)).toBe(true);
+      expect(await pathExists(`${empty}/.git`)).toBe(true);
+      expect(await pathExists(`${empty}/main`)).toBe(true);
 
       expect(await ui.pressUntilExit("q")).toBe(0);
     });

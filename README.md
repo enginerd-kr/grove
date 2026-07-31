@@ -179,10 +179,43 @@ The app runs the same `core/commands` the CLI does, minus the destructive spelli
 `--force`, no `--delete-branch`. Those stay on the command line, where they have to be typed
 out on purpose.
 
+### Starting from nothing
+
+`garden` in a folder with no repository in it opens anyway, and asks the only question there is:
+
+```
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ▗▄▖ ▗▄▖  garden v0.1.0                                                       │
+│ ▝▜█▄█▛▘  ~/Projects/open-source/garden                                       │
+│    ▐▌    no repository here yet                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+This folder is empty, so it becomes the repository.
+garden clones it bare and checks out the default branch as the first worktree.
+
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ repository git@github.com:you/thing.git▌                                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+enter clone · esc quit
+```
+
+`enter` runs what `garden clone` runs — the bare clone, the fetch refspec a bare clone omits, the
+default branch checked out as the first worktree — with the progress drawn in place. The screen
+becomes the app the moment it finishes, on the repository it just made.
+
+Where that repository lands is the folder you are standing in if it is empty, and a new folder
+named after the URL if it is not. Someone who made a directory, stepped into it, and typed
+`garden` means that directory; somewhere with things in it already is the case `garden clone`
+and `git clone` both answer by making a folder of their own. A clone that is refused — a typo in
+the URL, a remote that says no — is reported on the screen with the URL left where it was, since
+retyping forty characters to fix one is the wrong thing to ask.
+
 It needs a terminal on both ends. Piped, redirected, or with `--headless`, a bare `garden` prints
-the usage and exits 0, so `garden | head` and `garden > usage.txt` still mean what they used to. Run
-outside a managed repository it fails the way `garden list` does — exit 3, with `garden clone` as the
-suggestion.
+the usage and exits 0, so `garden | head` and `garden > usage.txt` still mean what they used to.
+The one discovery failure that still ends the process is the ambiguous one — two managed
+repositories directly below where you are standing — because that is a question the screen cannot
+answer either, and it exits 3 the way `garden list` does.
 
 ## Output and exit codes
 
