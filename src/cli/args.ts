@@ -61,6 +61,7 @@ export type GardenCommand =
       readonly target?: string;
       readonly all: boolean;
       readonly abortOnConflict: boolean;
+      readonly push: boolean;
     };
 
 export type CliCommand =
@@ -171,6 +172,7 @@ function buildCommand(
         target: first,
         all: bool(values, "all"),
         abortOnConflict: !bool(values, "no-abort"),
+        push: !bool(values, "no-push"),
       };
     default:
       // Unreachable while `SUBCOMMANDS` and this switch agree; a new entry in

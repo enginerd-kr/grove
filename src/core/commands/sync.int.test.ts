@@ -20,6 +20,7 @@ async function withRepo(
     repo: RepoPaths;
     work: string;
     advanceRemote: (file: string, contents: string) => Promise<void>;
+    advanceBranch: (branch: string, file: string, contents: string) => Promise<void>;
   }) => Promise<void>,
 ): Promise<void> {
   await withTempRepo(async ({ work, originUrl, originPath, root }) => {
@@ -38,7 +39,19 @@ async function withRepo(
       await seedGit(other, ["push", "origin", "main"]);
     };
 
-    await body({ repo, work, advanceRemote });
+    /** The same colleague, pushing to the feature branch rather than to main. */
+    const advanceBranch = async (branch: string, file: string, contents: string) => {
+      // The clone predates anything pushed since, so it has to look first.
+      await seedGit(other, ["fetch", "origin"]);
+      await seedGit(other, ["checkout", "-B", branch, `origin/${branch}`]);
+      await Bun.write(join(other, file), contents);
+      await seedGit(other, ["add", "-A"]);
+      await seedGit(other, ["-c", "commit.gpgsign=false", "commit", "-m", `remote: ${file}`]);
+      await seedGit(other, ["push", "origin", branch]);
+      await seedGit(other, ["checkout", "main"]);
+    };
+
+    await body({ repo, work, advanceRemote, advanceBranch });
   });
 }
 
@@ -66,7 +79,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "feat/login", all: false, abortOnConflict: true },
+        { target: "feat/login", all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -93,7 +106,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "main", all: false, abortOnConflict: true },
+        { target: "main", all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -118,7 +131,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "main", all: false, abortOnConflict: true },
+        { target: "main", all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -139,7 +152,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "main", all: false, abortOnConflict: true },
+        { target: "main", all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -163,7 +176,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "feat/login", all: false, abortOnConflict: true },
+        { target: "feat/login", all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -189,7 +202,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "feat/login", all: false, abortOnConflict: true },
+        { target: "feat/login", all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -220,7 +233,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "feat/login", all: false, abortOnConflict: false },
+        { target: "feat/login", all: false, abortOnConflict: false, push: false },
         silent(),
       );
 
@@ -245,14 +258,14 @@ onPosix(
       await syncWorktrees(
         repo,
         work,
-        { target: "feat/login", all: false, abortOnConflict: false },
+        { target: "feat/login", all: false, abortOnConflict: false, push: false },
         silent(),
       );
 
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "feat/login", all: false, abortOnConflict: true },
+        { target: "feat/login", all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -288,7 +301,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { all: true, abortOnConflict: true },
+        { all: true, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -317,7 +330,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { all: true, abortOnConflict: true },
+        { all: true, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -340,7 +353,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { all: true, abortOnConflict: true },
+        { all: true, abortOnConflict: true, push: false },
         silent(),
       );
       const detached = outcomes.find((outcome) => outcome.branch === undefined);
@@ -362,7 +375,7 @@ onPosix(
       const outcomes = await syncWorktrees(
         repo,
         join(main, "nested", "deeper"),
-        { all: false, abortOnConflict: true },
+        { all: false, abortOnConflict: true, push: false },
         silent(),
       );
 
@@ -380,7 +393,7 @@ onPosix(
       const error = await syncWorktrees(
         repo,
         work,
-        { all: false, abortOnConflict: true },
+        { all: false, abortOnConflict: true, push: false },
         silent(),
       ).then(
         () => undefined,
@@ -392,4 +405,127 @@ onPosix(
     });
   },
   40_000,
+);
+
+/**
+ * The half a rebase does not do.
+ *
+ * `sync` rebases, which rewrites every commit it moves — so a branch that tracks
+ * a remote comes out of it diverged from that remote, and an earlier version of
+ * this command stopped there and reported "up-to-date" over the gap. The
+ * sequence below is git-town's rebase strategy: the branch's own remote first,
+ * then the trunk, then a lease-guarded force-push.
+ */
+onPosix(
+  "publishes the rebased commits back to the branch's own remote",
+  async () => {
+    await withRepo(async ({ repo, advanceRemote }) => {
+      const worktree = join(repo.root, "feat/login");
+      await commitIn(worktree, "mine.txt", "mine");
+      await runGitOrThrow(["push", "-u", "origin", "feat/login"], { cwd: worktree });
+      await advanceRemote("theirs.txt", "theirs");
+
+      const [outcome] = await syncWorktrees(
+        repo,
+        repo.root,
+        { target: "feat/login", all: false, abortOnConflict: true, push: true },
+        silent(),
+      );
+
+      expect(outcome?.kind).toBe("rebased");
+      expect(outcome?.pushed).toBe(true);
+      // The point of the push: local and remote agree again afterwards.
+      expect(await gitOutput(["rev-parse", "HEAD"], { cwd: worktree })).toBe(
+        await gitOutput(["rev-parse", "origin/feat/login"], { cwd: worktree }),
+      );
+    });
+  },
+  60_000,
+);
+
+// The reason the branch's own remote is rebased onto *first*. Going straight to
+// the trunk would leave the colleague's commit behind, and `--force-if-includes`
+// would then refuse the push for trying to drop it.
+onPosix(
+  "takes a commit pushed to the branch itself, then replays ours on top",
+  async () => {
+    await withRepo(async ({ repo, advanceRemote, advanceBranch }) => {
+      const worktree = join(repo.root, "feat/login");
+      await commitIn(worktree, "mine.txt", "mine");
+      await runGitOrThrow(["push", "-u", "origin", "feat/login"], { cwd: worktree });
+
+      await advanceBranch("feat/login", "theirs-on-branch.txt", "theirs");
+      await advanceRemote("theirs-on-main.txt", "theirs");
+      await commitIn(worktree, "mine-2.txt", "mine again");
+
+      const [outcome] = await syncWorktrees(
+        repo,
+        repo.root,
+        { target: "feat/login", all: false, abortOnConflict: true, push: true },
+        silent(),
+      );
+
+      expect(outcome?.kind).toBe("rebased");
+      expect(outcome?.pushed).toBe(true);
+
+      // Everybody's work is here: theirs from the branch, theirs from main, ours.
+      const log = await gitOutput(["log", "--format=%s"], { cwd: worktree });
+      expect(log).toContain("remote: theirs-on-branch.txt");
+      expect(log).toContain("remote: theirs-on-main.txt");
+      expect(log).toContain("mine-2.txt");
+    });
+  },
+  60_000,
+);
+
+// A branch nobody has pushed has nowhere to publish to, and inventing a remote
+// branch is `add --push`'s decision to make, not this one's.
+onPosix(
+  "leaves a branch with no upstream alone rather than creating one",
+  async () => {
+    await withRepo(async ({ repo, advanceRemote }) => {
+      await addWorktree(repo, { branch: "local-only", fetch: true, push: false }, silent());
+      await commitIn(join(repo.root, "local-only"), "mine.txt", "mine");
+      await advanceRemote("theirs.txt", "theirs");
+
+      const [outcome] = await syncWorktrees(
+        repo,
+        repo.root,
+        { target: "local-only", all: false, abortOnConflict: true, push: true },
+        silent(),
+      );
+
+      expect(outcome?.kind).toBe("rebased");
+      expect(outcome?.pushed).toBeUndefined();
+      expect(
+        (await runGit(["rev-parse", "--verify", "origin/local-only"], { cwd: repo.bare })).code,
+      ).not.toBe(0);
+    });
+  },
+  60_000,
+);
+
+onPosix(
+  "--no-push leaves the branch diverged, and says nothing was pushed",
+  async () => {
+    await withRepo(async ({ repo, advanceRemote }) => {
+      const worktree = join(repo.root, "feat/login");
+      await commitIn(worktree, "mine.txt", "mine");
+      await runGitOrThrow(["push", "-u", "origin", "feat/login"], { cwd: worktree });
+      await advanceRemote("theirs.txt", "theirs");
+
+      const [outcome] = await syncWorktrees(
+        repo,
+        repo.root,
+        { target: "feat/login", all: false, abortOnConflict: true, push: false },
+        silent(),
+      );
+
+      expect(outcome?.pushed).toBeUndefined();
+      expect(await gitOutput(["rev-parse", "HEAD"], { cwd: worktree })).not.toBe(
+        await gitOutput(["rev-parse", "origin/feat/login"], { cwd: worktree }),
+      );
+    });
+  },
+  60_000,
 );

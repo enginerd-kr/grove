@@ -241,7 +241,7 @@ export function createWorktreeService(
       const outcomes = await syncWorktrees(
         repo,
         cwd,
-        { target, all: target === undefined, abortOnConflict: true },
+        { target, all: target === undefined, abortOnConflict: true, push: true },
         reporter,
       );
 
