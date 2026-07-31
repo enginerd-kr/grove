@@ -57,7 +57,11 @@ function shortenPath(path: string, max: number): string {
 }
 
 /** What the folder holds, and whereabouts in it you are standing. */
-function describeFolder(worktrees: number, here?: string): string {
+function describeFolder(worktrees?: number, here?: string): string {
+  // Two different nothings, and the difference is what the screen is for: an
+  // empty folder is waiting for a URL, a repository with no worktrees is waiting
+  // for `a`.
+  if (worktrees === undefined) return "no repository here yet";
   if (worktrees === 0) return "no worktrees yet";
 
   const counted = `${worktrees} worktree${worktrees === 1 ? "" : "s"}`;
@@ -66,9 +70,10 @@ function describeFolder(worktrees: number, here?: string): string {
 }
 
 type Props = {
-  /** The repository the app opened — the answer to "is this the one I meant?". */
+  /** The folder the app opened — the answer to "is this the one I meant?". */
   readonly repoRoot: string;
-  readonly worktrees: number;
+  /** Absent when there is no repository here yet, which is a state of its own. */
+  readonly worktrees?: number;
   /** The worktree the app was started from, when it was started from one. */
   readonly here?: string;
   readonly columns: number;

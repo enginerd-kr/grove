@@ -1,8 +1,9 @@
 import { addWorktree } from "../../core/commands/add.ts";
+import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
-import type { RepoPaths } from "../../core/layout.ts";
+import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import type { Reporter } from "../../report/reporter.ts";
 
 /**
@@ -29,6 +30,40 @@ export type WorktreeService = {
   /** `target` omitted means every worktree — the app's `S`. */
   readonly sync: (target?: string) => Promise<string>;
 };
+
+/**
+ * What the setup screen is allowed to do, as one function.
+ *
+ * Separate from `WorktreeService` rather than folded into it, because it is the
+ * one action that has no repository to act on — it is what produces one. The
+ * paths it answers with are what the screen hands to the app it becomes.
+ */
+export type SetupService = {
+  readonly clone: (url: string) => Promise<{ readonly paths: RepoPaths; readonly branch: string }>;
+};
+
+/**
+ * `inPlace` decides whether the folder becomes the repository or gains one.
+ *
+ * Someone who made a directory, stepped into it, and typed `garden` means that
+ * directory — nesting a second folder named after the URL inside it would be a
+ * surprise. Somewhere with things already in it is the opposite: the repository
+ * goes into a folder of its own, which is what `garden clone` does from a
+ * command line and what `git clone` does before it.
+ */
+export function createSetupService(
+  folder: string,
+  inPlace: boolean,
+  reporter: Reporter,
+): SetupService {
+  return {
+    clone: async (url) => {
+      const result = await cloneRepo(folder, { url, dir: inPlace ? "." : undefined }, reporter);
+
+      return { paths: repoPaths(result.root), branch: result.branch };
+    },
+  };
+}
 
 /** How a finished sync reads: counts by outcome, worst first. */
 function describeSync(outcomes: readonly { kind: string; dir: string }[]): string {
