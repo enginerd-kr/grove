@@ -10,6 +10,7 @@ function summary(dir: string, overrides: Partial<WorktreeSummary> = {}): Worktre
     detached: false,
     dirty: false,
     changed: 0,
+    untracked: 0,
     ahead: 0,
     behind: 0,
     locked: false,

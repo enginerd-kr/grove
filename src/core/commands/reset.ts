@@ -35,15 +35,37 @@ export type ResetResult = {
   readonly path: string;
   readonly dir: string;
   readonly branch?: string;
-  /** What the reset threw away. Capped — this is for reading, not for auditing. */
+  /** What went. Capped — this is for reading, not for auditing. */
   readonly discarded: readonly string[];
   /** How many paths differed, of which `discarded` is the first few. */
   readonly changed: number;
-  /** Untracked files still sitting there because `--clean` was not asked for. */
-  readonly untracked: readonly string[];
-  /** Where it ended up, so a rewind can be undone from the reflog if need be. */
+  /** How many of `changed` git was not tracking. */
+  readonly untracked: number;
+  /** True when those were deleted too, rather than left where they were. */
+  readonly cleaned: boolean;
+  /** Where it ended up, so a rewind can be found again in the reflog. */
   readonly head: string;
 };
+
+/**
+ * What a reset is about to take, or has taken, in words.
+ *
+ * The two kinds are counted apart wherever this is used, because they are
+ * destroyed by different commands and one of them is work git has never seen a
+ * copy of — "3 changes" covering a file you wrote ten minutes ago and never
+ * added would be the sentence someone regrets having skimmed.
+ */
+export function describeDiscard(tracked: number, untracked: number): string {
+  const parts: string[] = [];
+
+  if (tracked > 0) parts.push(`${tracked} change${tracked === 1 ? "" : "s"}`);
+  if (untracked > 0) {
+    parts.push(`${untracked} untracked file${untracked === 1 ? "" : "s"}`);
+  }
+  if (parts.length === 0) return "nothing";
+
+  return parts.join(" and ");
+}
 
 /** Enough to recognise what went, without printing someone's whole tree back. */
 const LISTED = 5;
@@ -85,10 +107,11 @@ export async function resetWorktree(
     throw error;
   }
 
-  const untracked = options.clean ? [] : before.untracked;
-  if (untracked.length > 0) {
+  // Only worth saying when they survived: `--clean` is opt-in on the command
+  // line, and a worktree that is still dirty after a reset is a surprise.
+  if (!options.clean && before.untracked.length > 0) {
     reporter.warn(
-      `${dir} still has ${untracked.length} untracked file(s); --clean would delete them too`,
+      `${dir} still has ${before.untracked.length} untracked file(s); --clean would delete them too`,
     );
   }
 
@@ -100,7 +123,8 @@ export async function resetWorktree(
     branch: target.branch,
     discarded: before.changed.slice(0, LISTED),
     changed: before.changed.length,
-    untracked: untracked.slice(0, LISTED),
+    untracked: before.untracked.length,
+    cleaned: options.clean,
     head: head.stdout.trim(),
   };
 }

@@ -98,9 +98,10 @@ garden reset feat/login --to origin/feat/login   # drop local commits as well
 
 Two things are worth knowing, and both are things `git reset --hard` itself will not tell you.
 **Untracked files survive it** — that is what `--hard` means — so a worktree can come out of a
-reset still dirty; the command says so, and `--clean` is how you take those too. And **the
-default does not move the branch**: it discards changes, not commits. Rewinding is `--to`,
-which has to be typed.
+reset still dirty. The command says so rather than leaving you to wonder, and `--clean` is how
+you take those too; the app's `x` always does. Ignored files are never touched either way, so a
+gitignored `.env` survives both. And **the default does not move the branch**: it discards
+changes, not commits. Rewinding is `--to`, which has to be typed.
 
 The one refusal is a worktree in the middle of a rebase, where `reset --hard` does not mean
 "undo my changes" but "leave the rebase half-applied", with the commits somewhere only the
@@ -267,24 +268,29 @@ between them onto a second row and the list gives up the row:
 S sync all · R refresh · q quit
 ```
 
-**`x` throws away a worktree's changes**, which is `garden reset` and the one key here that
-destroys work. It appears only on a worktree that has changes — a confirmation whose whole
-effect is to say "nothing to discard" teaches people to answer `y` without reading it — and it
-says how much is at stake before it does anything:
+**`x` throws away everything a worktree has changed**, which is `garden reset --clean` and the
+one key here that destroys work. It appears only on a worktree that has something to throw away
+— a confirmation whose whole effect is to say "nothing to discard" teaches people to answer `y`
+without reading it — and it counts the two kinds apart before it does anything:
 
 ```
-discard 3 changes in feat/login? there is no undo
+discard 1 change and 3 untracked files in feat/login? there is no undo
 ```
 
-Red rather than amber, because it is not the same risk as the other one that asks: a removed
+Apart, because they are not the same thing. A tracked change has a committed version to go back
+to; an untracked file is one git has never seen a copy of, and folding it into "4 changes" is
+the sentence someone regrets having skimmed. `.gitignore` still protects what it protects — a
+gitignored `secrets/.env` is not touched.
+
+Red rather than amber, because it is not the same risk as the other key that asks: a removed
 worktree leaves its branch and its commits behind and `garden add` brings it back, while this
 leaves nothing at all.
 
 The app runs the same `core/commands` the CLI does, minus the destructive spellings: no
-`--force`, no `--delete-branch`, and for `reset` neither `--to` nor `--clean`. Those stay on the
-command line, where they have to be typed out on purpose. The line it draws is that a keystroke
-may undo your afternoon after asking, but it may not undo your week (`--to` drops commits) or
-take files git never knew about with it (`--clean`).
+`--force`, no `--delete-branch`, and for `reset` no `--to`. Those stay on the command line,
+where they have to be typed out on purpose. The line it draws is that a keystroke may undo your
+afternoon after asking, but not your week — `--to` discards commits, and that is a different
+thing from discarding changes.
 
 ### Starting from nothing
 

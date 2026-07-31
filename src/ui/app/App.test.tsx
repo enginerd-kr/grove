@@ -22,6 +22,7 @@ function summary(overrides: Partial<WorktreeSummary> & { dir: string }): Worktre
     detached: false,
     dirty: false,
     changed: 0,
+    untracked: 0,
     // Tracking by default, because git only reports ahead/behind for a branch
     // that has an upstream — a summary with counts and no upstream is a state
     // no repository can be in.
@@ -93,7 +94,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       },
       reset: async (target) => {
         calls.resetted.push(target);
-        return `discarded 2 changes in ${target}`;
+        return `discarded 2 changes and 1 untracked file in ${target}`;
       },
       sync: async (target) => {
         calls.synced.push(target);
@@ -352,7 +353,7 @@ test("`x` asks before discarding, and says how much is at stake", async () => {
   const { service, calls } = stub({
     list: async () => [
       summary({ dir: "main", isDefault: true, current: true }),
-      summary({ dir: "feat/login", dirty: true, changed: 3 }),
+      summary({ dir: "feat/login", dirty: true, changed: 4, untracked: 1 }),
     ],
   });
   const ui = mount(service);
@@ -364,7 +365,10 @@ test("`x` asks before discarding, and says how much is at stake", async () => {
   expect(ui.frame()).toContain("x discard");
 
   ui.stdin.write("x");
+  // Counted apart: `x` deletes untracked files too, and one of those may be work
+  // git has never seen a copy of.
   const asked = await waitFor(ui.lastFrame, (f) => f.includes("discard 3 changes"));
+  expect(asked).toContain("and 1 untracked file");
   expect(asked).toContain("feat/login");
   expect(asked).toContain("no undo");
 
@@ -375,9 +379,40 @@ test("`x` asks before discarding, and says how much is at stake", async () => {
   ui.stdin.write("x");
   await waitFor(ui.lastFrame, (f) => f.includes("no undo"));
   ui.stdin.write("y");
-  await waitFor(ui.lastFrame, (f) => f.includes("discarded 2 changes"));
+  await waitFor(ui.lastFrame, (f) => f.includes("discarded 2 changes and 1 untracked file"));
 
   expect(calls.resetted).toEqual(["/repo/feat/login"]);
+});
+
+// A worktree whose only change is a file git has never seen is still a worktree
+// with something to discard — and `x` used to leave it exactly as it was.
+test("`x` works on a worktree that is dirty only from untracked files", async () => {
+  const { service, calls } = stub({
+    list: async () => [
+      summary({
+        dir: "main",
+        isDefault: true,
+        current: true,
+        dirty: true,
+        changed: 2,
+        untracked: 2,
+      }),
+    ],
+  });
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("main"));
+
+  ui.stdin.write("x");
+  const asked = await waitFor(ui.lastFrame, (f) => f.includes("no undo"));
+
+  expect(asked).toContain("2 untracked files");
+  // No "0 changes" beside it: the count that is zero is left out rather than
+  // padded in.
+  expect(asked).not.toContain("0 changes");
+
+  ui.stdin.write("y");
+  await waitFor(ui.lastFrame, (f) => f.includes("discarded"));
+  expect(calls.resetted).toEqual(["/repo/main"]);
 });
 
 // A confirmation for a reset that would do nothing is a prompt that teaches
