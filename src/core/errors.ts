@@ -5,7 +5,7 @@
  * `cli/exit-codes.ts` as a total switch — so adding a code without deciding how
  * a script should react to it is a type error rather than a silent `1`.
  */
-export type WtErrorCode =
+export type GardenErrorCode =
   /** Bad flags, wrong argument count, a branch name that cannot be a directory. */
   | "usage"
   /** Nothing managed by this tool was found from the invocation directory. */
@@ -21,7 +21,7 @@ export type WtErrorCode =
   /** The remote was unreachable, refused us, or does not exist. */
   | "remote";
 
-type WtErrorOptions = {
+type GardenErrorOptions = {
   /** One line telling the user what to do next. Worth writing for every error. */
   readonly hint?: string;
   /** Supporting lines — conflicting paths, git's own stderr — printed under the message. */
@@ -35,22 +35,22 @@ type WtErrorOptions = {
  * Anything else reaching the top level is a bug in this tool and exits 1, so
  * throwing a bare `Error` for a condition the user can fix is always wrong.
  */
-export class WtError extends Error {
-  readonly code: WtErrorCode;
+export class GardenError extends Error {
+  readonly code: GardenErrorCode;
   readonly hint: string | undefined;
   readonly details: readonly string[];
 
-  constructor(code: WtErrorCode, message: string, options: WtErrorOptions = {}) {
+  constructor(code: GardenErrorCode, message: string, options: GardenErrorOptions = {}) {
     super(message, { cause: options.cause });
-    this.name = "WtError";
+    this.name = "GardenError";
     this.code = code;
     this.hint = options.hint;
     this.details = options.details ?? [];
   }
 }
 
-export function isWtError(error: unknown): error is WtError {
-  return error instanceof WtError;
+export function isGardenError(error: unknown): error is GardenError {
+  return error instanceof GardenError;
 }
 
 /**
@@ -63,7 +63,7 @@ export function isWtError(error: unknown): error is WtError {
  *
  * These are English strings, which is why `runGit` pins `LC_ALL=C`.
  */
-const PATTERNS: readonly (readonly [RegExp, WtErrorCode])[] = [
+const PATTERNS: readonly (readonly [RegExp, GardenErrorCode])[] = [
   [/could not resolve host(?:name)?/i, "remote"],
   [/connection (?:timed out|refused|reset)/i, "remote"],
   [/authentication failed/i, "remote"],
@@ -86,7 +86,7 @@ const PATTERNS: readonly (readonly [RegExp, WtErrorCode])[] = [
 ];
 
 /** Best guess at why git failed, defaulting to the honest "we don't know". */
-export function classifyGitError(stderr: string): WtErrorCode {
+export function classifyGitError(stderr: string): GardenErrorCode {
   for (const [pattern, code] of PATTERNS) {
     if (pattern.test(stderr)) return code;
   }

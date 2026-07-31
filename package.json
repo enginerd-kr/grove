@@ -1,16 +1,16 @@
 {
-  "name": "typescript-test",
+  "name": "garden",
   "version": "0.1.0",
   "type": "module",
   "private": true,
   "bin": {
-    "wt": "./src/cli.tsx"
+    "garden": "./src/cli.tsx"
   },
   "scripts": {
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
-    "wt": "bun src/cli.tsx",
-    "wt:dev": "bun --watch src/cli.tsx",
-    "build": "bun build src/cli.tsx --outdir dist --entry-naming 'wt.[ext]' --target bun --minify --sourcemap --packages external",
+    "garden": "bun src/cli.tsx",
+    "garden:dev": "bun --watch src/cli.tsx",
+    "build": "bun build src/cli.tsx --outdir dist --entry-naming 'garden.[ext]' --target bun --minify --sourcemap --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check .",

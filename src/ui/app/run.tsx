@@ -9,14 +9,14 @@ import { createWorktreeService } from "./service.ts";
 /**
  * Starting the interactive screen, and everything about it that is not React.
  *
- * Discovery happens *before* the render so a `wt` typed outside a managed
- * repository fails the way `wt list` does — the same message, the same exit
+ * Discovery happens *before* the render so a `garden` typed outside a managed
+ * repository fails the way `garden list` does — the same message, the same exit
  * code 3 — rather than opening an app with nothing in it.
  */
 
 export type AppOptions = {
   readonly cwd: string;
-  /** `-C`, honoured here too: `wt -C ~/work/repo` opens that repository. */
+  /** `-C`, honoured here too: `garden -C ~/work/repo` opens that repository. */
   readonly repo?: string;
   /** Installed as the git trace when `--verbose` was passed. */
   readonly onReporter?: (reporter: Reporter) => void;

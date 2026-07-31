@@ -1,4 +1,4 @@
-import type { WtErrorCode } from "../core/errors.ts";
+import type { GardenErrorCode } from "../core/errors.ts";
 
 /**
  * What the shell sees.
@@ -10,7 +10,7 @@ import type { WtErrorCode } from "../core/errors.ts";
  */
 export const ExitCode = {
   ok: 0,
-  /** A bug in this tool. Anything that is not a `WtError` ends up here. */
+  /** A bug in this tool. Anything that is not a `GardenError` ends up here. */
   internal: 1,
   usage: 2,
   notARepo: 3,
@@ -26,10 +26,10 @@ export const ExitCode = {
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 
 /**
- * Total by construction: adding a `WtErrorCode` without deciding what a script
+ * Total by construction: adding a `GardenErrorCode` without deciding what a script
  * should make of it fails the typecheck rather than quietly reporting a bug.
  */
-export function errorToExitCode(code: WtErrorCode): ExitCodeValue {
+export function errorToExitCode(code: GardenErrorCode): ExitCodeValue {
   switch (code) {
     case "usage":
       return ExitCode.usage;

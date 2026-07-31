@@ -77,7 +77,7 @@ onPosix(
       const ui = start({ args: ["list"], cwd: work });
 
       expect(await ui.exited).toBe(3);
-      expect(ui.frame()).toContain("wt clone");
+      expect(ui.frame()).toContain("garden clone");
     });
   },
   40_000,

@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { version } from "../../package.json";
-import type { CliCommand, WtCommand } from "./args.ts";
+import type { CliCommand, GardenCommand } from "./args.ts";
 import { parseCliArgs } from "./args.ts";
 import { BIN_NAME, SUBCOMMANDS } from "./help.ts";
 
 /** Asserts the parse succeeded and hands back the command, so tests stay flat. */
-function run(argv: readonly string[]): WtCommand {
+function run(argv: readonly string[]): GardenCommand {
   const parsed = parseCliArgs(argv);
   if (parsed.kind !== "run") {
     throw new Error(`expected a run command, got ${parsed.kind}: ${describe(parsed)}`);
@@ -187,21 +187,21 @@ test("an unknown flag before the command is still rejected", () => {
   const parsed = parseCliArgs(["--jsno", "list"]);
 
   expect(parsed.kind).toBe("error");
-  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: wt <command>"));
+  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: garden <command>"));
 });
 
-// A bare `wt` is not a question about the commands; it is someone opening the
+// A bare `garden` is not a question about the commands; it is someone opening the
 // tool. The screen answers that, and the usage rides along for the terminal-less
 // case the entry point falls back to.
 test("a bare invocation asks for the app, not the help", () => {
   const parsed = parseCliArgs([]);
 
   expect(parsed.kind).toBe("app");
-  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: wt <command>"));
+  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: garden <command>"));
   expect(parsed).toHaveProperty("global.headless", false);
 
-  // Global flags still land, so `wt -C ~/work/repo` opens that repository and
-  // `wt --headless` is the way to ask for the old behaviour.
+  // Global flags still land, so `garden -C ~/work/repo` opens that repository and
+  // `garden --headless` is the way to ask for the old behaviour.
   expect(parseCliArgs(["-C", "/work/repo"])).toHaveProperty("global.repo", "/work/repo");
   expect(parseCliArgs(["--headless"])).toHaveProperty("global.headless", true);
 });

@@ -2,7 +2,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranches, remoteBranchExists, updateRemoteHead } from "../branches.ts";
-import { WtError } from "../errors.ts";
+import { GardenError } from "../errors.ts";
 import { isEmptyOrMissing, pathExists } from "../fs.ts";
 import { gitOutput, parseGitProgress, runGit, runGitOrThrow } from "../git.ts";
 import {
@@ -14,7 +14,7 @@ import {
 } from "../layout.ts";
 
 /**
- * `wt clone` — turn a remote URL into a managed repository.
+ * `garden clone` — turn a remote URL into a managed repository.
  *
  * The result is one directory holding `.bare`, a `.git` file pointing at it, and
  * a worktree for the first branch. Getting there is more than `git clone
@@ -57,7 +57,7 @@ export async function cloneRepo(
   reporter: Reporter,
 ): Promise<CloneResult> {
   if (!looksLikeRepoUrl(options.url)) {
-    throw new WtError(
+    throw new GardenError(
       "usage",
       `${JSON.stringify(options.url)} does not look like a repository URL`,
     );
@@ -67,8 +67,8 @@ export async function cloneRepo(
   const paths = repoPaths(root);
 
   if (!(await isEmptyOrMissing(root))) {
-    throw new WtError("state-conflict", `${root} already exists and is not empty`, {
-      hint: "pass a different directory: wt clone <url> <dir>",
+    throw new GardenError("state-conflict", `${root} already exists and is not empty`, {
+      hint: "pass a different directory: garden clone <url> <dir>",
     });
   }
 
@@ -144,7 +144,7 @@ async function createFirstWorktree(bare: string, branch: string, path: string): 
   });
 
   if (exists.code !== 0) {
-    throw new WtError("usage", `the remote has no branch named ${JSON.stringify(branch)}`, {
+    throw new GardenError("usage", `the remote has no branch named ${JSON.stringify(branch)}`, {
       hint: "omit --branch to use the remote's default",
     });
   }

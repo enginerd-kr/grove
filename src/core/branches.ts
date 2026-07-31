@@ -1,4 +1,4 @@
-import { WtError } from "./errors.ts";
+import { GardenError } from "./errors.ts";
 import { gitOutput, runGit } from "./git.ts";
 
 /** Questions about refs, asked of the bare repository. */
@@ -19,7 +19,7 @@ export async function defaultBranch(bare: string): Promise<string> {
   });
 
   if (result.code !== 0) {
-    throw new WtError("git-failed", `cannot tell which branch ${REMOTE} considers default`, {
+    throw new GardenError("git-failed", `cannot tell which branch ${REMOTE} considers default`, {
       hint: `run \`git -C ${bare} remote set-head ${REMOTE} --auto\``,
     });
   }

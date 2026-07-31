@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { createPlainReporter } from "../../report/reporter.ts";
-import type { WtError } from "../errors.ts";
+import type { GardenError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { type RepoPaths, repoPaths } from "../layout.ts";
@@ -15,7 +15,7 @@ const onPosix = test.skipIf(process.platform === "win32");
 
 const silent = () => createPlainReporter({ out: () => {}, err: () => {} });
 
-async function expectError(promise: Promise<unknown>): Promise<WtError> {
+async function expectError(promise: Promise<unknown>): Promise<GardenError> {
   const caught = await promise.then(
     () => undefined,
     (error: unknown) => error,
@@ -23,7 +23,7 @@ async function expectError(promise: Promise<unknown>): Promise<WtError> {
 
   expect(caught).toBeDefined();
 
-  return caught as WtError;
+  return caught as GardenError;
 }
 
 /** A repo with `main` plus a `feat/login` worktree — the shape these tests need. */

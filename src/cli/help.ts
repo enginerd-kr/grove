@@ -7,7 +7,7 @@
  * surface where the drift would actually cost something.
  */
 
-export const BIN_NAME = "wt";
+export const BIN_NAME = "garden";
 
 export type FlagSpec = {
   readonly name: string;

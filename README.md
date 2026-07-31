@@ -1,7 +1,10 @@
-# wt — git worktree manager
+# garden — git worktree manager
 
 Manage git worktrees backed by a single bare clone. One directory per repository, one
 subdirectory per branch, and no bookkeeping to remember.
+
+The name is the shape of the thing: a worktree is a tree, and a repository full of them is a
+garden.
 
 Runs on [Bun](https://bun.sh) — runtime, bundler, package manager, and test runner in one —
 with [Biome](https://biomejs.dev) for linting and formatting. No dependencies beyond
@@ -13,7 +16,7 @@ bun install
 
 ## Layout
 
-Running `wt clone https://github.com/org/repo.git` in `~/work` produces:
+Running `garden clone https://github.com/org/repo.git` in `~/work` produces:
 
 ```
 ~/work/repo/
@@ -33,33 +36,33 @@ it means from the directory you ran it in.
 ## Commands
 
 ```bash
-wt                       # open the worktrees, and run any of the below by keystroke
-wt clone <url> [dir]     # bare-clone a repo and check out its default branch
-wt add <branch>          # give a branch a worktree (tracking or creating it)
-wt list                  # what is here, what state it is in, where you are
-wt remove <target>       # delete a worktree
-wt sync [target]         # fetch, then bring worktrees up to date
+garden                       # open the worktrees, and run any of the below by keystroke
+garden clone <url> [dir]     # bare-clone a repo and check out its default branch
+garden add <branch>          # give a branch a worktree (tracking or creating it)
+garden list                  # what is here, what state it is in, where you are
+garden remove <target>       # delete a worktree
+garden sync [target]         # fetch, then bring worktrees up to date
 ```
 
-`wt` on its own is the app; `wt <command>` is the same thing headless, for a script or a
+`garden` on its own is the app; `garden <command>` is the same thing headless, for a script or a
 pipeline. See [The app](#the-app).
 
-`wt <command> --help` lists a command's own options. A worked example:
+`garden <command> --help` lists a command's own options. A worked example:
 
 ```bash
 cd ~/work
-wt clone https://github.com/org/repo.git
+garden clone https://github.com/org/repo.git
 cd repo/main
 
-wt add feat/login        # tracks origin/feat/login
-wt add feat/new-thing    # branches off origin/main
-wt list
+garden add feat/login        # tracks origin/feat/login
+garden add feat/new-thing    # branches off origin/main
+garden list
 #  * main             main             clean
 #    feat/login       feat/login       2 ahead
 #    feat/new-thing   feat/new-thing   dirty
 
-wt sync --all            # fast-forward main, rebase the rest onto it
-wt rm feat/login         # by branch, by directory, or by path
+garden sync --all            # fast-forward main, rebase the rest onto it
+garden rm feat/login         # by branch, by directory, or by path
 ```
 
 ### Naming
@@ -92,10 +95,15 @@ in place and resolve it by hand.
 
 ## The app
 
-Typing `wt` with no arguments opens the worktrees as a full-screen app, and every command above
+Typing `garden` with no arguments opens the worktrees as a full-screen app, and every command above
 is a keystroke:
 
 ```
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ▗▄▖ ▗▄▖  garden v0.1.0                                                       │
+│ ▝▜█▄█▛▘  ~/work/repo                                                         │
+│    ▐▌    7 worktrees · in main                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
     worktree  state
 ────────────────────────────────────────────────────────────────────────────────
   * main      clean
@@ -113,7 +121,18 @@ is a keystroke:
 2 up-to-date, 1 rebased
 
 ↑↓ move · a add · r remove · s sync · S sync all · R refresh · q quit
-wt ~/work/repo                                                      7 worktrees
+                                                                        4 of 10
+```
+
+The welcome across the top is there because the alternate screen takes the
+answers away: what this is, which build of it, which repository it found, and
+whether you are standing in one of its worktrees — none of which are on screen
+any more once the command that started the app has scrolled into the other
+buffer. It costs five rows, so it hands them back on a terminal too short or too
+narrow to spare them and says the same things on one line:
+
+```
+garden v0.1.0 · ~/work/repo · 7 worktrees · in main
 ```
 
 The list is the directory tree, because that is what the worktrees already are: `feat/login`
@@ -133,7 +152,7 @@ Folders are destinations too, and the keys change on one:
 ↑↓ move · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
 ```
 
-`r` there removes every worktree beneath it, after asking, deepest first — which is `wt remove`
+`r` there removes every worktree beneath it, after asking, deepest first — which is `garden remove`
 run once per worktree, with each one still facing its own refusals. One that says no does not
 stop the rest, and the answer counts both: `removed 2 worktrees, 1 refused`. `a` starts the
 branch name inside the folder you are standing on. `s` is absent, because syncing is a thing you
@@ -146,21 +165,28 @@ refusal ("worktree is dirty") lands on the screen instead of ending the session.
 
 It runs in the terminal's alternate screen, so quitting hands the terminal back exactly as it
 was found. The layout is measured against the window: the keys sit on the last row whatever the
-height, the list takes what is left and scrolls when there are more worktrees than rows, and a
-resize redraws to fit.
+height, the list takes what is left and scrolls when there are more worktrees than rows — with
+`4 of 10` under the keys saying how far in you are — and a resize redraws to fit, the welcome
+collapsing to its one line on the way down. Narrower than the keys are long, the key bar breaks
+between them onto a second row and the list gives up the row:
+
+```
+↑↓ move · a add under chore/ · r remove all 1
+S sync all · R refresh · q quit
+```
 
 The app runs the same `core/commands` the CLI does, minus the destructive spellings: no
 `--force`, no `--delete-branch`. Those stay on the command line, where they have to be typed
 out on purpose.
 
-It needs a terminal on both ends. Piped, redirected, or with `--headless`, a bare `wt` prints
-the usage and exits 0, so `wt | head` and `wt > usage.txt` still mean what they used to. Run
-outside a managed repository it fails the way `wt list` does — exit 3, with `wt clone` as the
+It needs a terminal on both ends. Piped, redirected, or with `--headless`, a bare `garden` prints
+the usage and exits 0, so `garden | head` and `garden > usage.txt` still mean what they used to. Run
+outside a managed repository it fails the way `garden list` does — exit 3, with `garden clone` as the
 suggestion.
 
 ## Output and exit codes
 
-**stdout is data, stderr is progress.** `wt list --json | jq` works while a spinner is on
+**stdout is data, stderr is progress.** `garden list --json | jq` works while a spinner is on
 screen, because they are different streams. Every failure, including usage errors, goes to
 stderr.
 
@@ -203,15 +229,15 @@ What a pipe loses is only what a pipe cannot use: the spinner, the percentage ba
 starts and one when it ends, which is what a transcript read a week later wants:
 
 ```bash
-wt sync --all --headless
+garden sync --all --headless
 #  · fetching
 #  ✓ fetched
 #  · syncing feat/login
 #  ✓ feat/login already up to date
 ```
 
-Either way, drawing happens on stderr and results on stdout, so `wt list --json | jq` and
-`wt clone <url> | tee log` both work.
+Either way, drawing happens on stderr and results on stdout, so `garden list --json | jq` and
+`garden clone <url> | tee log` both work.
 
 ### Seeing what git was asked to do
 
@@ -224,15 +250,15 @@ Either way, drawing happens on stderr and results on stdout, so `wt list --json 
 
 The `-C` form is what you would paste into a shell to run the same thing by hand. Logging on
 completion rather than on start is what makes the exit code available — the `rev-parse` above
-"failing" is how `wt` asks whether a branch exists, and nothing else would ever show you that.
+"failing" is how `garden` asks whether a branch exists, and nothing else would ever show you that.
 
 ## Scripts
 
 | Command             | Description                                          |
 | ------------------- | ---------------------------------------------------- |
-| `bun run wt`        | Run the CLI (`src/cli.tsx`); `--help` lists commands |
-| `bun run wt:dev`    | Same, with hot reload (`--watch`)                    |
-| `bun run build`     | Bundle to `dist/wt.js` (minified + sourcemap)        |
+| `bun run garden`        | Run the CLI (`src/cli.tsx`); `--help` lists commands |
+| `bun run garden:dev`    | Same, with hot reload (`--watch`)                    |
+| `bun run build`     | Bundle to `dist/garden.js` (minified + sourcemap)        |
 | `bun run typecheck` | Type check with `tsc --noEmit`                       |
 | `bun test`          | Run `*.test.ts` via `bun:test`                       |
 | `bun run lint`      | Lint + format check (Biome), no writes               |
@@ -255,11 +281,11 @@ src/
   cli/
     args.ts            subcommand parsing — pure, no fs and no process
     help.ts            the command surface, described once
-    exit-codes.ts      WtErrorCode -> exit code, as a total switch
+    exit-codes.ts      GardenErrorCode -> exit code, as a total switch
     run.ts             dispatch, and how results are printed
   core/                knows nothing about argv, stdout, or Ink
     git.ts             the only place that spawns a process, and `--verbose`'s trace
-    errors.ts          WtError, and classifying git's stderr
+    errors.ts          GardenError, and classifying git's stderr
     layout.ts          pure path and naming rules
     discover.ts        which repository a command means
     worktrees.ts       porcelain parsers, and resolving a target
@@ -271,7 +297,7 @@ src/
     ink-reporter.tsx   the terminal one — see src/ui/README.md
   ui/
     components/        Spinner, ProgressBar, StatusBar, StepRow
-    app/               the interactive screen a bare `wt` opens
+    app/               the interactive screen a bare `garden` opens
 ```
 
 ## Tests
@@ -316,13 +342,13 @@ the hook stages those unstaged changes too. Stage the whole file to avoid surpri
 - **`git clone --bare` writes no fetch refspec.** It copies the remote's heads straight into
   `refs/heads/*` and configures no mapping into `refs/remotes/*`, so a later `git fetch` exits
   0 having updated nothing — no error, no remote-tracking refs, and `add`/`sync` then fail
-  somewhere else entirely. `wt clone` sets `remote.origin.fetch` before its first fetch, and an
+  somewhere else entirely. `garden clone` sets `remote.origin.fetch` before its first fetch, and an
   integration test pins the broken behaviour so the line cannot be removed as redundant.
 - **Local branches start as the ones you checked out.** A bare clone imports every remote
-  branch; `wt clone` prunes back to the one with a worktree, so `add` can create-and-track in
+  branch; `garden clone` prunes back to the one with a worktree, so `add` can create-and-track in
   one step and every local branch has a correct upstream. `remove` may leave a branch behind on
   purpose — that is where unpushed commits live — so this is a starting state, not an invariant.
-- **A worktree stopped mid-rebase is reported by git as detached.** True, and useless: `wt` reads
+- **A worktree stopped mid-rebase is reported by git as detached.** True, and useless: `garden` reads
   the branch name back out of the rebase state so `sync feat/login` still finds it, and `list`
   says `rebasing` rather than `detached`.
 - Bun strips TypeScript types at runtime, so there is no separate compile step. Type errors

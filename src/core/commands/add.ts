@@ -1,14 +1,14 @@
 import { join } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranchExists, remoteBranchExists } from "../branches.ts";
-import { WtError } from "../errors.ts";
+import { GardenError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { contains, worktreeRelPath } from "../layout.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
-/** `wt add` — give a branch a worktree, creating the branch if it does not exist. */
+/** `garden add` — give a branch a worktree, creating the branch if it does not exist. */
 
 export type AddOptions = {
   readonly branch: string;
@@ -48,7 +48,7 @@ export async function addWorktree(
   refuseNesting(repo.root, path, worktrees);
 
   if (await pathExists(path)) {
-    throw new WtError("state-conflict", `${dir} already exists`, {
+    throw new GardenError("state-conflict", `${dir} already exists`, {
       hint: "pass --dir <path> to use a different directory",
     });
   }
@@ -80,7 +80,7 @@ export async function addWorktree(
 /**
  * Asking for a worktree that is already there is not an error.
  *
- * Someone re-running `wt add feat/login` wants to end up with that worktree, and
+ * Someone re-running `garden add feat/login` wants to end up with that worktree, and
  * they have. Reporting success keeps the command idempotent, which is what makes
  * it safe to put in a script.
  */
@@ -99,10 +99,10 @@ async function checkAlreadyThere(
 
   // Same branch, different directory. git would refuse this anyway, but its
   // message does not say which of your directories is the one holding it.
-  throw new WtError(
+  throw new GardenError(
     "state-conflict",
     `${JSON.stringify(branch)} is already checked out at ${holder.path}`,
-    { hint: `use that worktree, or remove it first: wt rm ${worktreeDir(root, holder.path)}` },
+    { hint: `use that worktree, or remove it first: garden rm ${worktreeDir(root, holder.path)}` },
   );
 }
 
@@ -124,9 +124,13 @@ function refuseNameCollision(
   );
 
   if (clash) {
-    throw new WtError("state-conflict", `${worktreeDir(root, clash.path)} already exists here`, {
-      hint: "directories differing only by case collide on macOS and Windows; pass --dir",
-    });
+    throw new GardenError(
+      "state-conflict",
+      `${worktreeDir(root, clash.path)} already exists here`,
+      {
+        hint: "directories differing only by case collide on macOS and Windows; pass --dir",
+      },
+    );
   }
 }
 
@@ -148,7 +152,7 @@ function refuseNesting(root: string, path: string, worktrees: readonly WorktreeR
   );
 
   if (clash) {
-    throw new WtError(
+    throw new GardenError(
       "state-conflict",
       `that would nest with the worktree at ${worktreeDir(root, clash.path)}`,
       { hint: "one worktree inside another makes each report the other's files; pass --dir" },
@@ -190,7 +194,7 @@ async function resolveSource(
   });
 
   if (resolved.code !== 0) {
-    throw new WtError("usage", `cannot start a branch from ${JSON.stringify(base)}`, {
+    throw new GardenError("usage", `cannot start a branch from ${JSON.stringify(base)}`, {
       hint: options.from ? "--from takes a branch, tag, or commit that exists" : undefined,
     });
   }

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createPlainReporter } from "../../report/reporter.ts";
-import type { WtError } from "../errors.ts";
+import type { GardenError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { repoPaths } from "../layout.ts";
@@ -16,7 +16,7 @@ const onPosix = test.skipIf(process.platform === "win32");
 
 const silent = () => createPlainReporter({ out: () => {}, err: () => {} });
 
-async function expectError(promise: Promise<unknown>): Promise<WtError> {
+async function expectError(promise: Promise<unknown>): Promise<GardenError> {
   const caught = await promise.then(
     () => undefined,
     (error: unknown) => error,
@@ -24,7 +24,7 @@ async function expectError(promise: Promise<unknown>): Promise<WtError> {
 
   expect(caught).toBeDefined();
 
-  return caught as WtError;
+  return caught as GardenError;
 }
 
 /** Clones the fixture and returns the repo paths, which every test below needs. */

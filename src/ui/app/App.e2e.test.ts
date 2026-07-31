@@ -3,11 +3,11 @@ import { withTempRepo } from "../../core/test-utils.ts";
 import { runCli, startUi, type UiSession } from "../e2e-utils.ts";
 
 /**
- * The app, as a user meets it: a bare `wt` in a real repository, in a real
+ * The app, as a user meets it: a bare `garden` in a real repository, in a real
  * terminal, doing real git work.
  *
  * `ink-testing-library` can drive the screen (`App.test.tsx` does) but it cannot
- * answer the question this file exists for — whether typing `wt` and nothing
+ * answer the question this file exists for — whether typing `garden` and nothing
  * else opens anything at all, which depends on `process.stdin.isTTY`.
  */
 
@@ -30,7 +30,7 @@ function start(options: Parameters<typeof startUi>[0]): UiSession {
 }
 
 onPosix(
-  "a bare `wt` opens the worktrees, runs a command from a keystroke, and quits",
+  "a bare `garden` opens the worktrees, runs a command from a keystroke, and quits",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const cloned = await runCli(["clone", originUrl, "repo"], { cwd: work });
@@ -96,6 +96,23 @@ onPosix(
       const resized = await ui.waitForFrame((frame) => frame.split("\n").includes("─".repeat(70)));
 
       expect(resized).toContain("q quit");
+
+      // Narrower than the key bar: it takes a second row rather than squeezing
+      // every hint until the keys and their actions land on different lines, and
+      // the layout knows it took one — so `q quit` is still on the screen.
+      ui.clear();
+      ui.resize(46, 20);
+
+      const narrow = await ui.waitForFrame((frame) => frame.split("\n").includes("─".repeat(46)));
+
+      // The tail of the buffer is the newest repaint — one whole 20-row screen.
+      // The 70-wide frames before it are still in there, so the width check has
+      // to be made against the screen rather than against everything drawn.
+      const screen = narrow.split("\n").slice(-20);
+
+      expect(screen.join("\n")).toContain("↑↓ move");
+      expect(screen.join("\n")).toContain("q quit");
+      for (const line of screen) expect(line.length).toBeLessThanOrEqual(46);
     });
   },
   60_000,
@@ -104,12 +121,12 @@ onPosix(
 // The same invocation without a terminal: there is nothing to draw on and
 // nothing to read keys from, so it answers the way it always did.
 onPosix(
-  "a bare `wt` through a pipe prints the usage and exits 0",
+  "a bare `garden` through a pipe prints the usage and exits 0",
   async () => {
     const { exitCode, stdout } = await runCli();
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Usage: wt <command>");
+    expect(stdout).toContain("Usage: garden <command>");
   },
   20_000,
 );

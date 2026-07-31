@@ -2,7 +2,7 @@ import { defaultBranch } from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
-/** `wt list` — what is here, what state it is in, and where you are standing. */
+/** `garden list` — what is here, what state it is in, and where you are standing. */
 
 export type WorktreeSummary = {
   readonly path: string;

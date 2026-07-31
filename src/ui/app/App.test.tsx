@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { render } from "ink-testing-library";
+import { version } from "../../../package.json";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 import { LineStore } from "../../report/lines.ts";
 import { keys, plain, waitFor } from "../test-utils.ts";
@@ -89,7 +90,12 @@ test("lists the worktrees, marking where you are and where the cursor is", async
 
   const frame = await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
-  expect(frame).toContain("wt");
+  // The welcome, which is the only place the version and the opened folder are
+  // said at all — the app took the alternate buffer, so the command that started
+  // it is no longer on screen to read them off.
+  expect(frame).toContain(`garden v${version}`);
+  expect(frame).toContain("/repo");
+  expect(frame).toContain("3 worktrees · in main");
   expect(frame).toMatch(/worktree\s+state/);
   // `*` is the worktree you are standing in, `▸` the one the keys act on.
   expect(frame).toMatch(/▸ \* main/);

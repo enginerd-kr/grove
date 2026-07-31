@@ -1,6 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { basename, dirname, join, parse, resolve } from "node:path";
-import { WtError } from "./errors.ts";
+import { GardenError } from "./errors.ts";
 import { childDirectories, pathExists } from "./fs.ts";
 import { runGit } from "./git.ts";
 import { BARE_DIR, type RepoPaths, repoPaths } from "./layout.ts";
@@ -86,7 +86,7 @@ async function fromChildren(cwd: string): Promise<string | undefined> {
   if (matches.length === 1 && only !== undefined) return only;
 
   if (matches.length > 1) {
-    throw new WtError("usage", `${matches.length} repositories here; say which one`, {
+    throw new GardenError("usage", `${matches.length} repositories here; say which one`, {
       hint: "pass -C <dir>, or run the command from inside the repository",
       details: matches.map((path) => basename(path)),
     });
@@ -108,8 +108,8 @@ export async function findRepoRoot(cwd: string, explicit?: string): Promise<Repo
   const root = (await fromGit(from)) ?? (await fromAncestors(from)) ?? (await fromChildren(from));
 
   if (root === undefined) {
-    throw new WtError("not-a-repo", `no worktree repository found from ${from}`, {
-      hint: `run \`wt clone <url>\` to create one, or -C <dir> to point at an existing one`,
+    throw new GardenError("not-a-repo", `no worktree repository found from ${from}`, {
+      hint: `run \`garden clone <url>\` to create one, or -C <dir> to point at an existing one`,
     });
   }
 

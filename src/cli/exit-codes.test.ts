@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import type { WtErrorCode } from "../core/errors.ts";
+import type { GardenErrorCode } from "../core/errors.ts";
 import { ExitCode, errorToExitCode } from "./exit-codes.ts";
 
 test("every error code maps to a distinct, non-zero exit code", () => {
-  const codes: readonly WtErrorCode[] = [
+  const codes: readonly GardenErrorCode[] = [
     "usage",
     "not-a-repo",
     "refused",
