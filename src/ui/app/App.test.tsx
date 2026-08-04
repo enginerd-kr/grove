@@ -54,6 +54,7 @@ type Calls = {
   readonly ran: { args: readonly string[]; at: string }[];
   readonly synced: (string | undefined)[];
   readonly trusted: string[];
+  readonly proposed: { target: string; title: string; body: string }[];
 };
 
 function stub(overrides: Partial<WorktreeService> = {}): {
@@ -69,6 +70,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     ran: [],
     synced: [],
     trusted: [],
+    proposed: [],
   };
 
   return {
@@ -112,6 +114,19 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       // `.garden.toml` and every one whose file is already trusted: no
       // question is drawn, and the other tests never see one.
       pendingCommands: async () => [],
+      prPreview: async (target) => ({
+        path: target,
+        dir: "feat/login",
+        branch: "feat/login",
+        base: "main",
+        subjects: ["Add login"],
+        body: "- Add login",
+        commits: 1,
+      }),
+      createPr: async (target, title, body) => {
+        calls.proposed.push({ target, title, body });
+        return "https://example.com/pr/1";
+      },
       trustAndRun: async (branch) => {
         calls.trusted.push(branch);
         return `1 run in ${branch}`;
@@ -510,6 +525,72 @@ test("nothing is asked when nothing is waiting", async () => {
 
   expect(ui.frame()).not.toContain("run it here?");
   expect(calls.trusted).toEqual([]);
+});
+
+// The title starts empty on purpose — it is the one thing the popup exists to
+// ask for, and a prefilled answer to a question is how questions stop being
+// read. The commits being proposed sit under it as context.
+test("`p` opens a PR popup that asks for a title, and enter proposes", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+  expect(ui.frame()).toContain("p PR");
+
+  ui.stdin.write("p");
+  const popup = await waitFor(ui.lastFrame, (f) => f.includes("PR feat/login → main"));
+  expect(popup).toContain("# 1 commit onto main");
+  expect(popup).toContain("- Add login");
+
+  // Enter on the empty title is a cancel, not a PR with a guessed name.
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => !f.includes("PR feat/login → main"));
+  expect(calls.proposed).toEqual([]);
+
+  ui.stdin.write("p");
+  await waitFor(ui.lastFrame, (f) => f.includes("PR feat/login → main"));
+  ui.stdin.write("Fix the login flow");
+  await waitFor(ui.lastFrame, (f) => f.includes("Fix the login flow"));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("https://example.com/pr/1"));
+
+  expect(calls.proposed).toEqual([
+    { target: "/repo/feat/login", title: "Fix the login flow", body: "- Add login" },
+  ]);
+});
+
+// The trunk is what PRs merge into; offering to propose it would be a menu
+// that lies.
+test("`p` is absent on the default branch", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  expect(ui.frame()).not.toContain("p PR");
+  ui.stdin.write("p");
+  await waitFor(ui.lastFrame, (f) => f.includes("q quit"));
+  expect(calls.proposed).toEqual([]);
+});
+
+// Esc is the other half of every popup, and a popup that leaks its keystrokes
+// into the list would be worse than none.
+test("esc closes the PR popup with nothing proposed", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+  ui.stdin.write("p");
+  await waitFor(ui.lastFrame, (f) => f.includes("PR feat/login → main"));
+  ui.stdin.write(keys.esc);
+  await waitFor(ui.lastFrame, (f) => !f.includes("PR feat/login → main"));
+
+  expect(calls.proposed).toEqual([]);
 });
 
 // A confirmation for a reset that would do nothing is a prompt that teaches

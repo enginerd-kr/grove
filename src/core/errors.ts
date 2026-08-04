@@ -21,7 +21,9 @@ export type GardenErrorCode =
   /** git failed and the reason did not match anything more specific. */
   | "git-failed"
   /** The remote was unreachable, refused us, or does not exist. */
-  | "remote";
+  | "remote"
+  /** `gh` — needed only for PRs — was missing, or refused the PR. */
+  | "gh";
 
 type GardenErrorOptions = {
   /** One line telling the user what to do next. Worth writing for every error. */

@@ -556,6 +556,32 @@ Nothing is asked in a repository with no `.garden.toml`, or one whose file has n
 one whose commands are already recorded — which is to say, almost always. The dialog exists for
 the moment a pull has changed what a worktree is about to run.
 
+**`p` opens a pull request**, behind a popup that says what it would propose before anybody
+types. The commits sit under the input as context; the title is typed, never guessed — it is
+the one thing the popup exists to ask for, and a prefilled answer to a question is how
+questions stop being read. Enter on an empty title is a cancel. The body goes along the way
+`gh --fill` would have written it: one commit contributes its own body, several become the
+list of subjects, oldest first.
+
+```
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ PR feat/login → main   Fix the login flow▌                                   │
+│ # 2 commits onto main                                                        │
+│ - Fix the login flow                                                         │
+│ - Add a token store                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
+Enter publishes the branch if it never met the remote (`push -u`, the same spelling `add
+--push` uses), pushes it plainly otherwise, and then asks `gh pr create` — which is the one
+tool beyond git that garden ever runs, and the only feature that wants it. Missing, the answer
+is one line naming it, exit 10, and nothing else in the tool cares. The URL comes back onto
+the screen.
+
+There is no `garden pr` on the command line, deliberately: from a shell, `gh pr create`
+already exists, with a real editor behind it. The key exists because from the app the
+alternative was leaving.
+
 There is no key for setting a worktree up on demand, and no screen for editing the file. Filling
 a worktree in is part of making one, and the file is a file — in the worktree, in your editor,
 reviewed like the rest of the project.
@@ -622,6 +648,7 @@ stderr.
 | 7    | git failed for a reason we could not classify                     |
 | 8    | the remote was unreachable, refused us, or does not exist         |
 | 9    | filling a worktree in from `.garden.toml` failed on the disk      |
+| 10   | `gh` — needed only for PRs — was missing, or refused the PR       |
 | 130  | interrupted (Ctrl-C)                                              |
 
 They are distinct so a wrapper script can tell "the worktree was dirty" from "the remote was
@@ -713,7 +740,7 @@ src/
     branches.ts        ref questions asked of the bare repo
     setup-file.ts      `.garden.toml`: parsing it, and the trust record
     setup.ts           what it copies, links, and runs into a new worktree
-    commands/          clone, add, list, remove, reset, sync
+    commands/          clone, add, list, remove, reset, sync, pr
   report/
     reporter.ts        the Reporter interface, and the plain implementation
     lines.ts           the line store both drawn reporters share

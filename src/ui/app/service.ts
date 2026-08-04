@@ -2,6 +2,7 @@ import { fetchRemotes } from "../../core/branches.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
+import { createPr, type PrPreview, prPreview } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
@@ -83,6 +84,10 @@ export type WorktreeService = {
    * the command line too — and a pull that changes the file asks again.
    */
   readonly trustAndRun: (branch: string) => Promise<string>;
+  /** Title and body a PR would open with — `gh --fill`'s guesses, shown first. */
+  readonly prPreview: (target: string) => Promise<PrPreview>;
+  /** Push if needed, then `gh pr create`. Answers with the URL. */
+  readonly createPr: (target: string, title: string, body: string) => Promise<string>;
   /**
    * Any git command at all, in one worktree.
    *
@@ -239,6 +244,14 @@ export function createWorktreeService(
       const tracked = result.changed - result.untracked;
 
       return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
+    },
+
+    prPreview: (target) => prPreview(repo, cwd, target),
+
+    createPr: async (target, title, body) => {
+      const result = await createPr(repo, cwd, { target, title, body }, reporter);
+
+      return result.url;
     },
 
     git: async (args, at) => {

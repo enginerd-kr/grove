@@ -66,6 +66,22 @@ type Mode =
    * prompt said.
    */
   | { readonly kind: "add"; readonly value: string; readonly from?: string }
+  /**
+   * The popup that ends in something leaving the machine: a PR title, typed
+   * over the commits it would propose. It carries the context that was true
+   * when it opened — the body, the subjects — for the same reason `add`
+   * carries `from`: the list refreshes itself, and a popup that re-read the
+   * world at enter-time could propose something other than what it showed.
+   */
+  | {
+      readonly kind: "pr";
+      readonly value: string;
+      readonly target: { readonly path: string; readonly dir: string };
+      readonly branch: string;
+      readonly base: string;
+      readonly body: string;
+      readonly context: readonly string[];
+    }
   /** The open-ended line: `!` runs git, anything else narrows the list. */
   | { readonly kind: "prompt"; readonly value: string }
   | { readonly kind: "confirm"; readonly target: Pending }
@@ -141,6 +157,22 @@ function with_(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
 
 function without(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
   return new Set([...set].filter((each) => each !== key));
+}
+
+/**
+ * At most this much context under a popup's input; the rest becomes a count.
+ *
+ * A worktree with forty changed files does not need forty rows to say "this
+ * commits a lot" — and the list underneath is what says where you are.
+ */
+const CONTEXT_ROWS = 8;
+
+function capped(lines: readonly string[]): readonly string[] {
+  if (lines.length <= CONTEXT_ROWS) return lines;
+
+  const rest = lines.length - (CONTEXT_ROWS - 1);
+
+  return [...lines.slice(0, CONTEXT_ROWS - 1), `# … ${rest} more`];
 }
 
 /** `1 command`, `2 commands` — the label a confirmed action is given. */
@@ -514,6 +546,50 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     [service],
   );
 
+  /**
+   * `p`, up to the point of asking.
+   *
+   * Reads before it draws — the popup promises what would be proposed, and a
+   * promise built from a row that might be a minute stale is one the enter key
+   * could break. The read is quick and the busy state keeps the refresh tick
+   * out of the way while it happens.
+   */
+  const openPr = useCallback(
+    async (target: { readonly path: string; readonly dir: string }) => {
+      store.clear();
+      setMessage(undefined);
+      setRoomy(false);
+      setMode({ kind: "busy", label: `reading ${target.dir}` });
+
+      try {
+        const preview = await service.prPreview(target.path);
+        const plural = preview.commits === 1 ? "" : "s";
+        // The commits being proposed, whatever shape the body takes — with the
+        // title asked for rather than guessed, this block is how you know what
+        // you are naming.
+        const context = [
+          `# ${preview.commits} commit${plural} onto ${preview.base}`,
+          ...preview.subjects.map((subject) => `- ${subject}`),
+        ];
+
+        return setMode({
+          kind: "pr",
+          value: "",
+          target,
+          branch: preview.branch,
+          base: preview.base,
+          body: preview.body,
+          context: capped(context),
+        });
+      } catch (error) {
+        setMessage(messageFor(error));
+
+        return setMode({ kind: "list" });
+      }
+    },
+    [service, store],
+  );
+
   // The first read is not an action: it reports no outcome, and going through
   // `perform` would open the screen with an empty message line.
   useEffect(() => {
@@ -596,17 +672,25 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
 
     if (mode.kind === "busy") return;
 
-    if (mode.kind === "add") {
+    if (mode.kind === "add" || mode.kind === "pr") {
       if (key.escape) return setMode({ kind: "list" });
       if (key.return) {
-        const branch = mode.value.trim();
-        if (branch.length === 0) return setMode({ kind: "list" });
+        const value = mode.value.trim();
+        // Enter on nothing is a cancel, not an error: the empty popup is what
+        // "never mind" looks like from inside one.
+        if (value.length === 0) return setMode({ kind: "list" });
+
+        if (mode.kind === "pr") {
+          return void perform(`opening a PR for ${mode.branch}`, () =>
+            service.createPr(mode.target.path, value, mode.body),
+          );
+        }
 
         // The question about the file's commands comes after, not instead:
         // `perform` has drawn what the worktree got, and this asks about the
         // half it did not.
-        return void perform(`adding ${branch}`, () => service.add(branch, mode.from)).then(() =>
-          askAboutCommands(branch),
+        return void perform(`adding ${value}`, () => service.add(value, mode.from)).then(() =>
+          askAboutCommands(value),
         );
       }
       if (key.backspace || key.delete) {
@@ -786,6 +870,14 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     if (input === "x" && selected?.dirty === true) {
       return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
     }
+    /**
+     * `p` proposes, behind a popup that says what it would do before anybody
+     * has typed a word. It sits on any branch that is not the trunk: whether
+     * there is anything to propose is part of what its popup answers.
+     */
+    if (input === "p" && selected && !selected.isDefault && !selected.detached) {
+      return void openPr({ path: selected.path, dir: selected.dir });
+    }
     if (input === "s" && selected) {
       return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
     }
@@ -818,9 +910,9 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
             { keys: "!", action: "run git" },
           ];
     }
-    if (mode.kind === "add") {
+    if (mode.kind === "add" || mode.kind === "pr") {
       return [
-        { keys: "enter", action: "add" },
+        { keys: "enter", action: mode.kind === "add" ? "add" : "open PR" },
         { keys: "esc", action: "cancel" },
       ];
     }
@@ -862,6 +954,9 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },
       ...(selected?.dirty === true ? [{ keys: "x", action: "discard" }] : []),
+      ...(selected !== undefined && !selected.isDefault && !selected.detached
+        ? [{ keys: "p", action: "PR" }]
+        : []),
       { keys: "s", action: "sync" },
       { keys: "S", action: "sync all" },
       { keys: "R", action: "refresh" },
@@ -887,6 +982,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
   const detailRows =
     (mode.kind === "prompt" ? PROMPT_ROWS : 0) +
     (mode.kind === "add" ? 3 : 0) +
+    (mode.kind === "pr" ? 3 + mode.context.length : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
 
@@ -1059,6 +1155,27 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
             <Text color={theme.accent}>{mode.value}</Text>
             <Text inverse> </Text>
           </Text>
+        </Box>
+      ) : null}
+
+      {mode.kind === "pr" ? (
+        // The title being typed, and under it the commits the decision rests
+        // on. Dimmed because it is context, not content: what is typed is the
+        // only part that leaves the popup.
+        <Box borderStyle="round" borderColor={theme.accent} paddingX={1} flexDirection="column">
+          <Text wrap="truncate">
+            <Text dimColor>{`PR ${mode.branch} → ${mode.base}   `}</Text>
+            <Text color={theme.accent}>{mode.value}</Text>
+            <Text inverse> </Text>
+          </Text>
+          {mode.context.map((line, index) => (
+            // Index keys, because two files can produce the same line and the
+            // block never reorders while it is up.
+            // biome-ignore lint/suspicious/noArrayIndexKey: static block
+            <Text key={index} dimColor wrap="truncate">
+              {line}
+            </Text>
+          ))}
         </Box>
       ) : null}
 
