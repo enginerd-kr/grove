@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { createPlainReporter } from "../../report/reporter.ts";
-import type { GardenError } from "../errors.ts";
+import type { GroveError } from "../errors.ts";
 import { gitOutput, runGit, runGitOrThrow } from "../git.ts";
 import { type RepoPaths, repoPaths } from "../layout.ts";
 import { seedGit, withTempRepo } from "../test-utils.ts";
@@ -322,7 +322,7 @@ onPosix(
 
       // Resolvable by branch name at all is the point: git calls a mid-rebase
       // worktree detached, which is true and useless — this is exactly when the
-      // user needs `garden sync feat/login` to know where they are.
+      // user needs `grove sync feat/login` to know where they are.
       expect(outcomes).toHaveLength(1);
       expect(outcomes[0]?.branch).toBe("feat/login");
       expect(outcomes[0]?.kind).toBe("skipped");
@@ -448,7 +448,7 @@ onPosix(
         silent(),
       ).then(
         () => undefined,
-        (caught: unknown) => caught as GardenError,
+        (caught: unknown) => caught as GroveError,
       );
 
       expect(error?.code).toBe("usage");

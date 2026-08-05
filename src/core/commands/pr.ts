@@ -1,6 +1,6 @@
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch } from "../branches.ts";
-import { GardenError, stderrDetails } from "../errors.ts";
+import { GroveError, stderrDetails } from "../errors.ts";
 import { gitOutput, runGit, runGitOrThrow, runTool } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { listWorktrees, resolveTarget, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
@@ -11,11 +11,11 @@ import { listWorktrees, resolveTarget, type WorktreeRecord, worktreeDir } from "
  * The work is three things this tool already knows how to reason about — is
  * there anything to propose, is the branch published, what should the PR say —
  * and one it does not: talking to the forge. That last part is `gh`'s job, and
- * `gh` is the only tool beyond git that garden ever runs. Missing, it fails
+ * `gh` is the only tool beyond git that grove ever runs. Missing, it fails
  * with the one-line answer rather than a stack trace, and nothing else in the
  * tool cares.
  *
- * No `garden pr` on the command line, deliberately: `gh pr create` already
+ * No `grove pr` on the command line, deliberately: `gh pr create` already
  * exists there, with a real editor behind it. The key exists because from the
  * app the alternative was leaving.
  */
@@ -55,20 +55,20 @@ async function resolveProposable(
   const dir = worktreeDir(repo.root, record.path);
 
   if (record.detached || record.branch === undefined) {
-    throw new GardenError(
+    throw new GroveError(
       "refused",
       `${dir} is on a detached HEAD, so there is no branch to propose`,
     );
   }
 
   if (record.branch === base) {
-    throw new GardenError("refused", `${base} is what pull requests merge into`, {
-      hint: "start a branch first: `a` in the app, or `garden add <branch>`",
+    throw new GroveError("refused", `${base} is what pull requests merge into`, {
+      hint: "start a branch first: `a` in the app, or `grove add <branch>`",
     });
   }
 
   if (record.rebasing === true) {
-    throw new GardenError("refused", `${dir} is in the middle of a rebase`);
+    throw new GroveError("refused", `${dir} is in the middle of a rebase`);
   }
 
   return record as WorktreeRecord & { branch: string };
@@ -97,7 +97,7 @@ export async function prPreview(repo: RepoPaths, cwd: string, target: string): P
     .filter((line) => line.length > 0);
 
   if (subjects.length === 0) {
-    throw new GardenError("refused", `${dir} has nothing ${base} does not`, {
+    throw new GroveError("refused", `${dir} has nothing ${base} does not`, {
       hint: "commit something there first",
     });
   }
@@ -132,7 +132,7 @@ export async function createPr(
 ): Promise<PrResult> {
   const title = options.title.trim();
   if (title.length === 0) {
-    throw new GardenError("usage", "a pull request needs a title");
+    throw new GroveError("usage", "a pull request needs a title");
   }
 
   const base = await defaultBranch(repo.bare);
@@ -168,8 +168,8 @@ export async function createPr(
 
   if (result === null) {
     asking.fail("gh is not installed");
-    throw new GardenError("gh", "opening a pull request needs `gh`, which is not installed", {
-      hint: "https://cli.github.com — nothing else in garden uses it",
+    throw new GroveError("gh", "opening a pull request needs `gh`, which is not installed", {
+      hint: "https://cli.github.com — nothing else in grove uses it",
     });
   }
 
@@ -177,7 +177,7 @@ export async function createPr(
     asking.fail("gh refused");
     // gh's stderr is the useful half — "already exists", "no default remote" —
     // and when a PR already exists it names the URL, which is the answer.
-    throw new GardenError("gh", `gh pr create failed (exit ${result.code})`, {
+    throw new GroveError("gh", `gh pr create failed (exit ${result.code})`, {
       details: stderrDetails(result.stderr),
     });
   }

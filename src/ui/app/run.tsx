@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { render } from "ink";
 import { useMemo, useState } from "react";
 import { findRepoRoot } from "../../core/discover.ts";
-import { isGardenError } from "../../core/errors.ts";
+import { isGroveError } from "../../core/errors.ts";
 import { isEmptyOrMissing } from "../../core/fs.ts";
 import { killRunningGit } from "../../core/git.ts";
 import type { RepoPaths } from "../../core/layout.ts";
@@ -20,12 +20,12 @@ import { createSetupService, createWorktreeService } from "./service.ts";
  * something about, so it opens on `Setup` and asks for a URL. Every other way
  * discovery can fail — an ambiguous folder with two repositories under it — is a
  * question the screen cannot answer either, and still ends the process the way
- * `garden list` would.
+ * `grove list` would.
  */
 
 export type AppOptions = {
   readonly cwd: string;
-  /** `-C`, honoured here too: `garden -C ~/work/repo` opens that repository. */
+  /** `-C`, honoured here too: `grove -C ~/work/repo` opens that repository. */
   readonly repo?: string;
   /** Installed as the git trace when `--verbose` was passed. */
   readonly onReporter?: (reporter: Reporter) => void;
@@ -35,13 +35,13 @@ async function discover(cwd: string, repo?: string): Promise<RepoPaths | undefin
   try {
     return await findRepoRoot(cwd, repo);
   } catch (error) {
-    if (isGardenError(error) && error.code === "not-a-repo") return undefined;
+    if (isGroveError(error) && error.code === "not-a-repo") return undefined;
 
     throw error;
   }
 }
 
-type GardenProps = {
+type GroveProps = {
   readonly found: RepoPaths | undefined;
   readonly folder: string;
   readonly inPlace: boolean;
@@ -58,7 +58,7 @@ type GardenProps = {
  * before its screen is due: `createWorktreeService` needs the repository that
  * `Setup` is in the middle of making.
  */
-function Garden({ found, folder, inPlace, cwd, store, reporter, onCd }: GardenProps) {
+function Grove({ found, folder, inPlace, cwd, store, reporter, onCd }: GroveProps) {
   const [paths, setPaths] = useState(found);
 
   // Memoised, and not as a micro-optimisation: `App` starts a fetch when its
@@ -117,7 +117,7 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
   // after the app exits — how "enter means cd" crosses the process boundary a
   // child cannot cross itself. A newline goes with the path so `cat` in the
   // wrapper reads a whole line, and unset means no wrapper: enter stays inert.
-  const cdFile = process.env.GARDEN_CD_FILE;
+  const cdFile = process.env.GROVE_CD_FILE;
   const onCd =
     cdFile === undefined || cdFile.length === 0
       ? undefined
@@ -133,7 +133,7 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
   onReporter?.(reporter);
 
   const instance = render(
-    <Garden
+    <Grove
       found={found}
       folder={folder}
       inPlace={inPlace}

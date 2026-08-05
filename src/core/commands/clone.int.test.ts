@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createPlainReporter } from "../../report/reporter.ts";
 import { findRepoRoot } from "../discover.ts";
-import type { GardenError } from "../errors.ts";
+import type { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { withTempRepo } from "../test-utils.ts";
@@ -14,7 +14,7 @@ const onPosix = test.skipIf(process.platform === "win32");
 /** Discards output; these tests assert on the repository, not the narration. */
 const silent = () => createPlainReporter({ out: () => {}, err: () => {} });
 
-async function expectError(promise: Promise<unknown>): Promise<GardenError> {
+async function expectError(promise: Promise<unknown>): Promise<GroveError> {
   const caught = await promise.then(
     () => undefined,
     (error: unknown) => error,
@@ -22,7 +22,7 @@ async function expectError(promise: Promise<unknown>): Promise<GardenError> {
 
   expect(caught).toBeDefined();
 
-  return caught as GardenError;
+  return caught as GroveError;
 }
 
 onPosix(

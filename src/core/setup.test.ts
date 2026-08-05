@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { GardenError } from "./errors.ts";
+import type { GroveError } from "./errors.ts";
 import { checkedSetupPath, describeSetup, failureFor, type SetupResult } from "./setup.ts";
 
 /**
@@ -37,7 +37,7 @@ test("a path that could leave the worktree is refused, naming the key", () => {
         checkedSetupPath("copy", value);
         return undefined;
       } catch (caught) {
-        return caught as GardenError;
+        return caught as GroveError;
       }
     })();
 
@@ -55,7 +55,7 @@ test("git's own plumbing cannot be copied about", () => {
 });
 
 test("the summary counts what happened, and separates the two kinds of nothing", () => {
-  expect(describeSetup(empty)).toBe("no .garden.toml");
+  expect(describeSetup(empty)).toBe("no .grove.toml");
   expect(describeSetup({ ...empty, planned: 2, missing: [".env", ".npmrc"] })).toBe(
     "nothing to do",
   );
@@ -81,7 +81,7 @@ test("a failed command becomes an error a script can tell apart, and names the r
   expect(failure?.code).toBe("setup-failed");
   expect(failure?.message).toContain("exited 3");
   expect(failure?.details).toEqual(["error: no lockfile"]);
-  expect(failure?.hint).toContain("garden setup feat/login");
+  expect(failure?.hint).toContain("grove setup feat/login");
 });
 
 test("nothing failed is nothing thrown", () => {

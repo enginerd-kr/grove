@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { GardenError } from "./errors.ts";
+import type { GroveError } from "./errors.ts";
 import { fingerprintOf, parseSetupFile, renderSetupFile } from "./setup-file.ts";
 
 /**
@@ -7,12 +7,12 @@ import { fingerprintOf, parseSetupFile, renderSetupFile } from "./setup-file.ts"
  * write and what it should mean — the disk and git are `commands/setup.int.test.ts`.
  */
 
-function caught(text: string): GardenError | undefined {
+function caught(text: string): GroveError | undefined {
   try {
     parseSetupFile(text);
     return undefined;
   } catch (error) {
-    return error as GardenError;
+    return error as GroveError;
   }
 }
 

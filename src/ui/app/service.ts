@@ -87,13 +87,13 @@ export type WorktreeService = {
    * Asked straight after `a`, because that is when the question means
    * something: the files are in place, the commands are not, and what is being
    * agreed to is on the screen. Empty for every repository that has no
-   * `.garden.toml` and every one whose file is already trusted.
+   * `.grove.toml` and every one whose file is already trusted.
    */
   readonly pendingCommands: () => Promise<readonly string[]>;
   /**
    * `y` to that question: record the file as read, then run what it says.
    *
-   * The same record `garden add --trust` writes, so answering here answers for
+   * The same record `grove add --trust` writes, so answering here answers for
    * the command line too — and a pull that changes the file asks again.
    */
   readonly trustAndRun: (branch: string) => Promise<string>;
@@ -132,10 +132,10 @@ export type SetupService = {
 /**
  * `inPlace` decides whether the folder becomes the repository or gains one.
  *
- * Someone who made a directory, stepped into it, and typed `garden` means that
+ * Someone who made a directory, stepped into it, and typed `grove` means that
  * directory — nesting a second folder named after the URL inside it would be a
  * surprise. Somewhere with things already in it is the opposite: the repository
- * goes into a folder of its own, which is what `garden clone` does from a
+ * goes into a folder of its own, which is what `grove clone` does from a
  * command line and what `git clone` does before it.
  */
 export function createSetupService(

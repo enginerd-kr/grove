@@ -1,4 +1,4 @@
-import type { GardenErrorCode } from "../core/errors.ts";
+import type { GroveErrorCode } from "../core/errors.ts";
 
 /**
  * What the shell sees.
@@ -10,7 +10,7 @@ import type { GardenErrorCode } from "../core/errors.ts";
  */
 export const ExitCode = {
   ok: 0,
-  /** A bug in this tool. Anything that is not a `GardenError` ends up here. */
+  /** A bug in this tool. Anything that is not a `GroveError` ends up here. */
   internal: 1,
   usage: 2,
   notARepo: 3,
@@ -20,7 +20,7 @@ export const ExitCode = {
   gitFailed: 7,
   remote: 8,
   /**
-   * A `garden.setup` command failed.
+   * A `grove.setup` command failed.
    *
    * Distinct from `gitFailed` because the worktree is there and correct — what
    * did not happen is the install on top of it, which is a script's cue to
@@ -36,10 +36,10 @@ export const ExitCode = {
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 
 /**
- * Total by construction: adding a `GardenErrorCode` without deciding what a script
+ * Total by construction: adding a `GroveErrorCode` without deciding what a script
  * should make of it fails the typecheck rather than quietly reporting a bug.
  */
-export function errorToExitCode(code: GardenErrorCode): ExitCodeValue {
+export function errorToExitCode(code: GroveErrorCode): ExitCodeValue {
   switch (code) {
     case "usage":
       return ExitCode.usage;

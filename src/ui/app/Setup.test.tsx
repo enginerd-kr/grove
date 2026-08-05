@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import { GardenError } from "../../core/errors.ts";
+import { GroveError } from "../../core/errors.ts";
 import type { RepoPaths } from "../../core/layout.ts";
 import { LineStore } from "../../report/lines.ts";
 import { keys, plain, waitFor } from "../test-utils.ts";
@@ -8,7 +8,7 @@ import { Setup } from "./Setup.tsx";
 import type { SetupService } from "./service.ts";
 
 /**
- * The screen a bare `garden` opens where there is no repository.
+ * The screen a bare `grove` opens where there is no repository.
  *
  * Driven against a stub, so what is being checked is the one path through it —
  * a URL is typed, `enter` hands it to clone, and what comes back is handed on to
@@ -87,7 +87,7 @@ test("a typed URL goes to clone, and what comes back opens the app", async () =>
 test("a refused clone is reported and leaves the URL where it was", async () => {
   const { service, cloned } = stub({
     clone: async () => {
-      throw new GardenError("remote", "repository not found", { hint: "check the URL" });
+      throw new GroveError("remote", "repository not found", { hint: "check the URL" });
     },
   });
   const ui = mount(service);
@@ -118,7 +118,7 @@ test("enter on an empty prompt does nothing", async () => {
 });
 
 // The two are different folders and the screen says which one it means, because
-// `garden` in `~/work` and `garden` in `~/work/thing` land in different places.
+// `grove` in `~/work` and `grove` in `~/work/thing` land in different places.
 test("says whether the folder becomes the repository or gains one", async () => {
   const here = mount(stub().service, true);
   expect(await waitFor(here.lastFrame, (f) => f.includes("empty"))).toContain(

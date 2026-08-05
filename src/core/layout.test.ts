@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { GardenError } from "./errors.ts";
+import { GroveError } from "./errors.ts";
 import {
   contains,
   looksLikeRepoUrl,
@@ -48,9 +48,9 @@ test("a branch with no usable characters is a usage error naming --dir", () => {
       }
     })();
 
-    expect(thrown).toBeInstanceOf(GardenError);
-    expect((thrown as GardenError).code).toBe("usage");
-    expect((thrown as GardenError).hint).toContain("--dir");
+    expect(thrown).toBeInstanceOf(GroveError);
+    expect((thrown as GroveError).code).toBe("usage");
+    expect((thrown as GroveError).hint).toContain("--dir");
   }
 });
 
@@ -64,7 +64,7 @@ test("--dir is validated, not rewritten", () => {
   // The failure this prevents: a worktree created outside the repo folder,
   // where discovery would never find it again.
   for (const override of ["../elsewhere", "nested/../..", "/abs/path", ".bare", ".git", "..", ""]) {
-    expect(() => worktreeRelPath("feat/login", override)).toThrow(GardenError);
+    expect(() => worktreeRelPath("feat/login", override)).toThrow(GroveError);
   }
 });
 
@@ -93,8 +93,8 @@ test("repoNameFromUrl matches what git clone would have picked", () => {
     ["https://github.com/org/repo/", "repo"],
     ["git@github.com:org/repo.git", "repo"],
     ["ssh://git@host:2222/org/repo.git", "repo"],
-    ["file:///tmp/garden-abc/origin.git", "origin"],
-    ["/tmp/garden-abc/origin.git", "origin"],
+    ["file:///tmp/grove-abc/origin.git", "origin"],
+    ["/tmp/grove-abc/origin.git", "origin"],
     ["../sibling.git", "sibling"],
   ];
 

@@ -7,7 +7,7 @@
  * surface where the drift would actually cost something.
  */
 
-export const BIN_NAME = "garden";
+export const BIN_NAME = "grove";
 
 export type FlagSpec = {
   readonly name: string;
@@ -81,7 +81,7 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "Uses the branch if it exists locally, tracks it if it exists on the",
       "remote, and otherwise creates it from the default branch.",
       "",
-      "The new worktree is then filled in from .garden.toml, if the default",
+      "The new worktree is then filled in from .grove.toml, if the default",
       "branch's worktree has one: `copy` and `link` apply on sight, and `run`",
       "commands are printed and skipped until --trust says you have read them.",
     ],
@@ -107,12 +107,12 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       {
         name: "no-setup",
         type: "boolean",
-        summary: "skip the copies, links, and commands .garden.toml asks for",
+        summary: "skip the copies, links, and commands .grove.toml asks for",
       },
       {
         name: "trust",
         type: "boolean",
-        summary: "run .garden.toml's commands, recording that you have read them",
+        summary: "run .grove.toml's commands, recording that you have read them",
       },
     ],
   },
@@ -122,8 +122,8 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     args: "[target]",
     summary: "print a worktree's directory — or the repo root, given nothing",
     description: [
-      'For scripts, and for shells: `cd "$(garden path feat/login)"` works',
-      "anywhere, and the function `shell-init` installs spells it `garden cd",
+      'For scripts, and for shells: `cd "$(grove path feat/login)"` works',
+      "anywhere, and the function `shell-init` installs spells it `grove cd",
       "feat/login`. The root is the one directory that is never a worktree,",
       "which makes it the place to stand while removing anything.",
     ],
@@ -133,14 +133,14 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     name: "shell-init",
     aliases: [],
     args: "<shell>",
-    summary: "print the shell function behind `garden cd` and enter-to-cd",
+    summary: "print the shell function behind `grove cd` and enter-to-cd",
     description: [
       "A child process cannot move the shell that started it, so `cd` has to",
-      "be a shell function wearing garden's name. One line installs it:",
+      "be a shell function wearing grove's name. One line installs it:",
       "",
-      '  eval "$(garden shell-init zsh)"      # zsh, bash, or fish',
+      '  eval "$(grove shell-init zsh)"      # zsh, bash, or fish',
       "",
-      "It adds `garden cd [target]`, and makes enter in the app quit into the",
+      "It adds `grove cd [target]`, and makes enter in the app quit into the",
       "selected worktree. Everything else passes through untouched. The",
       "function calls back by the spelling that printed it, so running from a",
       "bare checkout (`bun …/src/cli.tsx`) needs nothing on PATH.",

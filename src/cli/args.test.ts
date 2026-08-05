@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { version } from "../../package.json";
-import type { CliCommand, GardenCommand } from "./args.ts";
+import type { CliCommand, GroveCommand } from "./args.ts";
 import { parseCliArgs } from "./args.ts";
 import { BIN_NAME, SUBCOMMANDS } from "./help.ts";
 
 /** Asserts the parse succeeded and hands back the command, so tests stay flat. */
-function run(argv: readonly string[]): GardenCommand {
+function run(argv: readonly string[]): GroveCommand {
   const parsed = parseCliArgs(argv);
   if (parsed.kind !== "run") {
     throw new Error(`expected a run command, got ${parsed.kind}: ${describe(parsed)}`);
@@ -197,21 +197,21 @@ test("an unknown flag before the command is still rejected", () => {
   const parsed = parseCliArgs(["--jsno", "list"]);
 
   expect(parsed.kind).toBe("error");
-  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: garden <command>"));
+  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: grove <command>"));
 });
 
-// A bare `garden` is not a question about the commands; it is someone opening the
+// A bare `grove` is not a question about the commands; it is someone opening the
 // tool. The screen answers that, and the usage rides along for the terminal-less
 // case the entry point falls back to.
 test("a bare invocation asks for the app, not the help", () => {
   const parsed = parseCliArgs([]);
 
   expect(parsed.kind).toBe("app");
-  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: garden <command>"));
+  expect(parsed).toHaveProperty("usage", expect.stringContaining("Usage: grove <command>"));
   expect(parsed).toHaveProperty("global.headless", false);
 
-  // Global flags still land, so `garden -C ~/work/repo` opens that repository and
-  // `garden --headless` is the way to ask for the old behaviour.
+  // Global flags still land, so `grove -C ~/work/repo` opens that repository and
+  // `grove --headless` is the way to ask for the old behaviour.
   expect(parseCliArgs(["-C", "/work/repo"])).toHaveProperty("global.repo", "/work/repo");
   expect(parseCliArgs(["--headless"])).toHaveProperty("global.headless", true);
 });
@@ -275,9 +275,9 @@ test("shell-init takes exactly the shells it has scripts for", () => {
   expect(parseCliArgs(["shell-init", "tcsh"]).kind).toBe("error");
 });
 
-// `garden cd` reaching the binary means the function is not installed, and the
+// `grove cd` reaching the binary means the function is not installed, and the
 // useful answer is the line that installs it — not a list of commands.
-test("a bare `garden cd` explains the shell function instead of playing dumb", () => {
+test("a bare `grove cd` explains the shell function instead of playing dumb", () => {
   const parsed = parseCliArgs(["cd", "feat/login"]);
 
   expect(parsed.kind).toBe("error");

@@ -23,7 +23,7 @@ import type { WorktreeService } from "./service.ts";
 import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tree.ts";
 
 /**
- * `garden` with nothing to do: the worktrees, and the five commands as keystrokes.
+ * `grove` with nothing to do: the worktrees, and the five commands as keystrokes.
  *
  * The screen owns no git knowledge — it asks a `WorktreeService` — and it runs
  * exactly the commands the command line does, with the destructive spellings
@@ -51,7 +51,7 @@ type Pending =
    * The one entry here that deletes nothing, and the most serious of them.
    *
    * A worktree has just been made, its files are in place, and its
-   * `.garden.toml` wants to run commands that arrived with a pull. Saying yes
+   * `.grove.toml` wants to run commands that arrived with a pull. Saying yes
    * is saying they may run on this machine — so the commands themselves are the
    * question, because reading them is the whole of the safeguard.
    */
@@ -533,7 +533,7 @@ export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFR
    * What follows an `a` that made a worktree whose file wants to run commands.
    *
    * The dialog is here and not on the command line because this is the only
-   * surface that can hold one. `garden add` has to behave the same in a pipe as
+   * surface that can hold one. `grove add` has to behave the same in a pipe as
    * under a terminal, so there it prints the commands and skips them; the
    * screen is already a terminal by construction, the worktree is on the row in
    * front of you, and the question is one keystroke from the answer.
@@ -1240,7 +1240,7 @@ export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFR
       {mode.kind === "confirm" ? (
         // Red for the reset, amber for the removals, because they are not the
         // same risk: a removed worktree leaves its branch and its commits behind
-        // and `garden add` brings it back, while a reset leaves nothing at all.
+        // and `grove add` brings it back, while a reset leaves nothing at all.
         // The configure question is neither — nothing it writes destroys
         // anything — so it is asked in the colour of an ordinary line.
         <Text color={colourFor(mode.target)} wrap="truncate">

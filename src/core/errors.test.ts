@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import type { GardenErrorCode } from "./errors.ts";
-import { classifyGitError, GardenError, stderrDetails } from "./errors.ts";
+import type { GroveErrorCode } from "./errors.ts";
+import { classifyGitError, GroveError, stderrDetails } from "./errors.ts";
 
 test("classifies the stderr git actually produces", () => {
-  const cases: readonly (readonly [string, GardenErrorCode])[] = [
+  const cases: readonly (readonly [string, GroveErrorCode])[] = [
     [
       "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
       "remote",
@@ -56,8 +56,8 @@ test("stderrDetails caps how much git narration reaches the user", () => {
   expect(stderrDetails(stderr)).toEqual(["line 7", "line 8", "line 9", "line 10", "line 11"]);
 });
 
-test("a GardenError carries the code, hint, and details forward", () => {
-  const error = new GardenError("refused", "worktree has uncommitted changes", {
+test("a GroveError carries the code, hint, and details forward", () => {
+  const error = new GroveError("refused", "worktree has uncommitted changes", {
     hint: "commit or stash first",
     details: ["app.txt"],
   });

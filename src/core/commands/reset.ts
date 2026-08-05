@@ -1,11 +1,11 @@
 import type { Reporter } from "../../report/reporter.ts";
-import { GardenError } from "../errors.ts";
+import { GroveError } from "../errors.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { listWorktrees, resolveTarget, statusOf, worktreeDir } from "../worktrees.ts";
 
 /**
- * `garden reset` — throw away what a worktree has changed.
+ * `grove reset` — throw away what a worktree has changed.
  *
  * The one command here that destroys work rather than moving it about, and the
  * only reason it exists as a command at all is that the alternative is worse:
@@ -85,7 +85,7 @@ export async function resetWorktree(
   // somewhere only the reflog remembers, which is not what anybody typing
   // "throw away my changes" is asking for.
   if (target.rebasing === true) {
-    throw new GardenError("refused", `${dir} is in the middle of a rebase`, {
+    throw new GroveError("refused", `${dir} is in the middle of a rebase`, {
       hint: `finish or abandon it first: git -C ${target.path} rebase --abort`,
     });
   }

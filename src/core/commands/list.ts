@@ -2,7 +2,7 @@ import { type Drift, defaultBranch, driftFrom } from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
-/** `garden list` — what is here, what state it is in, and where you are standing. */
+/** `grove list` — what is here, what state it is in, and where you are standing. */
 
 export type WorktreeSummary = {
   readonly path: string;

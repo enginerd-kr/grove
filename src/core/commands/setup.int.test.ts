@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { lstat, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createPlainReporter, type Reporter } from "../../report/reporter.ts";
-import type { GardenError } from "../errors.ts";
+import type { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { type RepoPaths, repoPaths } from "../layout.ts";
 import { pendingCommands, trustAndRun } from "../setup.ts";
@@ -12,7 +12,7 @@ import { addWorktree } from "./add.ts";
 import { cloneRepo } from "./clone.ts";
 
 /**
- * `.garden.toml` against real git and a real disk.
+ * `.grove.toml` against real git and a real disk.
  *
  * Everything here is a claim about files that are *not* in the repository —
  * whether they were copied, linked, left alone, or refused — and nothing but
@@ -34,7 +34,7 @@ function recording(): { reporter: Reporter; lines: string[] } {
   };
 }
 
-async function expectError(promise: Promise<unknown>): Promise<GardenError> {
+async function expectError(promise: Promise<unknown>): Promise<GroveError> {
   const caught = await promise.then(
     () => undefined,
     (error: unknown) => error,
@@ -42,7 +42,7 @@ async function expectError(promise: Promise<unknown>): Promise<GardenError> {
 
   expect(caught).toBeDefined();
 
-  return caught as GardenError;
+  return caught as GroveError;
 }
 
 /** A repo with a `main` worktree holding the untracked files a branch will want. */
@@ -156,11 +156,11 @@ onPosix("the trunk's file governs, not the new worktree's own", async () => {
 
 onPosix("a command runs in the new worktree, knowing which one it is", async () => {
   await withRepo(async (repo) => {
-    await configure(repo, `run = [${JSON.stringify('echo "$GARDEN_BRANCH" > who.txt')}]`);
+    await configure(repo, `run = [${JSON.stringify('echo "$GROVE_BRANCH" > who.txt')}]`);
 
     const result = await add(repo, "feat/login", { trust: true });
 
-    expect(result.setup?.ran).toEqual(['echo "$GARDEN_BRANCH" > who.txt']);
+    expect(result.setup?.ran).toEqual(['echo "$GROVE_BRANCH" > who.txt']);
     // Written in the worktree that was just made, not in the trunk or the cwd.
     expect(await Bun.file(join(repo.root, "feat/login", "who.txt")).text()).toBe("feat/login\n");
     expect(await pathExists(join(repo.root, "main", "who.txt"))).toBe(false);
@@ -323,7 +323,7 @@ onPosix("clone says what the file wants to run, and runs none of it", async () =
     await configure(repo, 'run = ["touch installed.txt"]');
     const main = join(repo.root, "main");
     await seedGit(main, ["add", SETUP_FILE]);
-    await seedGit(main, ["-c", "commit.gpgsign=false", "commit", "-m", "Add a garden file"]);
+    await seedGit(main, ["-c", "commit.gpgsign=false", "commit", "-m", "Add a grove file"]);
     await seedGit(main, ["push", "-q"]);
 
     // A second clone of the same remote: the file arrives with the checkout,
@@ -389,7 +389,7 @@ onPosix("the file itself is an ordinary tracked file", async () => {
     const main = join(repo.root, "main");
 
     await seedGit(main, ["add", SETUP_FILE]);
-    await seedGit(main, ["-c", "commit.gpgsign=false", "commit", "-m", "Add a garden file"]);
+    await seedGit(main, ["-c", "commit.gpgsign=false", "commit", "-m", "Add a grove file"]);
 
     // Committed, so a branch cut from main now carries it — and setup still
     // reads the trunk's copy either way.

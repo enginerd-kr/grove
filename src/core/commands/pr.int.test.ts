@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createPlainReporter } from "../../report/reporter.ts";
-import type { GardenError } from "../errors.ts";
+import type { GroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { type RepoPaths, repoPaths } from "../layout.ts";
 import { seedGit, withTempRepo } from "../test-utils.ts";
@@ -24,7 +24,7 @@ const onPosix = test.skipIf(process.platform === "win32");
 
 const silent = () => createPlainReporter({ out: () => {}, err: () => {} });
 
-async function expectError(promise: Promise<unknown>): Promise<GardenError> {
+async function expectError(promise: Promise<unknown>): Promise<GroveError> {
   const caught = await promise.then(
     () => undefined,
     (error: unknown) => error,
@@ -32,7 +32,7 @@ async function expectError(promise: Promise<unknown>): Promise<GardenError> {
 
   expect(caught).toBeDefined();
 
-  return caught as GardenError;
+  return caught as GroveError;
 }
 
 /**

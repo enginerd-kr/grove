@@ -3,7 +3,7 @@ import type { WorktreeSummary } from "../../core/commands/list.ts";
 /**
  * The worktree list as the tree it already is on disk.
  *
- * `garden` nests worktrees to match the branch — `feat/login` lives in `feat/login`
+ * `grove` nests worktrees to match the branch — `feat/login` lives in `feat/login`
  * — so a flat list repeats the prefix on every row and hides the grouping the
  * slashes were there to express. This turns the paths back into the shape the
  * directory has, which is also the shape the eye is looking for with thirty

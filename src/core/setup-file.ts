@@ -1,10 +1,10 @@
 import { join } from "node:path";
-import { GardenError } from "./errors.ts";
+import { GroveError } from "./errors.ts";
 import { gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
 import { BARE_DIR } from "./layout.ts";
 
 /**
- * `.garden.toml` — how a repository says what its worktrees need.
+ * `.grove.toml` — how a repository says what its worktrees need.
  *
  * It is a tracked file in the worktree, and that is the point. "This project
  * copies `.env` and runs `bun install`" is a property of the project and not of
@@ -23,7 +23,7 @@ import { BARE_DIR } from "./layout.ts";
  * The cost of travelling is `run`: a `git pull` can now hand you a command that
  * executes on your machine. So `copy` and `link` apply on sight — they move
  * files that are already on your disk, inside a directory you asked to be
- * created — and `run` does not, until `garden trust` says so. See `trust.ts`.
+ * created — and `run` does not, until `grove trust` says so. See `trust.ts`.
  *
  * TOML because Bun parses it with no dependency, and because a file people are
  * expected to read and review deserves comments. It is read out of the worktree
@@ -31,14 +31,14 @@ import { BARE_DIR } from "./layout.ts";
  * so a branch that adds a build step brings the step with it.
  */
 
-export const SETUP_FILE = ".garden.toml";
+export const SETUP_FILE = ".grove.toml";
 
 export type SetupPlan = {
   readonly copy: readonly string[];
   readonly link: readonly string[];
   /** Command lines, run in the order the file lists them. */
   readonly commands: readonly string[];
-  /** Absent when the worktree has no `.garden.toml`. */
+  /** Absent when the worktree has no `.grove.toml`. */
   readonly path?: string;
   /** The file's contents, hashed — what `trust` records and compares. */
   readonly fingerprint?: string;
@@ -63,7 +63,7 @@ function stringsAt(table: Record<string, unknown>, key: string): readonly string
   if (typeof value === "string") return [value];
 
   if (!Array.isArray(value) || value.some((each) => typeof each !== "string")) {
-    throw new GardenError("usage", `${SETUP_FILE}: setup.${key} must be a list of strings`, {
+    throw new GroveError("usage", `${SETUP_FILE}: setup.${key} must be a list of strings`, {
       hint: `for example: ${key} = [${JSON.stringify(key === "run" ? "bun install" : ".env")}]`,
     });
   }
@@ -85,7 +85,7 @@ export function parseSetupFile(text: string): SetupPlan {
   try {
     parsed = Bun.TOML.parse(text);
   } catch (error) {
-    throw new GardenError("usage", `${SETUP_FILE} is not valid TOML`, {
+    throw new GroveError("usage", `${SETUP_FILE} is not valid TOML`, {
       details: [error instanceof Error ? error.message : String(error)],
       cause: error,
     });
@@ -96,14 +96,14 @@ export function parseSetupFile(text: string): SetupPlan {
   if (section === undefined) return EMPTY_PLAN;
 
   if (typeof section !== "object" || section === null || Array.isArray(section)) {
-    throw new GardenError("usage", `${SETUP_FILE}: [setup] must be a table`);
+    throw new GroveError("usage", `${SETUP_FILE}: [setup] must be a table`);
   }
 
   const table = section as Record<string, unknown>;
   for (const key of Object.keys(table)) {
     if (KNOWN.has(key)) continue;
 
-    throw new GardenError(
+    throw new GroveError(
       "usage",
       `${SETUP_FILE}: [setup] has no key named ${JSON.stringify(key)}`,
       {
@@ -147,7 +147,7 @@ export function fingerprintOf(text: string): string {
   return Bun.SHA256.hash(text, "hex");
 }
 
-const TRUST_KEY = "garden.trusted";
+const TRUST_KEY = "grove.trusted";
 
 /**
  * Whether these exact contents have been trusted on this machine.
@@ -204,7 +204,7 @@ export function renderSetupFile(files: readonly string[], directories: readonly 
 /** Where the file goes, and the `.bare` guard nothing else would catch. */
 export function setupFilePath(worktree: string): string {
   if (worktree.endsWith(BARE_DIR)) {
-    throw new GardenError("usage", `${SETUP_FILE} belongs in a worktree, not in ${BARE_DIR}`);
+    throw new GroveError("usage", `${SETUP_FILE} belongs in a worktree, not in ${BARE_DIR}`);
   }
 
   return join(worktree, SETUP_FILE);

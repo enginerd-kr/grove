@@ -13,7 +13,7 @@ import { isCompiledMain, shellInit } from "./shell-init.ts";
  *
  * A function whose whole job is to move a shell can only be proven by a shell
  * that moved, and the claim worth proving is the bare-checkout one: no
- * `garden` on PATH anywhere, the eval line naming the runtime and the entry
+ * `grove` on PATH anywhere, the eval line naming the runtime and the entry
  * script in full, the way somebody working from source would write it. The
  * function calls back by the same spelling, so nothing else is needed.
  *
@@ -42,7 +42,7 @@ async function inBash(cwd: string, script: string) {
 }
 
 onPosix(
-  "`garden cd <branch>` moves the shell into that worktree",
+  "`grove cd <branch>` moves the shell into that worktree",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const { root: repoRoot } = await cloneRepo(work, { url: originUrl, dir: "repo" }, silent());
@@ -52,7 +52,7 @@ onPosix(
         silent(),
       );
 
-      const result = await inBash(repoRoot, "garden cd feat/login && pwd");
+      const result = await inBash(repoRoot, "grove cd feat/login && pwd");
 
       // Ink's non-TTY fallback closes with blank lines on stderr; noise, not news.
       expect(result.stderr.trim()).toBe("");
@@ -64,12 +64,12 @@ onPosix(
 );
 
 onPosix(
-  "`garden cd` with nothing goes to the root — where anything can be removed",
+  "`grove cd` with nothing goes to the root — where anything can be removed",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const { root: repoRoot } = await cloneRepo(work, { url: originUrl, dir: "repo" }, silent());
 
-      const result = await inBash(join(repoRoot, "main"), "garden cd && pwd");
+      const result = await inBash(join(repoRoot, "main"), "grove cd && pwd");
 
       expect(result.stdout.trim()).toBe(repoRoot);
     });
@@ -83,7 +83,7 @@ onPosix(
     await withTempRepo(async ({ work, originUrl }) => {
       const { root: repoRoot } = await cloneRepo(work, { url: originUrl, dir: "repo" }, silent());
 
-      const result = await inBash(repoRoot, 'garden cd feat/nope; echo "code=$? at=$(pwd)"');
+      const result = await inBash(repoRoot, 'grove cd feat/nope; echo "code=$? at=$(pwd)"');
 
       // `path` failed, so the wrapper returned its code without moving anywhere.
       expect(result.stdout.trim()).toBe(`code=3 at=${repoRoot}`);
@@ -99,11 +99,11 @@ onPosix(
     await withTempRepo(async ({ work, originUrl }) => {
       const { root: repoRoot } = await cloneRepo(work, { url: originUrl, dir: "repo" }, silent());
 
-      const list = await inBash(repoRoot, "garden list");
+      const list = await inBash(repoRoot, "grove list");
       expect(list.code).toBe(0);
       expect(list.stdout).toContain("main");
 
-      const bad = await inBash(repoRoot, "garden wroktree; echo code=$?");
+      const bad = await inBash(repoRoot, "grove wroktree; echo code=$?");
       expect(bad.stdout.trim()).toBe("code=2");
     });
   },
@@ -113,20 +113,20 @@ onPosix(
 // The one thing the emitted function must never contain: the virtual path a
 // compiled binary calls its own entry script. It exists for no other process.
 test("a compiled binary is recognised by its virtual entry path", () => {
-  expect(isCompiledMain("/$bunfs/root/garden")).toBe(true);
-  expect(isCompiledMain("B:\\~BUN\\root\\garden.exe")).toBe(true);
-  expect(isCompiledMain("/Users/somebody/src/garden/src/cli.tsx")).toBe(false);
+  expect(isCompiledMain("/$bunfs/root/grove")).toBe(true);
+  expect(isCompiledMain("B:\\~BUN\\root\\grove.exe")).toBe(true);
+  expect(isCompiledMain("/Users/somebody/src/grove/src/cli.tsx")).toBe(false);
 });
 
 test("the function reaches back by the spelling that printed it", () => {
-  // Not a `garden` it hopes is on PATH: the running runtime, quoted, so a bare
+  // Not a `grove` it hopes is on PATH: the running runtime, quoted, so a bare
   // checkout with nothing installed still round-trips.
   expect(shellInit("zsh")).toContain(`'${process.execPath}'`);
-  expect(shellInit("zsh")).not.toContain("command garden");
+  expect(shellInit("zsh")).not.toContain("command grove");
   expect(shellInit("zsh")).toBe(shellInit("bash"));
-  expect(shellInit("fish")).toContain("function garden");
+  expect(shellInit("fish")).toContain("function grove");
   // The seam the app writes through, present in every dialect.
   for (const shell of ["zsh", "fish"] as const) {
-    expect(shellInit(shell)).toContain("GARDEN_CD_FILE");
+    expect(shellInit(shell)).toContain("GROVE_CD_FILE");
   }
 });

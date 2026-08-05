@@ -29,7 +29,7 @@ export type GlobalOptions = {
   readonly headless: boolean;
 };
 
-export type GardenCommand =
+export type GroveCommand =
   | {
       readonly name: "clone";
       readonly url: string;
@@ -44,7 +44,7 @@ export type GardenCommand =
       readonly fetch: boolean;
       readonly push: boolean;
       readonly setup: boolean;
-      /** `--trust`: run `.garden.toml`'s commands, having read them. */
+      /** `--trust`: run `.grove.toml`'s commands, having read them. */
       readonly trust: boolean;
     }
   | { readonly name: "list" }
@@ -71,9 +71,9 @@ export type GardenCommand =
     };
 
 export type CliCommand =
-  | { readonly kind: "run"; readonly command: GardenCommand; readonly global: GlobalOptions }
+  | { readonly kind: "run"; readonly command: GroveCommand; readonly global: GlobalOptions }
   /**
-   * A bare `garden`: open the interactive screen.
+   * A bare `grove`: open the interactive screen.
    *
    * `usage` travels with it because the screen needs a terminal — piped, or
    * `--headless`, the entry point prints this instead.
@@ -108,15 +108,15 @@ function text(output: string): CliCommand {
 }
 
 function unknownSubcommand(name: string): CliCommand {
-  // `garden cd` reaching the binary means the shell function is not installed —
+  // `grove cd` reaching the binary means the shell function is not installed —
   // a child process cannot move its parent shell, so the answer is the one
   // line that installs the function, not a list of commands that are not it.
   if (name === "cd") {
     return {
       kind: "error",
       message:
-        "`garden cd` is a shell function, and it is not installed in this shell.\n" +
-        'Add to your shell\'s rc file:  eval "$(garden shell-init zsh)"   # or bash, fish',
+        "`grove cd` is a shell function, and it is not installed in this shell.\n" +
+        'Add to your shell\'s rc file:  eval "$(grove shell-init zsh)"   # or bash, fish',
     };
   }
 
@@ -147,7 +147,7 @@ function buildCommand(
   spec: SubcommandSpec,
   values: ParsedValues,
   positionals: readonly string[],
-): CliCommand | GardenCommand {
+): CliCommand | GroveCommand {
   // The usage strings in `help.ts` are the contract; these checks enforce the
   // same arity so a typo lands as "wrong number of arguments" rather than as a
   // branch named after a flag the user misspelled.
@@ -243,10 +243,10 @@ function takesNextValue(token: string): boolean {
  * Splits global flags written *before* the subcommand from the rest.
  *
  * `-C` is spelled after git's own, and `git -C dir status` puts it first — so
- * that is where people type it. Supporting only `garden list -C dir` would be a
+ * that is where people type it. Supporting only `grove list -C dir` would be a
  * wart in exactly the flag most likely to be reached for out of habit.
  *
- * The scan has to know which flags take a value, or `garden -C repo list` would
+ * The scan has to know which flags take a value, or `grove -C repo list` would
  * read `repo` as the subcommand.
  */
 function splitLeadingGlobals(argv: readonly string[]): {
@@ -295,7 +295,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
     }
   }
 
-  // Answered before a subcommand is required, so `garden --help` and `garden -v` work.
+  // Answered before a subcommand is required, so `grove --help` and `grove -v` work.
   if (bool(leadingValues, "help")) return text(formatGlobalHelp());
   if (bool(leadingValues, "version")) return text(version);
 
@@ -354,7 +354,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
     return usageError(spec, error instanceof Error ? error.message : String(error));
   }
 
-  // Checked before arity so `garden add --help` explains itself instead of
+  // Checked before arity so `grove add --help` explains itself instead of
   // complaining about the branch name it is missing.
   if (bool(values, "help")) return text(formatSubcommandHelp(spec));
   if (bool(values, "version")) return text(version);
@@ -372,7 +372,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   if ("kind" in built) return built;
 
   // Written either side of the subcommand; the later spelling wins, which is
-  // what `garden -C a list -C b` reads as.
+  // what `grove -C a list -C b` reads as.
   const global = { ...leadingValues, ...values };
 
   return {

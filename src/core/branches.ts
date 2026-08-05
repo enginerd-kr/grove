@@ -1,4 +1,4 @@
-import { GardenError } from "./errors.ts";
+import { GroveError } from "./errors.ts";
 import { gitOutput, gitSucceeds, runGit } from "./git.ts";
 
 /** Questions about refs, asked of the bare repository — and the one call that refreshes them. */
@@ -73,7 +73,7 @@ export async function defaultBranch(bare: string): Promise<string> {
   });
 
   if (result.code !== 0) {
-    throw new GardenError("git-failed", `cannot tell which branch ${REMOTE} considers default`, {
+    throw new GroveError("git-failed", `cannot tell which branch ${REMOTE} considers default`, {
       hint: `run \`git -C ${bare} remote set-head ${REMOTE} --auto\``,
     });
   }

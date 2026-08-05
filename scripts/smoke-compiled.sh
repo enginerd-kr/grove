@@ -4,7 +4,7 @@
 # function must call back by the binary's own path, never the virtual
 # /$bunfs entry the bundle knows itself by.
 #
-# Usage: scripts/smoke-compiled.sh dist/compile/<target>/garden
+# Usage: scripts/smoke-compiled.sh dist/compile/<target>/grove
 # Only the target this machine can execute, so CI runs it on linux-x64 and a
 # release is hand-checked on darwin before the tap learns about it.
 set -euo pipefail
@@ -25,7 +25,7 @@ fi
 
 # The whole loop, through the binary itself: clone a managed repo, install the
 # wrapper in a real bash, list through it, and land in the repo root with
-# `garden cd`. A plain `git init` repo will not do — cd and list only answer
+# `grove cd`. A plain `git init` repo will not do — cd and list only answer
 # inside a repository this tool laid out.
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -44,8 +44,8 @@ git init -q --initial-branch=main "$work/seed"
 bash -eu -c "
   eval \"\$('$bin' shell-init bash)\"
   cd '$work/repo/main'
-  garden list >/dev/null
-  garden cd
+  grove list >/dev/null
+  grove cd
   [ \"\$PWD\" = \"\$(cd '$work/repo' && pwd -P)\" ] || { echo 'cd landed elsewhere' >&2; exit 1; }
 "
 

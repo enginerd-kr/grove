@@ -4,7 +4,7 @@
 instead of the DOM. `Box` is flexbox (via Yoga), `Text` is the only leaf that may contain
 strings.
 
-Two things live here. `app/` is the interactive screen a bare `garden` opens — the worktrees, with
+Two things live here. `app/` is the interactive screen a bare `grove` opens — the worktrees, with
 the five commands bound to keys. `components/` is the parts list, shared with
 `src/report/ink-reporter.tsx`, which draws progress for a one-shot command and nothing else.
 
@@ -31,8 +31,8 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   *sliced* to the rows left over after the header, activity, and key bar — a layout that only
   works because something computes how many rows fit rather than leaving it to the renderer to
   overflow.
-- **Two screens, not another `mode`.** `Setup` is what a bare `garden` opens where discovery
-  found nothing, and `run.tsx`'s `Garden` swaps it for `App` the moment it produces a repository.
+- **Two screens, not another `mode`.** `Setup` is what a bare `grove` opens where discovery
+  found nothing, and `run.tsx`'s `Grove` swaps it for `App` the moment it produces a repository.
   They are separate components because they share nothing but the banner: there is no list to
   move a cursor through in `Setup`, and no repository for `App`'s keys to act on until `Setup`
   has made one — which is also why `createWorktreeService` cannot be built until then. Only
@@ -68,7 +68,7 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   next `r` would be aimed at something else. `move` still resolves inside the state updater, so
   two arrow presses in one frame both count; the last index is kept as the fallback for when the
   selected row is the one that vanished.
-- **The services are memoised in `Garden`.** Not a micro-optimisation: `App` fetches when its
+- **The services are memoised in `Grove`.** Not a micro-optimisation: `App` fetches when its
   service changes, so a fresh object per render would be a `git fetch` per render.
 - **One `DriftCell` draws both drift columns.** `origin` and `main` answer different questions —
   is there anything to push, and has the trunk moved out from under you — but `↑2 ↓1` means the
@@ -182,7 +182,7 @@ way — arrows, `a` and a typed branch name, `r` then `y` — against a stubbed 
 **A PTY** (`app/App.e2e.test.ts`, `src/report/ink-reporter.e2e.test.ts`) runs the real binary
 via `Bun.spawn({ terminal })` — native since Bun 1.3.5, so no `node-pty`, whose C++ addon Bun
 cannot load. It exists because `ink-testing-library` fakes stdout with `columns` pinned to 100
-and no `isTTY`, and both "is the Ink reporter selected at all" and "does a bare `garden` open
+and no `isTTY`, and both "is the Ink reporter selected at all" and "does a bare `grove` open
 anything" are answers that depend on `isTTY`. POSIX only — the tests skip themselves on Windows.
 
 Three details in `e2e-utils.ts` are load-bearing and were each found the hard way:

@@ -1,5 +1,5 @@
 import { join, relative, resolve, sep } from "node:path";
-import { GardenError } from "./errors.ts";
+import { GroveError } from "./errors.ts";
 import { pathExists } from "./fs.ts";
 import { gitOutput, runGit } from "./git.ts";
 
@@ -178,7 +178,7 @@ export function parseStatus(output: string): WorktreeStatus {
  *
  * git reports a mid-rebase worktree as detached, because HEAD genuinely is. That
  * is true and useless: the user still calls it `feat/login`, and without this
- * `garden sync feat/login` would answer "no worktree matches feat/login" at exactly
+ * `grove sync feat/login` would answer "no worktree matches feat/login" at exactly
  * the moment they most need the tool to know where they are. The branch name is
  * kept in the rebase state directory, so it is read back from there.
  */
@@ -271,14 +271,14 @@ export function resolveTarget(
 
   const ambiguous = [...byBranch, ...byDir, ...byPath];
   if (ambiguous.length > 1) {
-    throw new GardenError("usage", `${JSON.stringify(target)} matches more than one worktree`, {
+    throw new GroveError("usage", `${JSON.stringify(target)} matches more than one worktree`, {
       hint: "pass the directory path or the full path",
       details: ambiguous.map((record) => record.path),
     });
   }
 
-  throw new GardenError("not-a-repo", `no worktree matches ${JSON.stringify(target)}`, {
-    hint: "run `garden list` to see what is there",
+  throw new GroveError("not-a-repo", `no worktree matches ${JSON.stringify(target)}`, {
+    hint: "run `grove list` to see what is there",
     details: worktrees.map(
       (record) => `${record.branch ?? "(detached)"}  ${worktreeDir(root, record.path)}`,
     ),

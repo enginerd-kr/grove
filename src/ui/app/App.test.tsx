@@ -113,7 +113,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
         return "1 up-to-date";
       },
       // Nothing waiting by default, which is every repository with no
-      // `.garden.toml` and every one whose file is already trusted: no
+      // `.grove.toml` and every one whose file is already trusted: no
       // question is drawn, and the other tests never see one.
       pendingCommands: async () => [],
       moveTo: async (path) => {
@@ -162,7 +162,7 @@ test("lists the worktrees, marking where you are and where the cursor is", async
   // The welcome, which is the only place the version and the opened folder are
   // said at all — the app took the alternate buffer, so the command that started
   // it is no longer on screen to read them off.
-  expect(frame).toContain(`garden v${version}`);
+  expect(frame).toContain(`grove v${version}`);
   expect(frame).toContain("/repo");
   expect(frame).toContain("3 worktrees · in main");
   expect(frame).toMatch(/worktree\s+origin\s+main\s+state/);
@@ -398,7 +398,7 @@ test("`r` confirms before removing, and `n` means no", async () => {
 
 // The one key that destroys work rather than moving it about, so it asks first
 // and says what it costs — a removed worktree leaves its branch behind and
-// `garden add` brings it back, where this leaves nothing at all.
+// `grove add` brings it back, where this leaves nothing at all.
 test("`x` asks before discarding, and says how much is at stake", async () => {
   const { service, calls } = stub({
     list: async () => [
@@ -467,7 +467,7 @@ test("`x` works on a worktree that is dirty only from untracked files", async ()
 
 // The price of a configuration that travels with the project: `copy` and
 // `link` move files already on the disk, and a command came in with a pull.
-// The screen is the only surface that can hold the question — `garden add` has
+// The screen is the only surface that can hold the question — `grove add` has
 // to behave the same in a pipe as under a terminal — so it asks here.
 test("`a` asks about the commands the new worktree's file wants to run", async () => {
   const { service, calls } = stub({
@@ -975,7 +975,7 @@ test("output too long for the room says how much went above it", async () => {
   expect(shown).toContain("line 200");
   // And the screen still fits: the list is not squeezed out to make room, and
   // nothing is drawn over the banner.
-  expect(shown).toContain("garden v");
+  expect(shown).toContain("grove v");
   expect(shown).toMatch(/▸ \* main/);
 });
 
