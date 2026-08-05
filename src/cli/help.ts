@@ -195,7 +195,8 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     args: "[target]",
     summary: "fetch, then bring a worktree up to date with the default branch",
     description: [
-      "Fast-forwards the default branch's own worktree. Every other one is",
+      "Fast-forwards the default branch's worktree, or — when it has commits",
+      "of its own — rebases them on top and pushes plainly. Every other one is",
       "rebased onto its own remote first and then onto the default branch, and",
       "the result is force-pushed back with --force-with-lease. Stops without",
       "changing anything if the worktree is dirty.",

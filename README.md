@@ -276,9 +276,13 @@ reflog remembers. Finish or abort the rebase first.
 
 ### Sync
 
-`sync` fetches, then **fast-forwards** the default branch's worktree. The asymmetry is
-deliberate: rebasing `main` onto `origin/main` would rewrite local commits nobody asked to have
-rewritten, so a diverged default branch is refused instead.
+`sync` fetches, then brings the default branch's worktree up to date: a **fast-forward** when
+it is merely behind, and `pull --rebase` when it has commits of its own. A commit sitting only
+on the local trunk already happened — somebody made it, and a tool that refused to sync until
+it was disowned would be demanding an undo of an event. So it is carried: replayed on top of
+what the remote gained, then pushed back **plainly**. No force spelling is ever aimed at the
+trunk — after the rebase the branch is strictly ahead, so a plain push suffices, and a
+protected remote saying no lands as a warning while the local rebase stands.
 
 Every other worktree goes through three steps, in this order:
 
@@ -687,7 +691,7 @@ stderr.
 | 1    | a bug in this tool                                                |
 | 2    | usage — bad flags, wrong argument count, an unusable name         |
 | 3    | no managed repository found from here                             |
-| 4    | refused: dirty worktree, unsafe removal, diverged default branch  |
+| 4    | refused: dirty worktree, unsafe removal                           |
 | 5    | a rebase or merge conflicted                                      |
 | 6    | conflicting state: directory exists, branch checked out elsewhere |
 | 7    | git failed for a reason we could not classify                     |

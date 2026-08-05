@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { createPlainReporter } from "../../report/reporter.ts";
 import type { GardenError } from "../errors.ts";
@@ -19,6 +20,7 @@ async function withRepo(
   body: (context: {
     repo: RepoPaths;
     work: string;
+    originPath: string;
     advanceRemote: (file: string, contents: string) => Promise<void>;
     advanceBranch: (branch: string, file: string, contents: string) => Promise<void>;
   }) => Promise<void>,
@@ -55,7 +57,7 @@ async function withRepo(
       await seedGit(other, ["checkout", "main"]);
     };
 
-    await body({ repo, work, advanceRemote, advanceBranch });
+    await body({ repo, work, originPath, advanceRemote, advanceBranch });
   });
 }
 
@@ -123,27 +125,72 @@ onPosix(
   40_000,
 );
 
+// A commit sitting only on the local trunk already happened — somebody made
+// it, and refusing to sync until it is disowned would be demanding an undo of
+// an event. `pull --rebase` semantics: theirs underneath, yours replayed on
+// top, pushed back plainly.
 onPosix(
-  "a diverged default branch is refused rather than rewritten",
+  "a diverged default branch is rebased on top of the remote and pushed plainly",
   async () => {
     await withRepo(async ({ repo, work, advanceRemote }) => {
       const main = join(repo.root, "main");
       await commitIn(main, "local-only.txt", "local\n");
       await advanceRemote("theirs.txt", "theirs\n");
-      const before = await gitOutput(["rev-parse", "HEAD"], { cwd: main });
 
       const outcomes = await syncWorktrees(
         repo,
         work,
-        { target: "main", all: false, abortOnConflict: true, push: false },
+        { target: "main", all: false, abortOnConflict: true, push: true },
         silent(),
       );
 
-      expect(outcomes[0]?.kind).toBe("skipped");
-      expect(outcomes[0]?.reason).toContain("local commits");
-      // Untouched: the point of --ff-only is that a refusal changes nothing.
-      expect(await gitOutput(["rev-parse", "HEAD"], { cwd: main })).toBe(before);
-      expect(failureFor(outcomes)?.code).toBe("refused");
+      expect(outcomes[0]?.kind).toBe("rebased");
+      expect(outcomes[0]?.pushed).toBe(true);
+      expect(failureFor(outcomes)).toBeUndefined();
+
+      // A-B-C-D-X: the remote's commit underneath, the local one replayed on top.
+      const subjects = await gitOutput(["log", "--format=%s", "-2"], { cwd: main });
+      expect(subjects.split("\n")).toEqual(["local: local-only.txt", "remote: theirs.txt"]);
+
+      // The plain push completed the thought: origin/main is exactly local main.
+      expect(await gitOutput(["rev-parse", "HEAD"], { cwd: main })).toBe(
+        await gitOutput(["rev-parse", `origin/main`], { cwd: main }),
+      );
+    });
+  },
+  40_000,
+);
+
+// The one spelling the trunk must never see. The lease-guarded force is for
+// branches a rebase rewrote; a rebased trunk is strictly ahead, so a plain
+// push suffices — and a protected remote saying no lands as a warning while
+// the local rebase stands.
+onPosix(
+  "a trunk push the remote refuses is a warning, not a failure",
+  async () => {
+    await withRepo(async ({ repo, work, advanceRemote, originPath }) => {
+      const main = join(repo.root, "main");
+      await commitIn(main, "local-only.txt", "local\n");
+      await advanceRemote("theirs.txt", "theirs\n");
+      // Stand in for branch protection: a pre-receive hook that refuses.
+      const hook = join(originPath, "hooks", "pre-receive");
+      await Bun.write(hook, "#!/bin/sh\necho protected >&2\nexit 1\n");
+      await chmod(hook, 0o755);
+
+      const outcomes = await syncWorktrees(
+        repo,
+        work,
+        { target: "main", all: false, abortOnConflict: true, push: true },
+        silent(),
+      );
+
+      expect(outcomes[0]?.kind).toBe("rebased");
+      expect(outcomes[0]?.pushed).toBe(false);
+      expect(outcomes[0]?.pushRefusal).toBeDefined();
+      // The rebase stands: local main carries the commit on top of theirs.
+      const subjects = await gitOutput(["log", "--format=%s", "-2"], { cwd: main });
+      expect(subjects.split("\n")).toEqual(["local: local-only.txt", "remote: theirs.txt"]);
+      expect(failureFor(outcomes)).toBeUndefined();
     });
   },
   40_000,

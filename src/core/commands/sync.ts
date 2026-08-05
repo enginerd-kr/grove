@@ -135,35 +135,9 @@ async function syncOne(
   const onto = `${REMOTE}/${trunk}`;
   const step = reporter.step(`syncing ${name}`);
 
-  // The default branch is fast-forwarded rather than rebased. Rebasing `main`
-  // onto `origin/main` would rewrite local commits nobody asked to have
-  // rewritten — the one case where the safe operation and the useful one differ.
-  if (record.branch === trunk) {
-    const result = await runGit(["merge", "--ff-only", onto], { cwd: record.path });
-
-    if (result.code !== 0) {
-      step.fail(`${name} has diverged from ${onto}`);
-      return skip(`local commits on ${trunk} that ${onto} does not have`);
-    }
-
-    return settle(record, name, before, step, trunk);
-  }
-
-  /**
-   * Its own remote first, then the trunk.
-   *
-   * The order is the whole of why this works. Rebasing onto the trunk rewrites
-   * the branch's commits, so a colleague's commit sitting on `origin/<branch>`
-   * would be left behind — and the force-push at the end would then be refused
-   * by `--force-if-includes`, correctly, for trying to drop it. Taking their
-   * work first means the rebase replays ours on top of theirs and the push has
-   * nothing to destroy.
-   */
-  for (const base of [status.upstream, onto]) {
-    if (base === undefined) continue;
-
+  const rebaseOnto = async (base: string): Promise<SyncOutcome | undefined> => {
     const result = await runGit(["rebase", base], { cwd: record.path });
-    if (result.code === 0) continue;
+    if (result.code === 0) return undefined;
 
     const conflicts = await conflictedPaths(record.path);
     if (options.abortOnConflict) {
@@ -181,11 +155,55 @@ async function syncOne(
         : `rebase onto ${base} conflicted and was left in place to resolve`,
       conflicts,
     };
+  };
+
+  /**
+   * The default branch: a fast-forward when it is merely behind, `pull
+   * --rebase` when it has commits of its own.
+   *
+   * The commits are the deciding fact. A commit sitting only on the local
+   * trunk already happened — somebody made it, it is theirs, and a tool that
+   * refused to sync until it was disowned would be demanding an undo of an
+   * event. So it is carried: replayed on top of what the remote gained, then
+   * pushed back **plainly**. No force spelling is ever aimed at the trunk —
+   * after the rebase the branch is strictly ahead, so a plain push suffices,
+   * and if the remote is protected the refusal arrives as a warning while the
+   * local rebase stands, the same way a contended feature branch is reported.
+   */
+  if (record.branch === trunk) {
+    const ff = await runGit(["merge", "--ff-only", onto], { cwd: record.path });
+    if (ff.code === 0) return settle(record, name, before, step, "fast-forwarded");
+
+    const conflicted = await rebaseOnto(onto);
+    if (conflicted) return conflicted;
+
+    const published = await publish(record, name, onto, options, reporter, { force: false });
+
+    return { ...(await settle(record, name, before, step, "rebased")), ...published };
   }
 
-  const published = await publish(record, name, status.upstream, options, reporter);
+  /**
+   * Its own remote first, then the trunk.
+   *
+   * The order is the whole of why this works. Rebasing onto the trunk rewrites
+   * the branch's commits, so a colleague's commit sitting on `origin/<branch>`
+   * would be left behind — and the force-push at the end would then be refused
+   * by `--force-if-includes`, correctly, for trying to drop it. Taking their
+   * work first means the rebase replays ours on top of theirs and the push has
+   * nothing to destroy.
+   */
+  for (const base of [status.upstream, onto]) {
+    if (base === undefined) continue;
 
-  return { ...(await settle(record, name, before, step, trunk)), ...published };
+    const conflicted = await rebaseOnto(base);
+    if (conflicted) return conflicted;
+  }
+
+  const published = await publish(record, name, status.upstream, options, reporter, {
+    force: true,
+  });
+
+  return { ...(await settle(record, name, before, step, "rebased")), ...published };
 }
 
 /** The half of a rebase workflow that a rebase does not do. */
@@ -214,6 +232,13 @@ async function publish(
   upstream: string | undefined,
   options: SyncOptions,
   reporter: Reporter,
+  /**
+   * The lease-guarded force is for branches a rebase has just rewritten.
+   * The trunk never gets it: after its rebase it is strictly ahead, a plain
+   * push suffices, and a force spelling aimed at a trunk is a habit not worth
+   * teaching a tool.
+   */
+  { force }: { readonly force: boolean },
 ): Promise<Published> {
   if (!options.push || upstream === undefined) return {};
 
@@ -228,7 +253,12 @@ async function publish(
 
   const step = reporter.step(`pushing ${name}`);
   const result = await runGit(
-    ["push", "--force-with-lease", "--force-if-includes", REMOTE, record.branch ?? "HEAD"],
+    [
+      "push",
+      ...(force ? ["--force-with-lease", "--force-if-includes"] : []),
+      REMOTE,
+      record.branch ?? "HEAD",
+    ],
     { cwd: record.path },
   );
 
@@ -261,7 +291,7 @@ async function settle(
   name: string,
   before: string,
   step: { succeed: (text?: string) => void },
-  trunk: string,
+  moved: "fast-forwarded" | "rebased",
 ): Promise<SyncOutcome> {
   const after = await gitOutput(["rev-parse", "HEAD"], { cwd: record.path });
 
@@ -273,12 +303,7 @@ async function settle(
 
   step.succeed(`${name} updated`);
 
-  return {
-    path: record.path,
-    dir: name,
-    branch: record.branch,
-    kind: record.branch === trunk ? "fast-forwarded" : "rebased",
-  };
+  return { path: record.path, dir: name, branch: record.branch, kind: moved };
 }
 
 /** The files git stopped on, captured before the rebase is rolled back. */
