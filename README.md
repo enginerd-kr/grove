@@ -315,7 +315,9 @@ you stood into it, and the function cds after the screen closes — so `?login�
 find-go-and-land in five keys. Without the function installed enter still works inside the app;
 only the landing is missing, and `remove` keeps measuring against where your shell really is,
 which is what keeps it from stranding a shell nothing can move. Everything that is not `cd`
-passes straight through, exit code and all, so scripts wrapping grove see no difference.
+passes straight through, exit code and all, so scripts wrapping grove see no difference. And
+the app says so itself: opened with nothing listening, the first message on screen is the one
+line that installs the function.
 
 The root default is not decoration. `remove` refuses to delete the directory your shell is
 standing in — deleting it would strand the shell somewhere that no longer exists, with every

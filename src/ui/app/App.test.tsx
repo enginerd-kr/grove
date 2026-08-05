@@ -600,6 +600,37 @@ test("esc closes the PR popup with nothing proposed", async () => {
   expect(calls.proposed).toEqual([]);
 });
 
+// Half of the screen's promise — q landing your shell where enter walked — is
+// quietly unavailable without the shell function, and nothing else would ever
+// say so. The tip opens the session and the first action reclaims the slot.
+test("opening without a listening shell tips the one line that installs it", async () => {
+  const { service } = stub();
+  const ui = mount(service);
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("shell-init"));
+  expect(frame).toContain("the shell function is not installed");
+  expect(frame).toContain('eval "$(grove shell-init zsh)"');
+});
+
+test("opening with a listening shell says nothing about it", async () => {
+  const { service } = stub();
+  const instance = render(
+    <App
+      service={service}
+      repoRoot="/repo"
+      store={new LineStore()}
+      refreshMs={100000}
+      onCd={() => {}}
+    />,
+  );
+
+  const frame = await waitFor(
+    () => plain(instance.lastFrame()),
+    (f) => f.includes("login"),
+  );
+  expect(frame).not.toContain("shell-init");
+});
+
 // Enter moves the standpoint inside the app — the whole reason it exists is
 // that "cd somewhere else first" should be one keystroke that never leaves the
 // screen. The real shell is `q`'s business, not enter's.

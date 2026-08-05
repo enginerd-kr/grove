@@ -609,6 +609,18 @@ export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFR
       try {
         const summaries = await service.list();
         if (live) setRows(summaries);
+        // With no shell function listening, half of what this screen does is
+        // quietly unavailable — q cannot land the shell where enter walked —
+        // and nothing on screen would ever say so. A rule that hides is a rule
+        // nobody can learn, so the one line that installs it opens the
+        // session, in the message slot the first action reclaims.
+        if (live && onCd === undefined) {
+          setMessage({
+            kind: "info",
+            text: "tip: the shell function is not installed, so q cannot land your shell where you stood",
+            hint: `install once: eval "$(grove shell-init zsh)" in your shell's rc file — or bash, fish`,
+          });
+        }
       } catch (error) {
         if (live) setMessage(messageFor(error));
       } finally {
@@ -619,7 +631,7 @@ export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFR
     return () => {
       live = false;
     };
-  }, [service]);
+  }, [service, onCd]);
 
   // Where the shell really is: the standpoint at launch, for `q` to compare
   // against before deciding the shell needs moving at all.
