@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Drift } from "../../core/branches.ts";
@@ -95,6 +96,15 @@ type Props = {
   readonly store: LineStore;
   /** Ctrl-C while busy: stop the git child before the screen goes away. */
   readonly onCancel?: () => void;
+  /**
+   * Where enter takes the shell, when there is a shell function to catch it.
+   *
+   * Present only when the app was started through the wrapper `shell-init`
+   * installs — it hands over a path, the wrapper cds to it after the screen
+   * closes. Absent, enter stays inert and its hint never appears: a key that
+   * quit the app to accomplish nothing would be a trap, not a shortcut.
+   */
+  readonly onCd?: (path: string) => Promise<void> | void;
   /** How often to refresh, in ms. Defaults to `REFRESH_MS`; tests drive it faster. */
   readonly refreshMs?: number;
 };
@@ -400,7 +410,7 @@ function Row({
   );
 }
 
-export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS }: Props) {
+export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFRESH_MS }: Props) {
   const { exit } = useApp();
   const { columns, rows: terminalRows } = useWindowSize();
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
@@ -610,6 +620,11 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       live = false;
     };
   }, [service]);
+
+  // Where the shell really is: the standpoint at launch, for `q` to compare
+  // against before deciding the shell needs moving at all.
+  const startedAt = useRef<string | undefined>(undefined);
+  if (startedAt.current === undefined) startedAt.current = service.standpoint();
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -871,6 +886,34 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
     }
     /**
+     * Enter moves *you*, inside the app: the standpoint walks to the row the
+     * cursor is on, the app stays open, and everything that depends on where
+     * you stand follows — the `*` marker, and above all the refusal to remove
+     * the worktree you are standing in, which stops applying the moment you
+     * step out of it. That is the whole reason this key exists: "cd somewhere
+     * else first" is now one keystroke that never leaves the screen.
+     *
+     * The real shell has not moved — it cannot be moved from here — so `q` is
+     * where the two meet: with the shell function listening, quitting hands it
+     * the standpoint and the shell lands where you stood. Without it the shell
+     * stays put, and `remove` keeps measuring against where it really is.
+     *
+     * A folder is a real directory on disk, so it is a destination too.
+     */
+    if (key.return && current !== undefined) {
+      // Group keys carry their trailing slash (it is how they are drawn); a
+      // path handed around as a location should not.
+      const destination =
+        current.kind === "group"
+          ? join(repoRoot, current.key.replace(/\/+$/, ""))
+          : current.summary.path;
+
+      return void perform(`moving to ${current.label ?? destination}`, () =>
+        service.moveTo(destination),
+      );
+    }
+
+    /**
      * `p` proposes, behind a popup that says what it would do before anybody
      * has typed a word. It sits on any branch that is not the trunk: whether
      * there is anything to propose is part of what its popup answers.
@@ -888,7 +931,20 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
 
       return setMode({ kind: "prompt", value: filter });
     }
-    if (input === "q" || key.escape) return exit();
+    if (input === "q" || key.escape) {
+      // The handoff: the shell function reads this file after the app closes.
+      // Only worth writing when the standpoint actually moved — an empty file
+      // is the wrapper's cue to leave the shell where it already is.
+      const standpoint = service.standpoint();
+      if (onCd !== undefined && standpoint !== startedAt.current) {
+        return void (async () => {
+          await onCd(standpoint);
+          exit();
+        })();
+      }
+
+      return exit();
+    }
   });
 
   // The heading of the trunk column, and the branch it compares against. Read
@@ -937,6 +993,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       return [
         { keys: "↑↓", action: "move" },
         { keys: "←→", action: current.collapsed ? "open" : "fold" },
+        { keys: "enter", action: "go" },
         { keys: "?", action: "filter · !git" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
@@ -950,6 +1007,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     // would be a menu entry whose whole effect is to say "nothing to discard".
     return [
       { keys: "↑↓", action: "move" },
+      { keys: "enter", action: "go" },
       { keys: "?", action: "filter · !git" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },

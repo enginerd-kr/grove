@@ -264,6 +264,26 @@ test("reset without a worktree is a usage error rather than a guess", () => {
   expect(parsed.kind === "error" && parsed.message).toContain("needs a worktree");
 });
 
+test("path's target is optional: nothing means the repo root", () => {
+  expect(run(["path"])).toEqual({ name: "path", target: undefined });
+  expect(run(["path", "feat/login"])).toHaveProperty("target", "feat/login");
+});
+
+test("shell-init takes exactly the shells it has scripts for", () => {
+  expect(run(["shell-init", "zsh"])).toEqual({ name: "shell-init", shell: "zsh" });
+  expect(parseCliArgs(["shell-init"]).kind).toBe("error");
+  expect(parseCliArgs(["shell-init", "tcsh"]).kind).toBe("error");
+});
+
+// `garden cd` reaching the binary means the function is not installed, and the
+// useful answer is the line that installs it — not a list of commands.
+test("a bare `garden cd` explains the shell function instead of playing dumb", () => {
+  const parsed = parseCliArgs(["cd", "feat/login"]);
+
+  expect(parsed.kind).toBe("error");
+  expect(parsed).toHaveProperty("message", expect.stringContaining("shell-init"));
+});
+
 test("every command in the table parses without a special case", () => {
   // Guards the declarative table against gaining an entry that `buildCommand`
   // has no arm for, which would otherwise only show up at runtime.
@@ -273,6 +293,8 @@ test("every command in the table parses without a special case", () => {
     list: ["list"],
     remove: ["remove", "target"],
     reset: ["reset", "target"],
+    path: ["path"],
+    "shell-init": ["shell-init", "zsh"],
     sync: ["sync"],
   };
 

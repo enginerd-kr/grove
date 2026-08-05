@@ -48,6 +48,7 @@ type GardenProps = {
   readonly cwd: string;
   readonly store: LineStore;
   readonly reporter: Reporter;
+  readonly onCd?: (path: string) => Promise<void>;
 };
 
 /**
@@ -57,7 +58,7 @@ type GardenProps = {
  * before its screen is due: `createWorktreeService` needs the repository that
  * `Setup` is in the middle of making.
  */
-function Garden({ found, folder, inPlace, cwd, store, reporter }: GardenProps) {
+function Garden({ found, folder, inPlace, cwd, store, reporter, onCd }: GardenProps) {
   const [paths, setPaths] = useState(found);
 
   // Memoised, and not as a micro-optimisation: `App` starts a fetch when its
@@ -68,8 +69,15 @@ function Garden({ found, folder, inPlace, cwd, store, reporter }: GardenProps) {
     [folder, inPlace, reporter],
   );
   const worktrees = useMemo(
-    () => (paths === undefined ? undefined : createWorktreeService(paths, cwd, reporter)),
-    [paths, cwd, reporter],
+    () =>
+      paths === undefined
+        ? undefined
+        : // `shellFollows`: with the wrapper listening, quitting relocates the
+          // shell to wherever enter walked, so the removal safety check may
+          // measure against the standpoint. Without it the real shell never
+          // moves, and the launch directory stays the one that must survive.
+          createWorktreeService(paths, cwd, reporter, { shellFollows: onCd !== undefined }),
+    [paths, cwd, reporter, onCd],
   );
 
   if (paths === undefined || worktrees === undefined) {
@@ -85,7 +93,15 @@ function Garden({ found, folder, inPlace, cwd, store, reporter }: GardenProps) {
     );
   }
 
-  return <App service={worktrees} repoRoot={paths.root} store={store} onCancel={killRunningGit} />;
+  return (
+    <App
+      service={worktrees}
+      repoRoot={paths.root}
+      store={store}
+      onCancel={killRunningGit}
+      onCd={onCd}
+    />
+  );
 }
 
 export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<void> {
@@ -96,6 +112,18 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
   const inPlace = found === undefined && (await isEmptyOrMissing(folder));
 
   const store = new LineStore();
+
+  // The wrapper `shell-init` installs points this at a temp file it will read
+  // after the app exits — how "enter means cd" crosses the process boundary a
+  // child cannot cross itself. A newline goes with the path so `cat` in the
+  // wrapper reads a whole line, and unset means no wrapper: enter stays inert.
+  const cdFile = process.env.GARDEN_CD_FILE;
+  const onCd =
+    cdFile === undefined || cdFile.length === 0
+      ? undefined
+      : async (path: string) => {
+          await Bun.write(cdFile, `${path}\n`);
+        };
 
   // Results have nowhere else to go in an app: there is no pipeline waiting on
   // stdout, so a command's output becomes another progress line.
@@ -112,6 +140,7 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
       cwd={cwd}
       store={store}
       reporter={reporter}
+      onCd={onCd}
     />,
     {
       // A screen, not a scroll: the app takes the alternate buffer, so quitting

@@ -9,6 +9,7 @@ import {
   GLOBAL_FLAGS,
   SUBCOMMANDS,
 } from "./help.ts";
+import { isShell, SHELLS } from "./shell-init.ts";
 
 /**
  * Argument parsing, kept apart from the process it drives.
@@ -47,6 +48,8 @@ export type GardenCommand =
       readonly trust: boolean;
     }
   | { readonly name: "list" }
+  | { readonly name: "path"; readonly target?: string }
+  | { readonly name: "shell-init"; readonly shell: string }
   | {
       readonly name: "reset";
       readonly target: string;
@@ -105,6 +108,18 @@ function text(output: string): CliCommand {
 }
 
 function unknownSubcommand(name: string): CliCommand {
+  // `garden cd` reaching the binary means the shell function is not installed —
+  // a child process cannot move its parent shell, so the answer is the one
+  // line that installs the function, not a list of commands that are not it.
+  if (name === "cd") {
+    return {
+      kind: "error",
+      message:
+        "`garden cd` is a shell function, and it is not installed in this shell.\n" +
+        'Add to your shell\'s rc file:  eval "$(garden shell-init zsh)"   # or bash, fish',
+    };
+  }
+
   return {
     kind: "error",
     message: `unknown command ${JSON.stringify(name)}. Expected one of: ${SUBCOMMANDS.map(
@@ -158,6 +173,20 @@ function buildCommand(
     }
     case "list":
       return { name: "list" };
+    case "path":
+      return { name: "path", target: first };
+    case "shell-init": {
+      if (first === undefined) {
+        return usageError(spec, `${spec.name} needs a shell: ${SHELLS.join(", ")}`);
+      }
+      if (!isShell(first)) {
+        return usageError(
+          spec,
+          `${JSON.stringify(first)} is not a shell this knows; expected ${SHELLS.join(", ")}`,
+        );
+      }
+      return { name: "shell-init", shell: first };
+    }
     case "reset": {
       if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to reset`);
       return {

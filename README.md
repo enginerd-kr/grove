@@ -40,6 +40,8 @@ garden                       # open the worktrees, and run any of the below by k
 garden clone <url> [dir]     # bare-clone a repo and check out its default branch
 garden add <branch>          # give a branch a worktree (tracking or creating it)
 garden list                  # what is here, what state it is in, where you are
+garden path [target]         # print a worktree's directory — no target means the repo root
+garden shell-init <shell>    # the function behind `garden cd` and enter-to-cd
 garden remove <target>       # delete a worktree
 garden reset <target>        # throw away a worktree's uncommitted changes
 garden sync [target]         # fetch, then bring worktrees up to date
@@ -82,6 +84,49 @@ reconstructed, and `--dir` makes it arbitrary anyway. `remove` and `sync` look t
 
 `--dir` accepts a nested path but is validated rather than rewritten: no leading slash, no
 `..`, nothing that would put a worktree outside the repo folder or inside another worktree.
+
+### Going places
+
+A child process cannot move the shell that started it — every tool that seems to (zoxide,
+direnv) is a shell function wearing the tool's name. So the binary answers and the shell moves:
+
+```bash
+cd "$(garden path feat/login)"     # works bare, anywhere
+```
+
+One line in your shell's rc file installs the short spelling:
+
+```bash
+eval "$(garden shell-init zsh)"    # zsh, bash, or fish
+```
+
+The printed function calls back into garden **by the spelling that printed it** — the running
+runtime and entry script, absolute and quoted — not a `garden` it hopes is on PATH. So a bare
+checkout needs nothing installed: `eval "$(bun ~/src/garden/src/cli.tsx shell-init zsh)"` works
+as written, and since the rc line re-prints the function at every shell start, a moved checkout
+heals on the next shell.
+
+```bash
+garden cd feat/login    # cd "$(garden path feat/login)"
+garden cd               # the repo root
+```
+
+In the app, **enter moves *you*, without closing anything**: the standpoint walks to the row
+under the cursor — worktree or folder, both real directories — the `*` marker follows, and the
+refusal to remove the worktree you are standing in stops applying the moment you step out of
+it. "cd somewhere else first" is one keystroke that never leaves the screen. Then `q` is where
+the app and your shell meet: the wrapper hands every run a temp file, quitting writes the place
+you stood into it, and the function cds after the screen closes — so `?login⏎⏎q` is
+find-go-and-land in five keys. Without the function installed enter still works inside the app;
+only the landing is missing, and `remove` keeps measuring against where your shell really is,
+which is what keeps it from stranding a shell nothing can move. Everything that is not `cd`
+passes straight through, exit code and all, so scripts wrapping garden see no difference.
+
+The root default is not decoration. `remove` refuses to delete the directory your shell is
+standing in — deleting it would strand the shell somewhere that no longer exists, with every
+next command failing confusingly — and the refusal says "cd somewhere else first". The root is
+the somewhere: the one directory that is never a worktree, from which anything can be removed.
+`garden cd` with no target is that move.
 
 ### Setup
 

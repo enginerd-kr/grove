@@ -1,3 +1,4 @@
+import { relative } from "node:path";
 import { fetchRemotes } from "../../core/branches.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
@@ -22,6 +23,18 @@ import type { Reporter } from "../../report/reporter.ts";
  */
 export type WorktreeService = {
   readonly list: () => Promise<readonly WorktreeSummary[]>;
+  /**
+   * Move where the service stands, without moving any process at all.
+   *
+   * "Where you are" decides real things — which worktree `*` marks, and above
+   * all which worktree `remove` refuses to delete out from under you. The app
+   * is a resident process, so its standpoint is just state: enter changes it,
+   * every later command reads it, and quitting hands it to the shell function
+   * if one is listening. The OS cwd never moves; nothing here uses it.
+   */
+  readonly moveTo: (path: string) => Promise<string>;
+  /** Where the service currently stands. What `q` hands the shell. */
+  readonly standpoint: () => string;
   /**
    * Refresh the remote-tracking refs, so `↑2 ↓1` means what it says.
    *
@@ -164,11 +177,36 @@ function describeSync(outcomes: readonly { kind: string; dir: string }[]): strin
 
 export function createWorktreeService(
   repo: RepoPaths,
-  cwd: string,
+  initialCwd: string,
   reporter: Reporter,
+  options: { readonly shellFollows?: boolean } = {},
 ): WorktreeService {
+  // The standpoint. `let`, because moving it is the point: every closure below
+  // reads this variable, so one assignment moves the whole service.
+  let cwd = initialCwd;
+
+  /**
+   * What the removal safety check measures against.
+   *
+   * The check exists to protect a shell from being stranded in a deleted
+   * directory. With the shell function listening, quitting relocates the shell
+   * to the standpoint, so the standpoint is the truth. Without it the real
+   * shell never moves however far enter wanders, so the launch directory stays
+   * the one that must not be deleted.
+   */
+  const shellCwd = () => (options.shellFollows === true ? cwd : initialCwd);
+
   return {
     list: () => listWorktreeSummaries(repo, cwd),
+
+    moveTo: async (path) => {
+      cwd = path;
+      const dir = relative(repo.root, path) || ".";
+
+      return `now in ${dir === "." ? "the repo root" : dir}`;
+    },
+
+    standpoint: () => cwd,
 
     fetch: () => fetchRemotes(repo.bare),
 
@@ -198,7 +236,7 @@ export function createWorktreeService(
       // stay on the command line, where they have to be typed out on purpose.
       const result = await removeWorktree(
         repo,
-        cwd,
+        shellCwd(),
         { target, force: false, deleteBranch: false },
         reporter,
       );
@@ -218,7 +256,12 @@ export function createWorktreeService(
 
       for (const target of ordered) {
         try {
-          await removeWorktree(repo, cwd, { target, force: false, deleteBranch: false }, reporter);
+          await removeWorktree(
+            repo,
+            shellCwd(),
+            { target, force: false, deleteBranch: false },
+            reporter,
+          );
           removed += 1;
         } catch (error) {
           refusals.push(error);
