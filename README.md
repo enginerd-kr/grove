@@ -10,9 +10,22 @@ Runs on [Bun](https://bun.sh) — runtime, bundler, package manager, and test ru
 with [Biome](https://biomejs.dev) for linting and formatting. No dependencies beyond
 [Ink](https://github.com/vadimdemedes/ink), which draws the progress display.
 
+## Install
+
 ```bash
-bun install
+brew install enginerd-kr/tap/garden
 ```
+
+Then one line in your shell's rc file, for `garden cd` and the app's enter-to-go —
+see [Going places](#going-places) for what it does and why a binary alone cannot:
+
+```bash
+eval "$(garden shell-init zsh)"    # zsh, bash, or fish
+```
+
+From a checkout instead (needs Bun): `bun install`, then the same eval with the
+long spelling — `eval "$(bun /path/to/garden/src/cli.tsx shell-init zsh)"` — since
+the wrapper calls back by whatever spelling printed it.
 
 ## Layout
 
@@ -758,6 +771,7 @@ completion rather than on start is what makes the exit code available — the `r
 | `bun run garden`        | Run the CLI (`src/cli.tsx`); `--help` lists commands |
 | `bun run garden:dev`    | Same, with hot reload (`--watch`)                    |
 | `bun run build`     | Bundle to `dist/garden.js` (minified + sourcemap)        |
+| `bun run compile`   | Self-contained binaries for the four release targets |
 | `bun run typecheck` | Type check with `tsc --noEmit`                       |
 | `bun test`          | Run `*.test.ts` via `bun:test`                       |
 | `bun run lint`      | Lint + format check (Biome), no writes               |
@@ -853,6 +867,11 @@ the hook stages those unstaged changes too. Stage the whole file to avoid surpri
 - **A worktree stopped mid-rebase is reported by git as detached.** True, and useless: `garden` reads
   the branch name back out of the rebase state so `sync feat/login` still finds it, and `list`
   says `rebasing` rather than `detached`.
+- **`stubs/react-devtools-core` exists for `bun run compile`.** Ink reaches for that
+  optional peer behind a DEV-only guard, but `bun build --compile` must resolve every
+  static import it can reach and the guard's dynamic-import edge survives bundling —
+  so the dependency resolves to a two-method no-op instead. The dev bundle
+  (`bun run build`) never needed it; it keeps packages external.
 - Bun strips TypeScript types at runtime, so there is no separate compile step. Type errors
   surface via `bun run typecheck`, not at run time.
 - Biome replaces ESLint + Prettier + `eslint-plugin-import`. Config lives in `biome.json`;

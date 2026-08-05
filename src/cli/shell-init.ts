@@ -46,14 +46,31 @@ function fishQuote(word: string): string {
 }
 
 /**
+ * Whether this garden is a compiled binary rather than a script under bun.
+ *
+ * `bun build --compile` embeds the entry script inside the executable, and
+ * `Bun.main` then names it by a virtual path — `/$bunfs/...` on POSIX,
+ * `B:\\~BUN\\...` on Windows — that exists for no other process. Emitting it
+ * into the shell function would hand every wrapper call a bogus first
+ * argument, which is how an installed `garden` would break the moment the
+ * function it printed called back.
+ */
+export function isCompiledMain(main: string): boolean {
+  return main.startsWith("/$bunfs/") || main.startsWith("B:\\~BUN");
+}
+
+/**
  * How the function should invoke garden: the way garden is running right now.
  *
  * `process.execPath` is the runtime and `Bun.main` is the entry script —
  * together they re-create this very invocation whether it came from an
  * installed `garden` on PATH, `bun run garden`, or a path typed out in full.
+ * Compiled, the executable alone is the whole invocation.
  */
 function invocation(quote: (word: string) => string): string {
-  return [process.execPath, Bun.main].map(quote).join(" ");
+  const words = isCompiledMain(Bun.main) ? [process.execPath] : [process.execPath, Bun.main];
+
+  return words.map(quote).join(" ");
 }
 
 export function shellInit(shell: Shell): string {
