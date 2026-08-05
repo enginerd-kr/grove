@@ -40,9 +40,11 @@ garden                       # open the worktrees, and run any of the below by k
 garden clone <url> [dir]     # bare-clone a repo and check out its default branch
 garden add <branch>          # give a branch a worktree (tracking or creating it)
 garden list                  # what is here, what state it is in, where you are
-garden remove <target>       # delete a worktree
-garden reset <target>        # throw away a worktree's uncommitted changes
 garden sync [target]         # fetch, then bring worktrees up to date
+garden reset <target>        # throw away a worktree's uncommitted changes
+garden remove <target>       # delete a worktree
+garden path [target]         # print a worktree's directory — no target means the repo root
+garden shell-init <shell>    # the function behind `garden cd` and enter-to-cd
 ```
 
 `garden` on its own is the app; `garden <command>` is the same thing headless, for a script or a
@@ -62,7 +64,7 @@ garden list
 #    feat/login       feat/login       2 ahead
 #    feat/new-thing   feat/new-thing   dirty
 
-garden sync --all            # fast-forward main, rebase the rest onto it
+garden sync --all            # bring main up to date, rebase the rest onto it
 garden rm feat/login         # by branch, by directory, or by path
 ```
 
@@ -111,10 +113,14 @@ read deserves comments. All three keys are optional, and a single value need not
 ignored: `cpoy = [".env"]` quietly doing nothing is exactly the failure this file exists to
 prevent.
 
-**It is read from the default branch's worktree**, which is the same place copies come from.
-The alternative — each worktree's own copy — was tenable and less uniform: a branch cut last
-month has no file in it, so the repository would be configured for the worktrees made after
-Tuesday and not the ones made before.
+**The file is read from — and the copies are taken from — the default branch's worktree**,
+always. "Whichever worktree you happen to be standing in" would mean the `.env` you get depends
+on where your shell was; the trunk is the checkout that always exists and that nobody is
+experimenting in. It also keeps the rule singular: a branch cut last month has no file of its
+own, so reading each worktree's copy would configure the repository for the worktrees made
+after Tuesday and not the ones made before. A link is relative — `../../main/node_modules` —
+for the same reason `.git` holds `gitdir: ./.bare`: the repository folder is a thing people
+move.
 
 **There is no `garden setup` command, and that is deliberate.** A worktree is filled in when it
 is made, by the command that makes it — `garden add` reads the file, copies, links, and runs, in
@@ -126,43 +132,6 @@ terminal, and typing `bun install` is smaller than a command that types it for y
 what this worktree has that git does not track, which is exactly the set a fresh checkout comes
 without. Some of it is a copy somebody wants (`.env`) and some is a build output nobody wants
 copied anywhere (`debug.log`), and reading the list is the part no flag does better.
-
-### Trust
-
-A file that travels has one cost, and it is `run`: a `git pull` can hand you a command that
-executes on your machine. So the two halves are not treated alike. **`copy` and `link` apply on
-sight** — they move files already on your disk into a directory you asked to be created.
-**`run` waits.**
-
-```
-$ garden add feat/login
-✓ took .env, node_modules
-! 1 command in main/.garden.toml has not been trusted here — read it, then add with --trust
-
-$ garden add feat/two --trust
-✓ ran bun install
-```
-
-The command line prints them and skips them; `--trust` says you have read them. **It does not
-prompt**, and that is the same rule the rest of this tool follows: `garden add` behaves
-identically in a pipe, in CI, and under a terminal, and a question that only appeared in one of
-those would make it two commands wearing one name. The app is the surface that can hold a
-question, so [that is where the dialog is](#the-app).
-
-What is recorded is a hash of the file's contents, in `.bare/config` where the repository
-cannot reach it. So editing the file — or pulling somebody else's edit — takes the trust away
-again and the question comes back, which is the point rather than the cost: the answer is
-always about the commands as they are now. One answer serves both surfaces, so agreeing on the
-screen is agreeing for the command line.
-
-This is what `direnv allow` and editor workspace trust are, for the same reason. There is no
-"trust this repository forever"; it would turn the answer into one nobody reads.
-
-**Copies and links come from the default branch's worktree**, always. "Whichever worktree you
-happen to be standing in" would mean the `.env` you get depends on where your shell was, and the
-trunk is the checkout that always exists and that nobody is experimenting in. A link is
-relative — `../../main/node_modules` — for the same reason `.git` holds `gitdir: ./.bare`: the
-repository folder is a thing people move.
 
 Worth knowing about `link`, because it is the one that surprises people: a linked `node_modules`
 is *one* `node_modules`, so an install in one worktree is an install in all of them. That is the
@@ -202,8 +171,39 @@ something may execute, since nobody has read it yet. So `garden clone` reports a
 
 `--no-setup` skips the lot on an `add`.
 
-None of it is a habit you have to leave the app for, either. `i` proposes the file, asks about
-the commands, and runs the lot — see [The app](#the-app).
+None of it needs the command line, either: `a` in the app fills the worktree in as it makes
+it, and asks about the commands itself — see [The app](#the-app).
+
+### Trust
+
+A file that travels has one cost, and it is `run`: a `git pull` can hand you a command that
+executes on your machine. So the two halves are not treated alike. **`copy` and `link` apply on
+sight** — they move files already on your disk into a directory you asked to be created.
+**`run` waits.**
+
+```
+$ garden add feat/login
+✓ took .env, node_modules
+! 1 command in main/.garden.toml has not been trusted here — read it, then add with --trust
+
+$ garden add feat/two --trust
+✓ ran bun install
+```
+
+The command line prints them and skips them; `--trust` says you have read them. **It does not
+prompt**, and that is the same rule the rest of this tool follows: `garden add` behaves
+identically in a pipe, in CI, and under a terminal, and a question that only appeared in one of
+those would make it two commands wearing one name. The app is the surface that can hold a
+question, so [that is where the dialog is](#the-app).
+
+What is recorded is a hash of the file's contents, in `.bare/config` where the repository
+cannot reach it. So editing the file — or pulling somebody else's edit — takes the trust away
+again and the question comes back, which is the point rather than the cost: the answer is
+always about the commands as they are now. One answer serves both surfaces, so agreeing on the
+screen is agreeing for the command line.
+
+This is what `direnv allow` and editor workspace trust are, for the same reason. There is no
+"trust this repository forever"; it would turn the answer into one nobody reads.
 
 ### Reset
 
@@ -231,9 +231,13 @@ reflog remembers. Finish or abort the rebase first.
 
 ### Sync
 
-`sync` fetches, then **fast-forwards** the default branch's worktree. The asymmetry is
-deliberate: rebasing `main` onto `origin/main` would rewrite local commits nobody asked to have
-rewritten, so a diverged default branch is refused instead.
+`sync` fetches, then brings the default branch's worktree up to date: a **fast-forward** when
+it is merely behind, and `pull --rebase` when it has commits of its own. A commit sitting only
+on the local trunk already happened — somebody made it, and a tool that refused to sync until
+it was disowned would be demanding an undo of an event. So it is carried: replayed on top of
+what the remote gained, then pushed back **plainly**. No force spelling is ever aimed at the
+trunk — after the rebase the branch is strictly ahead, so a plain push suffices, and a
+protected remote saying no lands as a warning while the local rebase stands.
 
 Every other worktree goes through three steps, in this order:
 
@@ -263,6 +267,49 @@ Every check runs before anything is executed. A dirty worktree is skipped withou
 touched, and a rebase that conflicts is rolled back by default — pass `--no-abort` to leave it
 in place and resolve it by hand.
 
+### Going places
+
+A child process cannot move the shell that started it — every tool that seems to (zoxide,
+direnv) is a shell function wearing the tool's name. So the binary answers and the shell moves:
+
+```bash
+cd "$(garden path feat/login)"     # works bare, anywhere
+```
+
+One line in your shell's rc file installs the short spelling:
+
+```bash
+eval "$(garden shell-init zsh)"    # zsh, bash, or fish
+```
+
+The printed function calls back into garden **by the spelling that printed it** — the running
+runtime and entry script, absolute and quoted — not a `garden` it hopes is on PATH. So a bare
+checkout needs nothing installed: `eval "$(bun ~/src/garden/src/cli.tsx shell-init zsh)"` works
+as written, and since the rc line re-prints the function at every shell start, a moved checkout
+heals on the next shell.
+
+```bash
+garden cd feat/login    # cd "$(garden path feat/login)"
+garden cd               # the repo root
+```
+
+In the app, **enter moves *you*, without closing anything**: the standpoint walks to the row
+under the cursor — worktree or folder, both real directories — the `*` marker follows, and the
+refusal to remove the worktree you are standing in stops applying the moment you step out of
+it. "cd somewhere else first" is one keystroke that never leaves the screen. Then `q` is where
+the app and your shell meet: the wrapper hands every run a temp file, quitting writes the place
+you stood into it, and the function cds after the screen closes — so `?login⏎⏎q` is
+find-go-and-land in five keys. Without the function installed enter still works inside the app;
+only the landing is missing, and `remove` keeps measuring against where your shell really is,
+which is what keeps it from stranding a shell nothing can move. Everything that is not `cd`
+passes straight through, exit code and all, so scripts wrapping garden see no difference.
+
+The root default is not decoration. `remove` refuses to delete the directory your shell is
+standing in — deleting it would strand the shell somewhere that no longer exists, with every
+next command failing confusingly — and the refusal says "cd somewhere else first". The root is
+the somewhere: the one directory that is never a worktree, from which anything can be removed.
+`garden cd` with no target is that move.
+
 ## The app
 
 Typing `garden` with no arguments opens the worktrees as a full-screen app, and every command above
@@ -290,7 +337,8 @@ is a keystroke:
 ✓ feat/login rebased
 2 up-to-date, 1 rebased
 
-↑↓ move · a add · r remove · x discard · s sync · S sync all · R refresh · q quit
+↑↓ move · enter go · ? filter · !git · a add · r remove · x discard · p PR · s sync
+S sync all · R refresh · q quit
                                                                         4 of 10
 ```
 
@@ -367,7 +415,8 @@ Folders are destinations too, and the keys change on one:
       api/
         v2    ↑0 ↓0   ↑2 ↓4   ●
 
-↑↓ move · ←→ fold · a add under feat/ · r remove all 3 · S sync all · R refresh · q quit
+↑↓ move · ←→ fold · enter go · ? filter · !git · a add under feat/ · r remove all 3
+S sync all · R refresh · q quit
 ```
 
 `r` there removes every worktree beneath it, after asking, deepest first — which is `garden remove`
@@ -405,7 +454,9 @@ Folding changes what is on screen and nothing else. `r` on a shut folder removes
 would have removed open — the worktrees it holds travel on the row itself rather than being read
 back off the rows below it, which is the shape of bug this would otherwise have.
 
-`*` is the worktree you started from, `▸` the one the keys act on. `a` prompts for a branch
+`*` is where you stand and `▸` is what the keys act on. The `*` opens on the worktree you
+launched from and **enter moves it** — see [Going places](#going-places) for why that unlocks
+`r` on the worktree you left, and how `q` hands your shell the spot. `a` prompts for a branch
 name; `r` asks before deleting anything; `s` syncs the selected worktree and `S` syncs them all —
 including the lease-guarded push that finishes a rebase, since a sync that stops half-way is the
 thing that leaves a branch adrift.
@@ -435,6 +486,29 @@ still works either way — `garden add <branch> --from <base>`.
 Whatever [setup](#setup) is configured runs here too, with its steps drawn in the activity area
 like any other work: filling the worktree in is part of making one, not a second thing to ask
 for. A command that fails says so on the screen and leaves the worktree where it is.
+
+**`a` asks about a file's commands, where the command line cannot.** A worktree is filled in as
+it is made, here as everywhere; what the screen adds is the one question `garden add` has no
+way to put. It comes after the worktree, with the commands themselves on the row, in red,
+because that is what is being agreed to:
+
+```
+────────────────────────────────────────────────────────────────────────────────
+✓ added feat/new
+✓ took .env, node_modules
+.garden.toml wants to run "bun install", "./scripts/postinstall.sh" — run it here?
+
+y run it · n skip
+```
+
+That is [trust](#trust), and `y` writes the same record `garden add --trust` writes, so the
+next worktree — on either surface — does not ask again. `n` leaves the worktree exactly as it
+is: files in place, commands not run, and a shell one keystroke away if you would rather type
+them yourself.
+
+Nothing is asked in a repository with no `.garden.toml`, or one whose file has no commands, or
+one whose commands are already recorded — which is to say, almost always. The dialog exists for
+the moment a pull has changed what a worktree is about to run.
 
 It runs in the terminal's alternate screen, so quitting hands the terminal back exactly as it
 was found. The layout is measured against the window: the keys sit on the last row whatever the
@@ -499,7 +573,7 @@ A leading `!` **runs git in the worktree the cursor is on**, and the line says w
 ❯ !log --oneline -3                                             git in feat/login
 ```
 
-That is the deliberate hole in a screen that otherwise offers four commands with their
+That is the deliberate hole in a screen that otherwise offers its commands with their
 destructive spellings filed off. `git stash`, `git bisect`, `git push --force-with-lease` are not
 things this is going to grow keys for, and being unable to reach them would only mean quitting to
 type them. Quotes are respected, so `!commit -m "two words"` arrives as three arguments; `!git log`
@@ -533,28 +607,31 @@ Red rather than amber, because it is not the same risk as the other key that ask
 worktree leaves its branch and its commits behind and `garden add` brings it back, while this
 leaves nothing at all.
 
-**`a` asks about a file's commands, where the command line cannot.** A worktree is filled in as
-it is made, here as everywhere; what the screen adds is the one question `garden add` has no
-way to put. It comes after the worktree, with the commands themselves on the row, in red,
-because that is what is being agreed to:
+**`p` opens a pull request**, behind a popup that says what it would propose before anybody
+types. The commits sit under the input as context; the title is typed, never guessed — it is
+the one thing the popup exists to ask for, and a prefilled answer to a question is how
+questions stop being read. Enter on an empty title is a cancel. The body goes along the way
+`gh --fill` would have written it: one commit contributes its own body, several become the
+list of subjects, oldest first.
 
 ```
-────────────────────────────────────────────────────────────────────────────────
-✓ added feat/new
-✓ took .env, node_modules
-.garden.toml wants to run "bun install", "./scripts/postinstall.sh" — run it here?
-
-y run it · n skip
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ PR feat/login → main   Fix the login flow▌                                   │
+│ # 2 commits onto main                                                        │
+│ - Fix the login flow                                                         │
+│ - Add a token store                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
-That is [trust](#trust), and `y` writes the same record `garden add --trust` writes, so the
-next worktree — on either surface — does not ask again. `n` leaves the worktree exactly as it
-is: files in place, commands not run, and a shell one keystroke away if you would rather type
-them yourself.
+Enter publishes the branch if it never met the remote (`push -u`, the same spelling `add
+--push` uses), pushes it plainly otherwise, and then asks `gh pr create` — which is the one
+tool beyond git that garden ever runs, and the only feature that wants it. Missing, the answer
+is one line naming it, exit 10, and nothing else in the tool cares. The URL comes back onto
+the screen.
 
-Nothing is asked in a repository with no `.garden.toml`, or one whose file has no commands, or
-one whose commands are already recorded — which is to say, almost always. The dialog exists for
-the moment a pull has changed what a worktree is about to run.
+There is no `garden pr` on the command line, deliberately: from a shell, `gh pr create`
+already exists, with a real editor behind it. The key exists because from the app the
+alternative was leaving.
 
 There is no key for setting a worktree up on demand, and no screen for editing the file. Filling
 a worktree in is part of making one, and the file is a file — in the worktree, in your editor,
@@ -616,12 +693,13 @@ stderr.
 | 1    | a bug in this tool                                                |
 | 2    | usage — bad flags, wrong argument count, an unusable name         |
 | 3    | no managed repository found from here                             |
-| 4    | refused: dirty worktree, unsafe removal, diverged default branch  |
+| 4    | refused: dirty worktree, unsafe removal                           |
 | 5    | a rebase or merge conflicted                                      |
 | 6    | conflicting state: directory exists, branch checked out elsewhere |
 | 7    | git failed for a reason we could not classify                     |
 | 8    | the remote was unreachable, refused us, or does not exist         |
 | 9    | filling a worktree in from `.garden.toml` failed on the disk      |
+| 10   | `gh` — needed only for PRs — was missing, or refused the PR       |
 | 130  | interrupted (Ctrl-C)                                              |
 
 They are distinct so a wrapper script can tell "the worktree was dirty" from "the remote was
@@ -702,6 +780,7 @@ src/
   cli/
     args.ts            subcommand parsing — pure, no fs and no process
     help.ts            the command surface, described once
+    shell-init.ts      the function `garden cd` and enter-to-cd live in
     exit-codes.ts      GardenErrorCode -> exit code, as a total switch
     run.ts             dispatch, and how results are printed
   core/                knows nothing about argv, stdout, or Ink
@@ -713,7 +792,7 @@ src/
     branches.ts        ref questions asked of the bare repo
     setup-file.ts      `.garden.toml`: parsing it, and the trust record
     setup.ts           what it copies, links, and runs into a new worktree
-    commands/          clone, add, list, remove, reset, sync
+    commands/          clone, add, path, list, remove, reset, sync, pr
   report/
     reporter.ts        the Reporter interface, and the plain implementation
     lines.ts           the line store both drawn reporters share

@@ -27,6 +27,8 @@ export const ExitCode = {
    * retry that rather than to conclude it has no worktree.
    */
   setupFailed: 9,
+  /** `gh` was missing or refused; only PR creation ever reports this. */
+  gh: 10,
   /** Ctrl-C, by the convention that an interrupt reports 128 + SIGINT. */
   interrupted: 130,
 } as const;
@@ -51,6 +53,8 @@ export function errorToExitCode(code: GardenErrorCode): ExitCodeValue {
       return ExitCode.stateConflict;
     case "setup-failed":
       return ExitCode.setupFailed;
+    case "gh":
+      return ExitCode.gh;
     case "git-failed":
       return ExitCode.gitFailed;
     case "remote":

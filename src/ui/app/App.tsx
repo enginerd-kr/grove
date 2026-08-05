@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Drift } from "../../core/branches.ts";
@@ -66,6 +67,22 @@ type Mode =
    * prompt said.
    */
   | { readonly kind: "add"; readonly value: string; readonly from?: string }
+  /**
+   * The popup that ends in something leaving the machine: a PR title, typed
+   * over the commits it would propose. It carries the context that was true
+   * when it opened — the body, the subjects — for the same reason `add`
+   * carries `from`: the list refreshes itself, and a popup that re-read the
+   * world at enter-time could propose something other than what it showed.
+   */
+  | {
+      readonly kind: "pr";
+      readonly value: string;
+      readonly target: { readonly path: string; readonly dir: string };
+      readonly branch: string;
+      readonly base: string;
+      readonly body: string;
+      readonly context: readonly string[];
+    }
   /** The open-ended line: `!` runs git, anything else narrows the list. */
   | { readonly kind: "prompt"; readonly value: string }
   | { readonly kind: "confirm"; readonly target: Pending }
@@ -79,6 +96,15 @@ type Props = {
   readonly store: LineStore;
   /** Ctrl-C while busy: stop the git child before the screen goes away. */
   readonly onCancel?: () => void;
+  /**
+   * Where enter takes the shell, when there is a shell function to catch it.
+   *
+   * Present only when the app was started through the wrapper `shell-init`
+   * installs — it hands over a path, the wrapper cds to it after the screen
+   * closes. Absent, enter stays inert and its hint never appears: a key that
+   * quit the app to accomplish nothing would be a trap, not a shortcut.
+   */
+  readonly onCd?: (path: string) => Promise<void> | void;
   /** How often to refresh, in ms. Defaults to `REFRESH_MS`; tests drive it faster. */
   readonly refreshMs?: number;
 };
@@ -141,6 +167,22 @@ function with_(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
 
 function without(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
   return new Set([...set].filter((each) => each !== key));
+}
+
+/**
+ * At most this much context under a popup's input; the rest becomes a count.
+ *
+ * A worktree with forty changed files does not need forty rows to say "this
+ * commits a lot" — and the list underneath is what says where you are.
+ */
+const CONTEXT_ROWS = 8;
+
+function capped(lines: readonly string[]): readonly string[] {
+  if (lines.length <= CONTEXT_ROWS) return lines;
+
+  const rest = lines.length - (CONTEXT_ROWS - 1);
+
+  return [...lines.slice(0, CONTEXT_ROWS - 1), `# … ${rest} more`];
 }
 
 /** `1 command`, `2 commands` — the label a confirmed action is given. */
@@ -368,7 +410,7 @@ function Row({
   );
 }
 
-export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS }: Props) {
+export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFRESH_MS }: Props) {
   const { exit } = useApp();
   const { columns, rows: terminalRows } = useWindowSize();
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
@@ -514,6 +556,50 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     [service],
   );
 
+  /**
+   * `p`, up to the point of asking.
+   *
+   * Reads before it draws — the popup promises what would be proposed, and a
+   * promise built from a row that might be a minute stale is one the enter key
+   * could break. The read is quick and the busy state keeps the refresh tick
+   * out of the way while it happens.
+   */
+  const openPr = useCallback(
+    async (target: { readonly path: string; readonly dir: string }) => {
+      store.clear();
+      setMessage(undefined);
+      setRoomy(false);
+      setMode({ kind: "busy", label: `reading ${target.dir}` });
+
+      try {
+        const preview = await service.prPreview(target.path);
+        const plural = preview.commits === 1 ? "" : "s";
+        // The commits being proposed, whatever shape the body takes — with the
+        // title asked for rather than guessed, this block is how you know what
+        // you are naming.
+        const context = [
+          `# ${preview.commits} commit${plural} onto ${preview.base}`,
+          ...preview.subjects.map((subject) => `- ${subject}`),
+        ];
+
+        return setMode({
+          kind: "pr",
+          value: "",
+          target,
+          branch: preview.branch,
+          base: preview.base,
+          body: preview.body,
+          context: capped(context),
+        });
+      } catch (error) {
+        setMessage(messageFor(error));
+
+        return setMode({ kind: "list" });
+      }
+    },
+    [service, store],
+  );
+
   // The first read is not an action: it reports no outcome, and going through
   // `perform` would open the screen with an empty message line.
   useEffect(() => {
@@ -534,6 +620,11 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       live = false;
     };
   }, [service]);
+
+  // Where the shell really is: the standpoint at launch, for `q` to compare
+  // against before deciding the shell needs moving at all.
+  const startedAt = useRef<string | undefined>(undefined);
+  if (startedAt.current === undefined) startedAt.current = service.standpoint();
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -596,17 +687,25 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
 
     if (mode.kind === "busy") return;
 
-    if (mode.kind === "add") {
+    if (mode.kind === "add" || mode.kind === "pr") {
       if (key.escape) return setMode({ kind: "list" });
       if (key.return) {
-        const branch = mode.value.trim();
-        if (branch.length === 0) return setMode({ kind: "list" });
+        const value = mode.value.trim();
+        // Enter on nothing is a cancel, not an error: the empty popup is what
+        // "never mind" looks like from inside one.
+        if (value.length === 0) return setMode({ kind: "list" });
+
+        if (mode.kind === "pr") {
+          return void perform(`opening a PR for ${mode.branch}`, () =>
+            service.createPr(mode.target.path, value, mode.body),
+          );
+        }
 
         // The question about the file's commands comes after, not instead:
         // `perform` has drawn what the worktree got, and this asks about the
         // half it did not.
-        return void perform(`adding ${branch}`, () => service.add(branch, mode.from)).then(() =>
-          askAboutCommands(branch),
+        return void perform(`adding ${value}`, () => service.add(value, mode.from)).then(() =>
+          askAboutCommands(value),
         );
       }
       if (key.backspace || key.delete) {
@@ -786,6 +885,42 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     if (input === "x" && selected?.dirty === true) {
       return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
     }
+    /**
+     * Enter moves *you*, inside the app: the standpoint walks to the row the
+     * cursor is on, the app stays open, and everything that depends on where
+     * you stand follows — the `*` marker, and above all the refusal to remove
+     * the worktree you are standing in, which stops applying the moment you
+     * step out of it. That is the whole reason this key exists: "cd somewhere
+     * else first" is now one keystroke that never leaves the screen.
+     *
+     * The real shell has not moved — it cannot be moved from here — so `q` is
+     * where the two meet: with the shell function listening, quitting hands it
+     * the standpoint and the shell lands where you stood. Without it the shell
+     * stays put, and `remove` keeps measuring against where it really is.
+     *
+     * A folder is a real directory on disk, so it is a destination too.
+     */
+    if (key.return && current !== undefined) {
+      // Group keys carry their trailing slash (it is how they are drawn); a
+      // path handed around as a location should not.
+      const destination =
+        current.kind === "group"
+          ? join(repoRoot, current.key.replace(/\/+$/, ""))
+          : current.summary.path;
+
+      return void perform(`moving to ${current.label ?? destination}`, () =>
+        service.moveTo(destination),
+      );
+    }
+
+    /**
+     * `p` proposes, behind a popup that says what it would do before anybody
+     * has typed a word. It sits on any branch that is not the trunk: whether
+     * there is anything to propose is part of what its popup answers.
+     */
+    if (input === "p" && selected && !selected.isDefault && !selected.detached) {
+      return void openPr({ path: selected.path, dir: selected.dir });
+    }
     if (input === "s" && selected) {
       return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
     }
@@ -796,7 +931,20 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
 
       return setMode({ kind: "prompt", value: filter });
     }
-    if (input === "q" || key.escape) return exit();
+    if (input === "q" || key.escape) {
+      // The handoff: the shell function reads this file after the app closes.
+      // Only worth writing when the standpoint actually moved — an empty file
+      // is the wrapper's cue to leave the shell where it already is.
+      const standpoint = service.standpoint();
+      if (onCd !== undefined && standpoint !== startedAt.current) {
+        return void (async () => {
+          await onCd(standpoint);
+          exit();
+        })();
+      }
+
+      return exit();
+    }
   });
 
   // The heading of the trunk column, and the branch it compares against. Read
@@ -818,9 +966,9 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
             { keys: "!", action: "run git" },
           ];
     }
-    if (mode.kind === "add") {
+    if (mode.kind === "add" || mode.kind === "pr") {
       return [
-        { keys: "enter", action: "add" },
+        { keys: "enter", action: mode.kind === "add" ? "add" : "open PR" },
         { keys: "esc", action: "cancel" },
       ];
     }
@@ -845,6 +993,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
       return [
         { keys: "↑↓", action: "move" },
         { keys: "←→", action: current.collapsed ? "open" : "fold" },
+        { keys: "enter", action: "go" },
         { keys: "?", action: "filter · !git" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
@@ -858,10 +1007,14 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
     // would be a menu entry whose whole effect is to say "nothing to discard".
     return [
       { keys: "↑↓", action: "move" },
+      { keys: "enter", action: "go" },
       { keys: "?", action: "filter · !git" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },
       ...(selected?.dirty === true ? [{ keys: "x", action: "discard" }] : []),
+      ...(selected !== undefined && !selected.isDefault && !selected.detached
+        ? [{ keys: "p", action: "PR" }]
+        : []),
       { keys: "s", action: "sync" },
       { keys: "S", action: "sync all" },
       { keys: "R", action: "refresh" },
@@ -887,6 +1040,7 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
   const detailRows =
     (mode.kind === "prompt" ? PROMPT_ROWS : 0) +
     (mode.kind === "add" ? 3 : 0) +
+    (mode.kind === "pr" ? 3 + mode.context.length : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
 
@@ -1059,6 +1213,27 @@ export function App({ service, repoRoot, store, onCancel, refreshMs = REFRESH_MS
             <Text color={theme.accent}>{mode.value}</Text>
             <Text inverse> </Text>
           </Text>
+        </Box>
+      ) : null}
+
+      {mode.kind === "pr" ? (
+        // The title being typed, and under it the commits the decision rests
+        // on. Dimmed because it is context, not content: what is typed is the
+        // only part that leaves the popup.
+        <Box borderStyle="round" borderColor={theme.accent} paddingX={1} flexDirection="column">
+          <Text wrap="truncate">
+            <Text dimColor>{`PR ${mode.branch} → ${mode.base}   `}</Text>
+            <Text color={theme.accent}>{mode.value}</Text>
+            <Text inverse> </Text>
+          </Text>
+          {mode.context.map((line, index) => (
+            // Index keys, because two files can produce the same line and the
+            // block never reorders while it is up.
+            // biome-ignore lint/suspicious/noArrayIndexKey: static block
+            <Text key={index} dimColor wrap="truncate">
+              {line}
+            </Text>
+          ))}
         </Box>
       ) : null}
 

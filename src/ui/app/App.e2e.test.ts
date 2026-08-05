@@ -57,6 +57,56 @@ onPosix(
   60_000,
 );
 
+// The scenario that earned the feature: launched inside a worktree, `r` on it
+// is refused — so enter steps out to main first, the removal goes through, and
+// quitting hands the shell the standpoint via GARDEN_CD_FILE so it is not left
+// in a directory that no longer exists.
+onPosix(
+  "enter steps out, remove unlocks, and q hands the shell the standpoint",
+  async () => {
+    await withTempRepo(async ({ work, originUrl, root }) => {
+      const cloned = await runCli(["clone", originUrl, "repo"], { cwd: work });
+      expect(cloned.exitCode).toBe(0);
+      const added = await runCli(["add", "feat/doomed"], { cwd: `${work}/repo/main` });
+      expect(added.exitCode).toBe(0);
+
+      const cdFile = `${root}/cd-goes-here`;
+      process.env.GARDEN_CD_FILE = cdFile;
+      try {
+        // Launched from inside the worktree about to be removed.
+        const ui = start({ cwd: `${work}/repo/feat/doomed`, rows: 30 });
+        const opened = await ui.waitForFrame((frame) => frame.includes("q quit"));
+        expect(opened).toContain("enter go");
+
+        // The cursor opens on the first row, which is main: enter steps out.
+        ui.clear();
+        await ui.pressUntil("\r", (frame) => frame.includes("now in main"), 10_000);
+
+        // Standing in main now, the refusal is gone: remove the launch dir.
+        ui.clear();
+        await ui.pressUntil("\u001B[B", (frame) => /▸ +doomed/.test(frame), 10_000);
+        // Single presses from here: a retried `r` would land inside the confirm,
+        // where any key that is not y is a no.
+        ui.clear();
+        ui.press("r");
+        await ui.waitForFrame((frame) => frame.includes("remove feat/doomed?"), 10_000);
+        ui.clear();
+        ui.press("y");
+        await ui.waitForFrame((frame) => frame.includes("removed"), 20_000);
+
+        expect(await ui.pressUntilExit("q")).toBe(0);
+      } finally {
+        delete process.env.GARDEN_CD_FILE;
+      }
+
+      // The worktree is gone, and the shell has somewhere real to land.
+      expect(await pathExists(`${work}/repo/feat/doomed`)).toBe(false);
+      expect((await Bun.file(cdFile).text()).trim()).toBe(`${work}/repo/main`);
+    });
+  },
+  60_000,
+);
+
 // The whole point of the setup screen: `garden` used to exit 3 here. Driven end
 // to end because what it produces — `.bare`, the `.git` pointer, a worktree for
 // the default branch — is the part a stubbed clone could not vouch for.

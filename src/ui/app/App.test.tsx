@@ -54,6 +54,8 @@ type Calls = {
   readonly ran: { args: readonly string[]; at: string }[];
   readonly synced: (string | undefined)[];
   readonly trusted: string[];
+  readonly moved: string[];
+  readonly proposed: { target: string; title: string; body: string }[];
 };
 
 function stub(overrides: Partial<WorktreeService> = {}): {
@@ -69,6 +71,8 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     ran: [],
     synced: [],
     trusted: [],
+    moved: [],
+    proposed: [],
   };
 
   return {
@@ -112,6 +116,24 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       // `.garden.toml` and every one whose file is already trusted: no
       // question is drawn, and the other tests never see one.
       pendingCommands: async () => [],
+      moveTo: async (path) => {
+        calls.moved.push(path);
+        return `now in ${path}`;
+      },
+      standpoint: () => calls.moved.at(-1) ?? "/repo/main",
+      prPreview: async (target) => ({
+        path: target,
+        dir: "feat/login",
+        branch: "feat/login",
+        base: "main",
+        subjects: ["Add login"],
+        body: "- Add login",
+        commits: 1,
+      }),
+      createPr: async (target, title, body) => {
+        calls.proposed.push({ target, title, body });
+        return "https://example.com/pr/1";
+      },
       trustAndRun: async (branch) => {
         calls.trusted.push(branch);
         return `1 run in ${branch}`;
@@ -510,6 +532,180 @@ test("nothing is asked when nothing is waiting", async () => {
 
   expect(ui.frame()).not.toContain("run it here?");
   expect(calls.trusted).toEqual([]);
+});
+
+// The title starts empty on purpose — it is the one thing the popup exists to
+// ask for, and a prefilled answer to a question is how questions stop being
+// read. The commits being proposed sit under it as context.
+test("`p` opens a PR popup that asks for a title, and enter proposes", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+  expect(ui.frame()).toContain("p PR");
+
+  ui.stdin.write("p");
+  const popup = await waitFor(ui.lastFrame, (f) => f.includes("PR feat/login → main"));
+  expect(popup).toContain("# 1 commit onto main");
+  expect(popup).toContain("- Add login");
+
+  // Enter on the empty title is a cancel, not a PR with a guessed name.
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => !f.includes("PR feat/login → main"));
+  expect(calls.proposed).toEqual([]);
+
+  ui.stdin.write("p");
+  await waitFor(ui.lastFrame, (f) => f.includes("PR feat/login → main"));
+  ui.stdin.write("Fix the login flow");
+  await waitFor(ui.lastFrame, (f) => f.includes("Fix the login flow"));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("https://example.com/pr/1"));
+
+  expect(calls.proposed).toEqual([
+    { target: "/repo/feat/login", title: "Fix the login flow", body: "- Add login" },
+  ]);
+});
+
+// The trunk is what PRs merge into; offering to propose it would be a menu
+// that lies.
+test("`p` is absent on the default branch", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  expect(ui.frame()).not.toContain("p PR");
+  ui.stdin.write("p");
+  await waitFor(ui.lastFrame, (f) => f.includes("q quit"));
+  expect(calls.proposed).toEqual([]);
+});
+
+// Esc is the other half of every popup, and a popup that leaks its keystrokes
+// into the list would be worse than none.
+test("esc closes the PR popup with nothing proposed", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+  ui.stdin.write("p");
+  await waitFor(ui.lastFrame, (f) => f.includes("PR feat/login → main"));
+  ui.stdin.write(keys.esc);
+  await waitFor(ui.lastFrame, (f) => !f.includes("PR feat/login → main"));
+
+  expect(calls.proposed).toEqual([]);
+});
+
+// Enter moves the standpoint inside the app — the whole reason it exists is
+// that "cd somewhere else first" should be one keystroke that never leaves the
+// screen. The real shell is `q`'s business, not enter's.
+test("enter moves the standpoint to the row under the cursor, app still open", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+  expect(ui.frame()).toContain("enter go");
+
+  ui.stdin.write(keys.down);
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +login/.test(f));
+
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("now in"));
+
+  expect(calls.moved).toEqual(["/repo/feat/login"]);
+  // Still running, list still on screen.
+  expect(ui.frame()).toContain("q quit");
+});
+
+// A folder is a real directory on disk — the tree mirrors it — so it is a
+// destination too.
+test("enter on a folder stands in the folder", async () => {
+  const { service, calls } = stub();
+  const ui = mount(service);
+  await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  ui.stdin.write(keys.down);
+  await waitFor(ui.lastFrame, (f) => /▸ +feat\//.test(f));
+  ui.stdin.write(keys.enter);
+  await waitFor(ui.lastFrame, (f) => f.includes("now in"));
+
+  expect(calls.moved).toEqual(["/repo/feat"]);
+});
+
+// `q` is where the app's standpoint and the real shell meet: if a function is
+// listening and you moved, it gets the place you stood; if you never moved,
+// an untouched shell needs nothing.
+test("`q` hands the shell the standpoint, but only when it moved", async () => {
+  const landed: string[] = [];
+  const { service } = stub();
+  const store = new LineStore();
+  const instance = render(
+    <App
+      service={service}
+      repoRoot="/repo"
+      store={store}
+      refreshMs={100000}
+      onCd={(path) => {
+        landed.push(path);
+      }}
+    />,
+  );
+  await waitFor(
+    () => plain(instance.lastFrame()),
+    (f) => f.includes("login"),
+  );
+
+  instance.stdin.write(keys.down);
+  instance.stdin.write(keys.down);
+  await waitFor(
+    () => plain(instance.lastFrame()),
+    (f) => /▸ +login/.test(f),
+  );
+  instance.stdin.write(keys.enter);
+  // Wait for the move to *settle* — during busy the keys are off, and a q
+  // pressed then would vanish.
+  await waitFor(
+    () => plain(instance.lastFrame()),
+    (f) => f.includes("now in"),
+  );
+
+  instance.stdin.write("q");
+  await waitFor(
+    () => (landed.length > 0 ? "y" : ""),
+    (f) => f === "y",
+  );
+
+  expect(landed).toEqual(["/repo/feat/login"]);
+});
+
+test("`q` without having moved leaves the shell alone", async () => {
+  const landed: string[] = [];
+  const { service } = stub();
+  const instance = render(
+    <App
+      service={service}
+      repoRoot="/repo"
+      store={new LineStore()}
+      refreshMs={100000}
+      onCd={(path) => {
+        landed.push(path);
+      }}
+    />,
+  );
+  await waitFor(
+    () => plain(instance.lastFrame()),
+    (f) => f.includes("login"),
+  );
+
+  instance.stdin.write("q");
+  // The app exits without calling onCd; give it a beat to prove the negative.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  expect(landed).toEqual([]);
 });
 
 // A confirmation for a reset that would do nothing is a prompt that teaches

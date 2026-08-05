@@ -2,12 +2,14 @@ import { relative } from "node:path";
 import { addWorktree } from "../core/commands/add.ts";
 import { cloneRepo } from "../core/commands/clone.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
+import { worktreePath } from "../core/commands/path.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
 import { resetWorktree } from "../core/commands/reset.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GardenCommand, GlobalOptions } from "./args.ts";
+import { type Shell, shellInit } from "./shell-init.ts";
 
 /**
  * Everything a command needs that it must not go looking for itself.
@@ -77,6 +79,24 @@ export async function runCommand(command: GardenCommand, context: CommandContext
       }
 
       reporter.out(`${display(cwd, result.path)}\t${result.branch}`);
+      return;
+    }
+
+    case "path": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await worktreePath(repo, cwd, command.target);
+
+      // Absolute on purpose, where every other command prints relative when it
+      // is shorter: this one exists to be handed to `cd`, and a relative path
+      // is only right from the directory it was relative to.
+      if (global.json) reporter.out(JSON.stringify(result, null, 2));
+      else reporter.out(result.path);
+      return;
+    }
+
+    case "shell-init": {
+      // No repository involved: this runs from rc files, before any repo exists.
+      reporter.out(shellInit(command.shell as Shell));
       return;
     }
 

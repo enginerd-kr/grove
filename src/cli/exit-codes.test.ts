@@ -12,6 +12,7 @@ test("every error code maps to a distinct, non-zero exit code", () => {
     "setup-failed",
     "git-failed",
     "remote",
+    "gh",
   ];
 
   const mapped = codes.map(errorToExitCode);
