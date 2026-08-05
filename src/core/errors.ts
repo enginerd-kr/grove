@@ -5,7 +5,7 @@
  * `cli/exit-codes.ts` as a total switch — so adding a code without deciding how
  * a script should react to it is a type error rather than a silent `1`.
  */
-export type GardenErrorCode =
+export type GroveErrorCode =
   /** Bad flags, wrong argument count, a branch name that cannot be a directory. */
   | "usage"
   /** Nothing managed by this tool was found from the invocation directory. */
@@ -16,7 +16,7 @@ export type GardenErrorCode =
   | "rebase-conflict"
   /** The repository is not in a state that allows this: dir exists, branch busy. */
   | "state-conflict"
-  /** A configured `garden.setup` command exited non-zero. The worktree is there. */
+  /** A configured `grove.setup` command exited non-zero. The worktree is there. */
   | "setup-failed"
   /** git failed and the reason did not match anything more specific. */
   | "git-failed"
@@ -25,7 +25,7 @@ export type GardenErrorCode =
   /** `gh` — needed only for PRs — was missing, or refused the PR. */
   | "gh";
 
-type GardenErrorOptions = {
+type GroveErrorOptions = {
   /** One line telling the user what to do next. Worth writing for every error. */
   readonly hint?: string;
   /** Supporting lines — conflicting paths, git's own stderr — printed under the message. */
@@ -39,22 +39,22 @@ type GardenErrorOptions = {
  * Anything else reaching the top level is a bug in this tool and exits 1, so
  * throwing a bare `Error` for a condition the user can fix is always wrong.
  */
-export class GardenError extends Error {
-  readonly code: GardenErrorCode;
+export class GroveError extends Error {
+  readonly code: GroveErrorCode;
   readonly hint: string | undefined;
   readonly details: readonly string[];
 
-  constructor(code: GardenErrorCode, message: string, options: GardenErrorOptions = {}) {
+  constructor(code: GroveErrorCode, message: string, options: GroveErrorOptions = {}) {
     super(message, { cause: options.cause });
-    this.name = "GardenError";
+    this.name = "GroveError";
     this.code = code;
     this.hint = options.hint;
     this.details = options.details ?? [];
   }
 }
 
-export function isGardenError(error: unknown): error is GardenError {
-  return error instanceof GardenError;
+export function isGroveError(error: unknown): error is GroveError {
+  return error instanceof GroveError;
 }
 
 /**
@@ -67,7 +67,7 @@ export function isGardenError(error: unknown): error is GardenError {
  *
  * These are English strings, which is why `runGit` pins `LC_ALL=C`.
  */
-const PATTERNS: readonly (readonly [RegExp, GardenErrorCode])[] = [
+const PATTERNS: readonly (readonly [RegExp, GroveErrorCode])[] = [
   [/could not resolve host(?:name)?/i, "remote"],
   [/connection (?:timed out|refused|reset)/i, "remote"],
   [/authentication failed/i, "remote"],
@@ -90,7 +90,7 @@ const PATTERNS: readonly (readonly [RegExp, GardenErrorCode])[] = [
 ];
 
 /** Best guess at why git failed, defaulting to the honest "we don't know". */
-export function classifyGitError(stderr: string): GardenErrorCode {
+export function classifyGitError(stderr: string): GroveErrorCode {
   for (const [pattern, code] of PATTERNS) {
     if (pattern.test(stderr)) return code;
   }

@@ -1,4 +1,4 @@
-import { classifyGitError, GardenError, stderrDetails } from "./errors.ts";
+import { classifyGitError, GroveError, stderrDetails } from "./errors.ts";
 
 /**
  * The only place in this codebase that spawns a process.
@@ -8,7 +8,7 @@ import { classifyGitError, GardenError, stderrDetails } from "./errors.ts";
  * handler a single set of children to interrupt.
  *
  * `runShell` is the second spawner and lives here for exactly that second
- * reason: it runs a `garden.setup` command somebody configured, which is the
+ * reason: it runs a `grove.setup` command somebody configured, which is the
  * one thing this tool executes that it did not write, and it is also the one
  * most likely to take a minute — so it has to be in the set Ctrl-C can reach.
  * What it does *not* share is the pinned environment; see `SHELL_ENV`.
@@ -197,7 +197,7 @@ export async function runGit(
 }
 
 /**
- * What a `garden.setup` command gets on top of the user's own environment.
+ * What a `grove.setup` command gets on top of the user's own environment.
  *
  * Deliberately not `PINNED_ENV`. `LC_ALL=C` is there so this tool can match
  * git's English stderr, and forcing it on somebody's `bun install` would change
@@ -214,7 +214,7 @@ const SHELL_ENV: Readonly<Record<string, string>> = {
  * Runs another tool by name — today that is `gh`, and only for PRs.
  *
  * `null` means the tool is not installed, which is an answer and not an error:
- * everything else in garden works without it, so the caller gets to say
+ * everything else in grove works without it, so the caller gets to say
  * "install gh" next to the one feature that wants it rather than this throwing
  * something generic. Environment prompting is disabled the same way it is for
  * git — a tool that stops to ask a question nobody is watching has hung.
@@ -256,7 +256,7 @@ export async function runTool(
  *
  * This *is* a shell, unlike the app's `!` — and the difference is who is
  * speaking. `!` is a keystroke away from a running screen, so `!log; rm -rf ~`
- * had better be one argument list; `garden.setup` was typed into `git config`
+ * had better be one argument list; `grove.setup` was typed into `git config`
  * on purpose, once, by the person whose machine it runs on, and it is written
  * expecting `&&` and `$HOME` to mean what they mean everywhere else.
  */
@@ -294,7 +294,7 @@ export async function runGitOrThrow(
   const result = await runGit(args, options);
   if (result.code === 0) return result.stdout;
 
-  throw new GardenError(
+  throw new GroveError(
     classifyGitError(result.stderr),
     `git ${args.join(" ")} failed (exit ${result.code})`,
     { details: stderrDetails(result.stderr) },

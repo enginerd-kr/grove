@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { GardenError } from "./errors.ts";
+import { GroveError } from "./errors.ts";
 import { gitOutput, gitSucceeds, runGit, runGitOrThrow, traceGit } from "./git.ts";
 import { withTempRepo } from "./test-utils.ts";
 
@@ -23,7 +23,7 @@ onPosix(
 );
 
 onPosix(
-  "runGitOrThrow turns a failure into a classified GardenError",
+  "runGitOrThrow turns a failure into a classified GroveError",
   async () => {
     await withTempRepo(async ({ work }) => {
       const promise = runGitOrThrow(["clone", "--bare", "file:///definitely/not/here.git"], {
@@ -37,9 +37,9 @@ onPosix(
         (caught: unknown) => caught,
       );
 
-      expect(error).toBeInstanceOf(GardenError);
-      expect((error as GardenError).code).toBe("remote");
-      expect((error as GardenError).details.length).toBeGreaterThan(0);
+      expect(error).toBeInstanceOf(GroveError);
+      expect((error as GroveError).code).toBe("remote");
+      expect((error as GroveError).details.length).toBeGreaterThan(0);
     });
   },
   20_000,

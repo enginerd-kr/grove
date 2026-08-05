@@ -49,7 +49,7 @@ jobs:
       # Only the target this runner can execute. The darwin binaries are
       # verified by hand before the tap's formula learns a new version.
       - name: Smoke-test the linux binary
-        run: bash scripts/smoke-compiled.sh dist/compile/linux-x64/garden
+        run: bash scripts/smoke-compiled.sh dist/compile/linux-x64/grove
 
       - name: Checksums
         run: cd dist/release && shasum -a 256 *.tar.gz > SHA256SUMS
@@ -77,10 +77,10 @@ jobs:
           export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_deploy_key -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
 
           git clone --depth 1 git@github.com:enginerd-kr/homebrew-tap.git tap
-          bash scripts/bump-formula.sh tap/Formula/garden.rb "${GITHUB_REF_NAME#v}" dist/release/SHA256SUMS
+          bash scripts/bump-formula.sh tap/Formula/grove.rb "${GITHUB_REF_NAME#v}" dist/release/SHA256SUMS
 
           cd tap
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -am "garden ${GITHUB_REF_NAME#v}"
+              commit -am "grove ${GITHUB_REF_NAME#v}"
           git push

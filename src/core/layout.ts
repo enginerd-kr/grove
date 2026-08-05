@@ -1,5 +1,5 @@
 import { basename, isAbsolute, join, relative, sep } from "node:path";
-import { GardenError } from "./errors.ts";
+import { GroveError } from "./errors.ts";
 
 /**
  * Where things go, as pure functions.
@@ -75,7 +75,7 @@ export function worktreeRelPath(branch: string, override?: string): string {
     .filter((s) => s.length > 0);
 
   if (segments.length === 0 || segments.some((s) => RESERVED.has(s))) {
-    throw new GardenError(
+    throw new GroveError(
       "usage",
       `cannot derive a directory from branch ${JSON.stringify(branch)}`,
       {
@@ -105,7 +105,7 @@ function checkedOverride(override: string): string {
     segments.some((segment) => RESERVED.has(segment));
 
   if (bad) {
-    throw new GardenError(
+    throw new GroveError(
       "usage",
       `--dir must be a path inside the repo, got ${JSON.stringify(override)}`,
       {
@@ -164,8 +164,8 @@ export function repoNameFromUrl(url: string): string {
   const name = tail.replace(/\.git$/i, "");
 
   if (RESERVED.has(name)) {
-    throw new GardenError("usage", `cannot derive a directory name from ${JSON.stringify(url)}`, {
-      hint: "pass a directory explicitly: garden clone <url> <dir>",
+    throw new GroveError("usage", `cannot derive a directory name from ${JSON.stringify(url)}`, {
+      hint: "pass a directory explicitly: grove clone <url> <dir>",
     });
   }
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Compile garden into self-contained binaries for every platform the Homebrew
-# tap serves. Outputs dist/compile/<os>-<arch>/garden and dist/release/
-# garden-<os>-<arch>.tar.gz — each tarball holds a single file named `garden`,
-# which is exactly what the formula's `bin.install "garden"` expects.
+# Compile grove into self-contained binaries for every platform the Homebrew
+# tap serves. Outputs dist/compile/<os>-<arch>/grove and dist/release/
+# grove-<os>-<arch>.tar.gz — each tarball holds a single file named `grove`,
+# which is exactly what the formula's `bin.install "grove"` expects.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,9 +21,9 @@ for t in "${targets[@]}"; do
   bun build src/cli.tsx --compile "--target=bun-${t}" \
     --define 'process.env.DEV="false"' \
     --minify --sourcemap \
-    --outfile "dist/compile/${t}/garden"
+    --outfile "dist/compile/${t}/grove"
 
-  tar -czf "dist/release/garden-${t}.tar.gz" -C "dist/compile/${t}" garden
+  tar -czf "dist/release/grove-${t}.tar.gz" -C "dist/compile/${t}" grove
 done
 
 ls -l dist/release

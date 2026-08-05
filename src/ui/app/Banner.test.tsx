@@ -29,7 +29,7 @@ test("says what it is, which version, and which folder — at any size", () => {
   ] as const) {
     const drawn = draw(columns, rows).join("\n");
 
-    expect(drawn).toContain(`garden v${version}`);
+    expect(drawn).toContain(`grove v${version}`);
     expect(drawn).toContain("/work/repo");
     expect(drawn).toContain("3 worktrees");
     expect(drawn).toContain("in main");

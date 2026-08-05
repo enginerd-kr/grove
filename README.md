@@ -1,10 +1,10 @@
-# garden — git worktree manager
+# grove — git worktree manager
 
 Manage git worktrees backed by a single bare clone. One directory per repository, one
 subdirectory per branch, and no bookkeeping to remember.
 
 The name is the shape of the thing: a worktree is a tree, and a repository full of them is a
-garden.
+grove.
 
 Runs on [Bun](https://bun.sh) — runtime, bundler, package manager, and test runner in one —
 with [Biome](https://biomejs.dev) for linting and formatting. No dependencies beyond
@@ -13,23 +13,23 @@ with [Biome](https://biomejs.dev) for linting and formatting. No dependencies be
 ## Install
 
 ```bash
-brew install enginerd-kr/tap/garden
+brew install enginerd-kr/tap/grove
 ```
 
-Then one line in your shell's rc file, for `garden cd` and the app's enter-to-go —
+Then one line in your shell's rc file, for `grove cd` and the app's enter-to-go —
 see [Going places](#going-places) for what it does and why a binary alone cannot:
 
 ```bash
-eval "$(garden shell-init zsh)"    # zsh, bash, or fish
+eval "$(grove shell-init zsh)"    # zsh, bash, or fish
 ```
 
 From a checkout instead (needs Bun): `bun install`, then the same eval with the
-long spelling — `eval "$(bun /path/to/garden/src/cli.tsx shell-init zsh)"` — since
+long spelling — `eval "$(bun /path/to/grove/src/cli.tsx shell-init zsh)"` — since
 the wrapper calls back by whatever spelling printed it.
 
 ## Layout
 
-Running `garden clone https://github.com/org/repo.git` in `~/work` produces:
+Running `grove clone https://github.com/org/repo.git` in `~/work` produces:
 
 ```
 ~/work/repo/
@@ -49,36 +49,36 @@ it means from the directory you ran it in.
 ## Commands
 
 ```bash
-garden                       # open the worktrees, and run any of the below by keystroke
-garden clone <url> [dir]     # bare-clone a repo and check out its default branch
-garden add <branch>          # give a branch a worktree (tracking or creating it)
-garden list                  # what is here, what state it is in, where you are
-garden sync [target]         # fetch, then bring worktrees up to date
-garden reset <target>        # throw away a worktree's uncommitted changes
-garden remove <target>       # delete a worktree
-garden path [target]         # print a worktree's directory — no target means the repo root
-garden shell-init <shell>    # the function behind `garden cd` and enter-to-cd
+grove                       # open the worktrees, and run any of the below by keystroke
+grove clone <url> [dir]     # bare-clone a repo and check out its default branch
+grove add <branch>          # give a branch a worktree (tracking or creating it)
+grove list                  # what is here, what state it is in, where you are
+grove sync [target]         # fetch, then bring worktrees up to date
+grove reset <target>        # throw away a worktree's uncommitted changes
+grove remove <target>       # delete a worktree
+grove path [target]         # print a worktree's directory — no target means the repo root
+grove shell-init <shell>    # the function behind `grove cd` and enter-to-cd
 ```
 
-`garden` on its own is the app; `garden <command>` is the same thing headless, for a script or a
+`grove` on its own is the app; `grove <command>` is the same thing headless, for a script or a
 pipeline. See [The app](#the-app).
 
-`garden <command> --help` lists a command's own options. A worked example:
+`grove <command> --help` lists a command's own options. A worked example:
 
 ```bash
 cd ~/work
-garden clone https://github.com/org/repo.git
+grove clone https://github.com/org/repo.git
 cd repo/main
 
-garden add feat/login        # tracks origin/feat/login
-garden add feat/new-thing    # branches off origin/main
-garden list
+grove add feat/login        # tracks origin/feat/login
+grove add feat/new-thing    # branches off origin/main
+grove list
 #  * main             main             clean
 #    feat/login       feat/login       2 ahead
 #    feat/new-thing   feat/new-thing   dirty
 
-garden sync --all            # bring main up to date, rebase the rest onto it
-garden rm feat/login         # by branch, by directory, or by path
+grove sync --all            # bring main up to date, rebase the rest onto it
+grove rm feat/login         # by branch, by directory, or by path
 ```
 
 ### Naming
@@ -107,7 +107,7 @@ door that nobody remembers the spelling of. That copy is the bookkeeping this to
 remove, so it is written down once, per repository, in a file the repository carries:
 
 ```toml
-# .garden.toml, committed
+# .grove.toml, committed
 [setup]
 copy = [".env", "local.properties"]   # take a copy from main's worktree
 link = ["node_modules"]               # symlink to main's, rather than copying
@@ -135,8 +135,8 @@ after Tuesday and not the ones made before. A link is relative — `../../main/n
 for the same reason `.git` holds `gitdir: ./.bare`: the repository folder is a thing people
 move.
 
-**There is no `garden setup` command, and that is deliberate.** A worktree is filled in when it
-is made, by the command that makes it — `garden add` reads the file, copies, links, and runs, in
+**There is no `grove setup` command, and that is deliberate.** A worktree is filled in when it
+is made, by the command that makes it — `grove add` reads the file, copies, links, and runs, in
 that order. A second command for doing it again would be a second thing to know about, for a
 case a shell already answers: if the install fails you are standing in a directory with a
 terminal, and typing `bun install` is smaller than a command that types it for you.
@@ -158,7 +158,7 @@ left alone. Refreshing one by hand is a `cp`, which is smaller than a flag nobod
 of. A path the trunk does not have is reported too, rather than invented.
 
 Two things get said out loud. **A copied file that nothing ignores** makes a brand new worktree
-open dirty, and `x` in the app — `garden reset --clean` — deletes exactly the untracked files
+open dirty, and `x` in the app — `grove reset --clean` — deletes exactly the untracked files
 this just wrote, so the warning names them at the point they arrive. A linked directory trips
 this more often than it looks like it should: a `node_modules/` line in `.gitignore` is a
 directory-only rule, and the link `link` leaves behind is a symlink rather than a directory, so
@@ -166,7 +166,7 @@ git does not consider it ignored and reports it. `node_modules` without the slas
 And **a command that fails** stops the ones after it, since they were written as a sequence and
 the second half has no business running against the first half's absence.
 
-**`garden add` warns and still succeeds** when a command fails: it was asked for a worktree and
+**`grove add` warns and still succeeds** when a command fails: it was asked for a worktree and
 there is one, and exiting non-zero would tell a script the worktree is missing when it is sitting
 right there. A path in the file that could escape the worktree is a different matter and is
 refused before anything is created at all — a mistake in the file should not leave a directory
@@ -175,11 +175,11 @@ behind for somebody to wonder about.
 **The first worktree is the one nothing sets up**, and it says so rather than leaving you to
 notice. `copy` and `link` have no source there — that worktree *is* the source — and a `run`
 command in a repository downloaded ten seconds ago is the worst possible moment to decide
-something may execute, since nobody has read it yet. So `garden clone` reports and does not run:
+something may execute, since nobody has read it yet. So `grove clone` reports and does not run:
 
 ```
 · repo is ready
-! main/.garden.toml wants to run "bun install" — nothing has; read it, then run it yourself
+! main/.grove.toml wants to run "bun install" — nothing has; read it, then run it yourself
 ```
 
 `--no-setup` skips the lot on an `add`.
@@ -195,16 +195,16 @@ sight** — they move files already on your disk into a directory you asked to b
 **`run` waits.**
 
 ```
-$ garden add feat/login
+$ grove add feat/login
 ✓ took .env, node_modules
-! 1 command in main/.garden.toml has not been trusted here — read it, then add with --trust
+! 1 command in main/.grove.toml has not been trusted here — read it, then add with --trust
 
-$ garden add feat/two --trust
+$ grove add feat/two --trust
 ✓ ran bun install
 ```
 
 The command line prints them and skips them; `--trust` says you have read them. **It does not
-prompt**, and that is the same rule the rest of this tool follows: `garden add` behaves
+prompt**, and that is the same rule the rest of this tool follows: `grove add` behaves
 identically in a pipe, in CI, and under a terminal, and a question that only appeared in one of
 those would make it two commands wearing one name. The app is the surface that can hold a
 question, so [that is where the dialog is](#the-app).
@@ -226,9 +226,9 @@ people `cd` in and type `git reset --hard` from memory, in whichever directory t
 happened to be sitting in. Naming the worktree is the point.
 
 ```
-garden reset feat/login              # discard every change to a tracked file
-garden reset feat/login --clean      # and delete untracked files and directories
-garden reset feat/login --to origin/feat/login   # drop local commits as well
+grove reset feat/login              # discard every change to a tracked file
+grove reset feat/login --clean      # and delete untracked files and directories
+grove reset feat/login --to origin/feat/login   # drop local commits as well
 ```
 
 Two things are worth knowing, and both are things `git reset --hard` itself will not tell you.
@@ -274,7 +274,7 @@ about, the local rebase stands, and with `--all` one contended branch does not b
 the other nine. `--no-push` stops at step 2 and leaves the divergence.
 
 A branch nobody has pushed has no step 1 and no step 3: there is nothing to take and nowhere to
-put it, and inventing a remote branch is `garden add --push`'s decision rather than this one's.
+put it, and inventing a remote branch is `grove add --push`'s decision rather than this one's.
 
 Every check runs before anything is executed. A dirty worktree is skipped without being
 touched, and a rebase that conflicts is rolled back by default — pass `--no-abort` to leave it
@@ -286,24 +286,24 @@ A child process cannot move the shell that started it — every tool that seems 
 direnv) is a shell function wearing the tool's name. So the binary answers and the shell moves:
 
 ```bash
-cd "$(garden path feat/login)"     # works bare, anywhere
+cd "$(grove path feat/login)"     # works bare, anywhere
 ```
 
 One line in your shell's rc file installs the short spelling:
 
 ```bash
-eval "$(garden shell-init zsh)"    # zsh, bash, or fish
+eval "$(grove shell-init zsh)"    # zsh, bash, or fish
 ```
 
-The printed function calls back into garden **by the spelling that printed it** — the running
-runtime and entry script, absolute and quoted — not a `garden` it hopes is on PATH. So a bare
-checkout needs nothing installed: `eval "$(bun ~/src/garden/src/cli.tsx shell-init zsh)"` works
+The printed function calls back into grove **by the spelling that printed it** — the running
+runtime and entry script, absolute and quoted — not a `grove` it hopes is on PATH. So a bare
+checkout needs nothing installed: `eval "$(bun ~/src/grove/src/cli.tsx shell-init zsh)"` works
 as written, and since the rc line re-prints the function at every shell start, a moved checkout
 heals on the next shell.
 
 ```bash
-garden cd feat/login    # cd "$(garden path feat/login)"
-garden cd               # the repo root
+grove cd feat/login    # cd "$(grove path feat/login)"
+grove cd               # the repo root
 ```
 
 In the app, **enter moves *you*, without closing anything**: the standpoint walks to the row
@@ -315,22 +315,22 @@ you stood into it, and the function cds after the screen closes — so `?login�
 find-go-and-land in five keys. Without the function installed enter still works inside the app;
 only the landing is missing, and `remove` keeps measuring against where your shell really is,
 which is what keeps it from stranding a shell nothing can move. Everything that is not `cd`
-passes straight through, exit code and all, so scripts wrapping garden see no difference.
+passes straight through, exit code and all, so scripts wrapping grove see no difference.
 
 The root default is not decoration. `remove` refuses to delete the directory your shell is
 standing in — deleting it would strand the shell somewhere that no longer exists, with every
 next command failing confusingly — and the refusal says "cd somewhere else first". The root is
 the somewhere: the one directory that is never a worktree, from which anything can be removed.
-`garden cd` with no target is that move.
+`grove cd` with no target is that move.
 
 ## The app
 
-Typing `garden` with no arguments opens the worktrees as a full-screen app, and every command above
+Typing `grove` with no arguments opens the worktrees as a full-screen app, and every command above
 is a keystroke:
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ ▗▄▖ ▗▄▖  garden v0.1.0                                                       │
+│ ▗▄▖ ▗▄▖  grove v0.1.0                                                       │
 │ ▝▜█▄█▛▘  ~/work/repo                                                         │
 │    ▐▌    7 worktrees · in main                                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
@@ -363,7 +363,7 @@ buffer. It costs five rows, so it hands them back on a terminal too short or too
 narrow to spare them and says the same things on one line:
 
 ```
-garden v0.1.0 · ~/work/repo · 7 worktrees · in main
+grove v0.1.0 · ~/work/repo · 7 worktrees · in main
 ```
 
 The list is the directory tree, because that is what the worktrees already are: `feat/login`
@@ -432,7 +432,7 @@ Folders are destinations too, and the keys change on one:
 S sync all · R refresh · q quit
 ```
 
-`r` there removes every worktree beneath it, after asking, deepest first — which is `garden remove`
+`r` there removes every worktree beneath it, after asking, deepest first — which is `grove remove`
 run once per worktree, with each one still facing its own refusals. One that says no does not
 stop the rest, and the answer counts both: `removed 2 worktrees, 1 refused`. `a` starts the
 branch name inside the folder you are standing on. `s` is absent, because syncing is a thing you
@@ -477,7 +477,7 @@ Progress is drawn in place — the same spinner and clone percentage a command l
 refusal ("worktree is dirty") lands on the screen instead of ending the session.
 
 **`a` starts the branch where the cursor is.** Branching off the remote's default is what
-`garden add` does from a command line, because there is nothing there to point at. In the app
+`grove add` does from a command line, because there is nothing there to point at. In the app
 there is: the worktree you are looking at when you decide you want another one is almost always
 the one you mean to carry on from, unpushed commits and all. So the prompt says where it starts,
 and starting somewhere else is a matter of moving the cursor first:
@@ -494,14 +494,14 @@ A folder is not a branch and a detached HEAD has no name to pass, so both fall b
 remote's default. And it only applies to a branch that does not exist yet: one that is already
 local, or already on the remote, is checked out rather than created, which the answer says
 (`added feat/login-part-2 from feat/login` against `added feat/login (remote)`). Typing it out
-still works either way — `garden add <branch> --from <base>`.
+still works either way — `grove add <branch> --from <base>`.
 
 Whatever [setup](#setup) is configured runs here too, with its steps drawn in the activity area
 like any other work: filling the worktree in is part of making one, not a second thing to ask
 for. A command that fails says so on the screen and leaves the worktree where it is.
 
 **`a` asks about a file's commands, where the command line cannot.** A worktree is filled in as
-it is made, here as everywhere; what the screen adds is the one question `garden add` has no
+it is made, here as everywhere; what the screen adds is the one question `grove add` has no
 way to put. It comes after the worktree, with the commands themselves on the row, in red,
 because that is what is being agreed to:
 
@@ -509,17 +509,17 @@ because that is what is being agreed to:
 ────────────────────────────────────────────────────────────────────────────────
 ✓ added feat/new
 ✓ took .env, node_modules
-.garden.toml wants to run "bun install", "./scripts/postinstall.sh" — run it here?
+.grove.toml wants to run "bun install", "./scripts/postinstall.sh" — run it here?
 
 y run it · n skip
 ```
 
-That is [trust](#trust), and `y` writes the same record `garden add --trust` writes, so the
+That is [trust](#trust), and `y` writes the same record `grove add --trust` writes, so the
 next worktree — on either surface — does not ask again. `n` leaves the worktree exactly as it
 is: files in place, commands not run, and a shell one keystroke away if you would rather type
 them yourself.
 
-Nothing is asked in a repository with no `.garden.toml`, or one whose file has no commands, or
+Nothing is asked in a repository with no `.grove.toml`, or one whose file has no commands, or
 one whose commands are already recorded — which is to say, almost always. The dialog exists for
 the moment a pull has changed what a worktree is about to run.
 
@@ -602,7 +602,7 @@ Whatever still does not fit is counted rather than dropped in silence (`… 12 e
 the list keeps a floor of its own, because a screen that answers "what did that say" by hiding
 "where am I" has moved the problem rather than solved it.
 
-**`x` throws away everything a worktree has changed**, which is `garden reset --clean` and the
+**`x` throws away everything a worktree has changed**, which is `grove reset --clean` and the
 one key here that destroys work. It appears only on a worktree that has something to throw away
 — a confirmation whose whole effect is to say "nothing to discard" teaches people to answer `y`
 without reading it — and it counts the two kinds apart before it does anything:
@@ -617,7 +617,7 @@ the sentence someone regrets having skimmed. `.gitignore` still protects what it
 gitignored `secrets/.env` is not touched.
 
 Red rather than amber, because it is not the same risk as the other key that asks: a removed
-worktree leaves its branch and its commits behind and `garden add` brings it back, while this
+worktree leaves its branch and its commits behind and `grove add` brings it back, while this
 leaves nothing at all.
 
 **`p` opens a pull request**, behind a popup that says what it would propose before anybody
@@ -638,11 +638,11 @@ list of subjects, oldest first.
 
 Enter publishes the branch if it never met the remote (`push -u`, the same spelling `add
 --push` uses), pushes it plainly otherwise, and then asks `gh pr create` — which is the one
-tool beyond git that garden ever runs, and the only feature that wants it. Missing, the answer
+tool beyond git that grove ever runs, and the only feature that wants it. Missing, the answer
 is one line naming it, exit 10, and nothing else in the tool cares. The URL comes back onto
 the screen.
 
-There is no `garden pr` on the command line, deliberately: from a shell, `gh pr create`
+There is no `grove pr` on the command line, deliberately: from a shell, `gh pr create`
 already exists, with a real editor behind it. The key exists because from the app the
 alternative was leaving.
 
@@ -658,17 +658,17 @@ thing from discarding changes.
 
 ### Starting from nothing
 
-`garden` in a folder with no repository in it opens anyway, and asks the only question there is:
+`grove` in a folder with no repository in it opens anyway, and asks the only question there is:
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ ▗▄▖ ▗▄▖  garden v0.1.0                                                       │
-│ ▝▜█▄█▛▘  ~/Projects/open-source/garden                                       │
+│ ▗▄▖ ▗▄▖  grove v0.1.0                                                       │
+│ ▝▜█▄█▛▘  ~/Projects/open-source/grove                                       │
 │    ▐▌    no repository here yet                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 This folder is empty, so it becomes the repository.
-garden clones it bare and checks out the default branch as the first worktree.
+grove clones it bare and checks out the default branch as the first worktree.
 
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ repository git@github.com:you/thing.git▌                                     │
@@ -677,26 +677,26 @@ garden clones it bare and checks out the default branch as the first worktree.
 enter clone · esc quit
 ```
 
-`enter` runs what `garden clone` runs — the bare clone, the fetch refspec a bare clone omits, the
+`enter` runs what `grove clone` runs — the bare clone, the fetch refspec a bare clone omits, the
 default branch checked out as the first worktree — with the progress drawn in place. The screen
 becomes the app the moment it finishes, on the repository it just made.
 
 Where that repository lands is the folder you are standing in if it is empty, and a new folder
 named after the URL if it is not. Someone who made a directory, stepped into it, and typed
-`garden` means that directory; somewhere with things in it already is the case `garden clone`
+`grove` means that directory; somewhere with things in it already is the case `grove clone`
 and `git clone` both answer by making a folder of their own. A clone that is refused — a typo in
 the URL, a remote that says no — is reported on the screen with the URL left where it was, since
 retyping forty characters to fix one is the wrong thing to ask.
 
-It needs a terminal on both ends. Piped, redirected, or with `--headless`, a bare `garden` prints
-the usage and exits 0, so `garden | head` and `garden > usage.txt` still mean what they used to.
+It needs a terminal on both ends. Piped, redirected, or with `--headless`, a bare `grove` prints
+the usage and exits 0, so `grove | head` and `grove > usage.txt` still mean what they used to.
 The one discovery failure that still ends the process is the ambiguous one — two managed
 repositories directly below where you are standing — because that is a question the screen cannot
-answer either, and it exits 3 the way `garden list` does.
+answer either, and it exits 3 the way `grove list` does.
 
 ## Output and exit codes
 
-**stdout is data, stderr is progress.** `garden list --json | jq` works while a spinner is on
+**stdout is data, stderr is progress.** `grove list --json | jq` works while a spinner is on
 screen, because they are different streams. Every failure, including usage errors, goes to
 stderr.
 
@@ -711,7 +711,7 @@ stderr.
 | 6    | conflicting state: directory exists, branch checked out elsewhere |
 | 7    | git failed for a reason we could not classify                     |
 | 8    | the remote was unreachable, refused us, or does not exist         |
-| 9    | filling a worktree in from `.garden.toml` failed on the disk      |
+| 9    | filling a worktree in from `.grove.toml` failed on the disk      |
 | 10   | `gh` — needed only for PRs — was missing, or refused the PR       |
 | 130  | interrupted (Ctrl-C)                                              |
 
@@ -741,15 +741,15 @@ What a pipe loses is only what a pipe cannot use: the spinner, the percentage ba
 starts and one when it ends, which is what a transcript read a week later wants:
 
 ```bash
-garden sync --all --headless
+grove sync --all --headless
 #  · fetching
 #  ✓ fetched
 #  · syncing feat/login
 #  ✓ feat/login already up to date
 ```
 
-Either way, drawing happens on stderr and results on stdout, so `garden list --json | jq` and
-`garden clone <url> | tee log` both work.
+Either way, drawing happens on stderr and results on stdout, so `grove list --json | jq` and
+`grove clone <url> | tee log` both work.
 
 ### Seeing what git was asked to do
 
@@ -762,15 +762,15 @@ Either way, drawing happens on stderr and results on stdout, so `garden list --j
 
 The `-C` form is what you would paste into a shell to run the same thing by hand. Logging on
 completion rather than on start is what makes the exit code available — the `rev-parse` above
-"failing" is how `garden` asks whether a branch exists, and nothing else would ever show you that.
+"failing" is how `grove` asks whether a branch exists, and nothing else would ever show you that.
 
 ## Scripts
 
 | Command             | Description                                          |
 | ------------------- | ---------------------------------------------------- |
-| `bun run garden`        | Run the CLI (`src/cli.tsx`); `--help` lists commands |
-| `bun run garden:dev`    | Same, with hot reload (`--watch`)                    |
-| `bun run build`     | Bundle to `dist/garden.js` (minified + sourcemap)        |
+| `bun run grove`        | Run the CLI (`src/cli.tsx`); `--help` lists commands |
+| `bun run grove:dev`    | Same, with hot reload (`--watch`)                    |
+| `bun run build`     | Bundle to `dist/grove.js` (minified + sourcemap)        |
 | `bun run compile`   | Self-contained binaries for the four release targets |
 | (tag `vX.Y.Z`)      | Releases: binaries + checksums published, tap formula bumped |
 | `bun run typecheck` | Type check with `tsc --noEmit`                       |
@@ -795,17 +795,17 @@ src/
   cli/
     args.ts            subcommand parsing — pure, no fs and no process
     help.ts            the command surface, described once
-    shell-init.ts      the function `garden cd` and enter-to-cd live in
-    exit-codes.ts      GardenErrorCode -> exit code, as a total switch
+    shell-init.ts      the function `grove cd` and enter-to-cd live in
+    exit-codes.ts      GroveErrorCode -> exit code, as a total switch
     run.ts             dispatch, and how results are printed
   core/                knows nothing about argv, stdout, or Ink
     git.ts             the only place that spawns a process — git, and setup commands
-    errors.ts          GardenError, and classifying git's stderr
+    errors.ts          GroveError, and classifying git's stderr
     layout.ts          pure path and naming rules
     discover.ts        which repository a command means
     worktrees.ts       porcelain parsers, and resolving a target
     branches.ts        ref questions asked of the bare repo
-    setup-file.ts      `.garden.toml`: parsing it, and the trust record
+    setup-file.ts      `.grove.toml`: parsing it, and the trust record
     setup.ts           what it copies, links, and runs into a new worktree
     commands/          clone, add, path, list, remove, reset, sync, pr
   report/
@@ -814,7 +814,7 @@ src/
     ink-reporter.tsx   the terminal one — see src/ui/README.md
   ui/
     components/        Spinner, ProgressBar, StatusBar, StepRow
-    app/               the interactive screen a bare `garden` opens
+    app/               the interactive screen a bare `grove` opens
 ```
 
 ## Tests
@@ -859,13 +859,13 @@ the hook stages those unstaged changes too. Stage the whole file to avoid surpri
 - **`git clone --bare` writes no fetch refspec.** It copies the remote's heads straight into
   `refs/heads/*` and configures no mapping into `refs/remotes/*`, so a later `git fetch` exits
   0 having updated nothing — no error, no remote-tracking refs, and `add`/`sync` then fail
-  somewhere else entirely. `garden clone` sets `remote.origin.fetch` before its first fetch, and an
+  somewhere else entirely. `grove clone` sets `remote.origin.fetch` before its first fetch, and an
   integration test pins the broken behaviour so the line cannot be removed as redundant.
 - **Local branches start as the ones you checked out.** A bare clone imports every remote
-  branch; `garden clone` prunes back to the one with a worktree, so `add` can create-and-track in
+  branch; `grove clone` prunes back to the one with a worktree, so `add` can create-and-track in
   one step and every local branch has a correct upstream. `remove` may leave a branch behind on
   purpose — that is where unpushed commits live — so this is a starting state, not an invariant.
-- **A worktree stopped mid-rebase is reported by git as detached.** True, and useless: `garden` reads
+- **A worktree stopped mid-rebase is reported by git as detached.** True, and useless: `grove` reads
   the branch name back out of the rebase state so `sync feat/login` still finds it, and `list`
   says `rebasing` rather than `detached`.
 - **`stubs/react-devtools-core` exists for `bun run compile`.** Ink reaches for that

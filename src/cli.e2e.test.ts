@@ -21,7 +21,7 @@ onPosix(
   async () => {
     const help = await runCli(["--help"]);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain("Usage: garden <command>");
+    expect(help.stdout).toContain("Usage: grove <command>");
     expect(help.stdout).toContain("clone");
     expect(help.stderr).toBe("");
 
@@ -52,7 +52,7 @@ onPosix(
 
     expect(exitCode).toBe(2);
     expect(stderr).toContain("branch name");
-    // `garden list --json | jq` depends on stdout carrying nothing but results, so
+    // `grove list --json | jq` depends on stdout carrying nothing but results, so
     // even a failure must not write there.
     expect(stdout).toBe("");
   },
@@ -79,7 +79,7 @@ onPosix(
     const { exitCode, stdout, stderr } = await runCli(["list"], { cwd: import.meta.dir });
 
     expect(exitCode).toBe(3);
-    expect(stderr).toContain("garden clone");
+    expect(stderr).toContain("grove clone");
     expect(stdout).toBe("");
   },
   20_000,
@@ -126,8 +126,12 @@ onPosix(
       });
 
       expect(exitCode).toBe(0);
-      expect(stderr).toContain("git -C");
-      expect(stderr).toContain("clone --bare --progress");
+      // Joined before matching: the trace wraps at the terminal width, and
+      // where a long temp path pushes the break is not this test's business —
+      // renaming the tool once moved it into the middle of "clone --bare".
+      const trace = stderr.replaceAll("\n", "");
+      expect(trace).toContain("git -C");
+      expect(trace).toContain("clone --bare --progress");
       // The reason it goes to stderr at all: `--verbose` is a debugging aid, and
       // a pipeline turned on to debug must survive being debugged.
       expect(stdout.trim()).toBe("repo/main\tmain");

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranchExists, remoteBranchExists } from "../branches.ts";
-import { GardenError } from "../errors.ts";
+import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
@@ -16,7 +16,7 @@ import {
 } from "../setup.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
-/** `garden add` — give a branch a worktree, creating the branch if it does not exist. */
+/** `grove add` — give a branch a worktree, creating the branch if it does not exist. */
 
 export type AddOptions = {
   readonly branch: string;
@@ -27,7 +27,7 @@ export type AddOptions = {
   readonly fetch: boolean;
   readonly push: boolean;
   /**
-   * Copy, link, and run whatever `.garden.toml` asks for.
+   * Copy, link, and run whatever `.grove.toml` asks for.
    *
    * On by default, and free where there is no file. A worktree that cannot
    * build is not finished, and the alternative — remembering the `cp` every
@@ -54,7 +54,7 @@ export type AddResult = {
   readonly upstream?: string;
   /** True when the worktree was already there and nothing was done. */
   readonly alreadyPresent: boolean;
-  /** What `garden.copy`/`link`/`setup` did, when anything was configured. */
+  /** What `grove.copy`/`link`/`setup` did, when anything was configured. */
   readonly setup?: SetupResult;
 };
 
@@ -76,12 +76,12 @@ export async function addWorktree(
   refuseNesting(repo.root, path, worktrees);
 
   if (await pathExists(path)) {
-    throw new GardenError("state-conflict", `${dir} already exists`, {
+    throw new GroveError("state-conflict", `${dir} already exists`, {
       hint: "pass --dir <path> to use a different directory",
     });
   }
 
-  // Read here rather than after the worktree exists: a path in `.garden.toml`
+  // Read here rather than after the worktree exists: a path in `.grove.toml`
   // that nobody can resolve is a mistake in the file, and finding it out
   // afterwards would mean a directory on disk that the same command refused.
   // The file is the trunk's, which is why it can be read before this branch has
@@ -149,7 +149,7 @@ async function setUpWorktree(
 /**
  * Asking for a worktree that is already there is not an error.
  *
- * Someone re-running `garden add feat/login` wants to end up with that worktree, and
+ * Someone re-running `grove add feat/login` wants to end up with that worktree, and
  * they have. Reporting success keeps the command idempotent, which is what makes
  * it safe to put in a script.
  */
@@ -168,10 +168,10 @@ async function checkAlreadyThere(
 
   // Same branch, different directory. git would refuse this anyway, but its
   // message does not say which of your directories is the one holding it.
-  throw new GardenError(
+  throw new GroveError(
     "state-conflict",
     `${JSON.stringify(branch)} is already checked out at ${holder.path}`,
-    { hint: `use that worktree, or remove it first: garden rm ${worktreeDir(root, holder.path)}` },
+    { hint: `use that worktree, or remove it first: grove rm ${worktreeDir(root, holder.path)}` },
   );
 }
 
@@ -193,13 +193,9 @@ function refuseNameCollision(
   );
 
   if (clash) {
-    throw new GardenError(
-      "state-conflict",
-      `${worktreeDir(root, clash.path)} already exists here`,
-      {
-        hint: "directories differing only by case collide on macOS and Windows; pass --dir",
-      },
-    );
+    throw new GroveError("state-conflict", `${worktreeDir(root, clash.path)} already exists here`, {
+      hint: "directories differing only by case collide on macOS and Windows; pass --dir",
+    });
   }
 }
 
@@ -221,7 +217,7 @@ function refuseNesting(root: string, path: string, worktrees: readonly WorktreeR
   );
 
   if (clash) {
-    throw new GardenError(
+    throw new GroveError(
       "state-conflict",
       `that would nest with the worktree at ${worktreeDir(root, clash.path)}`,
       { hint: "one worktree inside another makes each report the other's files; pass --dir" },
@@ -263,7 +259,7 @@ async function resolveSource(
   });
 
   if (resolved.code !== 0) {
-    throw new GardenError("usage", `cannot start a branch from ${JSON.stringify(base)}`, {
+    throw new GroveError("usage", `cannot start a branch from ${JSON.stringify(base)}`, {
       hint: options.from ? "--from takes a branch, tag, or commit that exists" : undefined,
     });
   }

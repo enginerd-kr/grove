@@ -1,7 +1,7 @@
 import { Box, render, Static } from "ink";
 import { useSyncExternalStore } from "react";
 // Imported from the files rather than the barrel: `ui/index.ts` also exports the
-// interactive app, and a one-shot `garden list` should not load a screen it will
+// interactive app, and a one-shot `grove list` should not load a screen it will
 // never render.
 import { StatusBar } from "../ui/components/StatusBar.tsx";
 import { StepRow } from "../ui/components/StepRow.tsx";
@@ -12,7 +12,7 @@ import type { Reporter } from "./reporter.ts";
  * The reporter for a command that was given something to do.
  *
  * Everything it draws goes to **stderr**, never stdout. That is the whole
- * reason it can exist alongside `garden list --json | jq`: the progress and the data
+ * reason it can exist alongside `grove list --json | jq`: the progress and the data
  * travel on different streams, so redrawing one cannot corrupt the other.
  */
 

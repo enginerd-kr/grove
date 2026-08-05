@@ -10,13 +10,13 @@ import { type Message, messageFor } from "./message.ts";
 import type { SetupService } from "./service.ts";
 
 /**
- * `garden` in a folder with no repository in it.
+ * `grove` in a folder with no repository in it.
  *
  * Discovery failing used to end the process with "no worktree repository found",
  * which is true and unhelpful: the answer is always the same one command, and
  * the app is already the place that runs commands for you. So the screen opens
  * anyway and asks the only question there is — which repository — then does what
- * `garden clone` does: a bare clone, the fetch refspec a bare clone omits, and
+ * `grove clone` does: a bare clone, the fetch refspec a bare clone omits, and
  * the default branch checked out as the first worktree.
  *
  * It becomes the app the moment that finishes. The two are separate components
@@ -128,7 +128,7 @@ export function Setup({ service, folder, inPlace, store, onReady, onCancel }: Pr
               : "There are things here already, so the repository goes in a folder of its own."}
           </Text>
           <Text dimColor wrap="truncate">
-            garden clones it bare and checks out the default branch as the first worktree.
+            grove clones it bare and checks out the default branch as the first worktree.
           </Text>
         </Box>
       ) : null}

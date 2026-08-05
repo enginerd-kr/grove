@@ -5,11 +5,11 @@ import { withTempRepo } from "../../core/test-utils.ts";
 import { runCli, startUi, type UiSession } from "../e2e-utils.ts";
 
 /**
- * The app, as a user meets it: a bare `garden` in a real repository, in a real
+ * The app, as a user meets it: a bare `grove` in a real repository, in a real
  * terminal, doing real git work.
  *
  * `ink-testing-library` can drive the screen (`App.test.tsx` does) but it cannot
- * answer the question this file exists for — whether typing `garden` and nothing
+ * answer the question this file exists for — whether typing `grove` and nothing
  * else opens anything at all, which depends on `process.stdin.isTTY`.
  */
 
@@ -32,7 +32,7 @@ function start(options: Parameters<typeof startUi>[0]): UiSession {
 }
 
 onPosix(
-  "a bare `garden` opens the worktrees, runs a command from a keystroke, and quits",
+  "a bare `grove` opens the worktrees, runs a command from a keystroke, and quits",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const cloned = await runCli(["clone", originUrl, "repo"], { cwd: work });
@@ -59,7 +59,7 @@ onPosix(
 
 // The scenario that earned the feature: launched inside a worktree, `r` on it
 // is refused — so enter steps out to main first, the removal goes through, and
-// quitting hands the shell the standpoint via GARDEN_CD_FILE so it is not left
+// quitting hands the shell the standpoint via GROVE_CD_FILE so it is not left
 // in a directory that no longer exists.
 onPosix(
   "enter steps out, remove unlocks, and q hands the shell the standpoint",
@@ -71,7 +71,7 @@ onPosix(
       expect(added.exitCode).toBe(0);
 
       const cdFile = `${root}/cd-goes-here`;
-      process.env.GARDEN_CD_FILE = cdFile;
+      process.env.GROVE_CD_FILE = cdFile;
       try {
         // Launched from inside the worktree about to be removed.
         const ui = start({ cwd: `${work}/repo/feat/doomed`, rows: 30 });
@@ -96,7 +96,7 @@ onPosix(
 
         expect(await ui.pressUntilExit("q")).toBe(0);
       } finally {
-        delete process.env.GARDEN_CD_FILE;
+        delete process.env.GROVE_CD_FILE;
       }
 
       // The worktree is gone, and the shell has somewhere real to land.
@@ -107,14 +107,14 @@ onPosix(
   60_000,
 );
 
-// The whole point of the setup screen: `garden` used to exit 3 here. Driven end
+// The whole point of the setup screen: `grove` used to exit 3 here. Driven end
 // to end because what it produces — `.bare`, the `.git` pointer, a worktree for
 // the default branch — is the part a stubbed clone could not vouch for.
 onPosix(
-  "a bare `garden` in an empty folder clones into it and becomes the app",
+  "a bare `grove` in an empty folder clones into it and becomes the app",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
-      const empty = `${work}/garden`;
+      const empty = `${work}/grove`;
       await mkdir(empty, { recursive: true });
 
       const ui = start({ cwd: empty, rows: 28 });
@@ -213,12 +213,12 @@ onPosix(
 // The same invocation without a terminal: there is nothing to draw on and
 // nothing to read keys from, so it answers the way it always did.
 onPosix(
-  "a bare `garden` through a pipe prints the usage and exits 0",
+  "a bare `grove` through a pipe prints the usage and exits 0",
   async () => {
     const { exitCode, stdout } = await runCli();
 
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Usage: garden <command>");
+    expect(stdout).toContain("Usage: grove <command>");
   },
   20_000,
 );

@@ -8,7 +8,7 @@ import { resetWorktree } from "../core/commands/reset.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
-import type { GardenCommand, GlobalOptions } from "./args.ts";
+import type { GlobalOptions, GroveCommand } from "./args.ts";
 import { type Shell, shellInit } from "./shell-init.ts";
 
 /**
@@ -35,7 +35,7 @@ function display(cwd: string, path: string): string {
   return rel.length < path.length ? rel : path;
 }
 
-export async function runCommand(command: GardenCommand, context: CommandContext): Promise<void> {
+export async function runCommand(command: GroveCommand, context: CommandContext): Promise<void> {
   const { cwd, global, reporter } = context;
 
   switch (command.name) {

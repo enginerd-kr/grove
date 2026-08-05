@@ -17,7 +17,7 @@ export type TempRepo = {
   /** An empty directory to run commands from, standing in for `~/work`. */
   readonly work: string;
   readonly originPath: string;
-  /** What you would pass to `garden clone`. */
+  /** What you would pass to `grove clone`. */
   readonly originUrl: string;
 };
 
@@ -34,10 +34,10 @@ export type TempRepo = {
 const GIT_ENV: Readonly<Record<string, string>> = {
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_SYSTEM: "/dev/null",
-  GIT_AUTHOR_NAME: "garden tests",
+  GIT_AUTHOR_NAME: "grove tests",
   GIT_AUTHOR_EMAIL: "tests@example.invalid",
   GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
-  GIT_COMMITTER_NAME: "garden tests",
+  GIT_COMMITTER_NAME: "grove tests",
   GIT_COMMITTER_EMAIL: "tests@example.invalid",
   GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
 };
@@ -94,7 +94,7 @@ export async function withTempRepo(body: (repo: TempRepo) => Promise<void>): Pro
   // Canonicalised because on macOS `tmpdir()` is a symlink (`/var` → `/private/var`)
   // and git reports the resolved path. Without this, every assertion comparing a
   // path git produced against one the test built would fail on the prefix alone.
-  const root = await realpath(await mkdtemp(join(tmpdir(), "garden-")));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "grove-")));
   const restore = new Map<string, string | undefined>();
 
   for (const [key, value] of Object.entries(GIT_ENV)) {

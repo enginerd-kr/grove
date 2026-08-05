@@ -1,16 +1,16 @@
 {
-  "name": "garden",
-  "version": "0.1.1",
+  "name": "grove",
+  "version": "0.2.0",
   "type": "module",
   "private": true,
   "bin": {
-    "garden": "./src/cli.tsx"
+    "grove": "./src/cli.tsx"
   },
   "scripts": {
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
-    "garden": "bun src/cli.tsx",
-    "garden:dev": "bun --watch src/cli.tsx",
-    "build": "bun build src/cli.tsx --outdir dist --entry-naming 'garden.[ext]' --target bun --minify --sourcemap --packages external",
+    "grove": "bun src/cli.tsx",
+    "grove:dev": "bun --watch src/cli.tsx",
+    "build": "bun build src/cli.tsx --outdir dist --entry-naming 'grove.[ext]' --target bun --minify --sourcemap --packages external",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "lint": "biome check .",

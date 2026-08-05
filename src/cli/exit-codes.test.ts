@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import type { GardenErrorCode } from "../core/errors.ts";
+import type { GroveErrorCode } from "../core/errors.ts";
 import { ExitCode, errorToExitCode } from "./exit-codes.ts";
 
 test("every error code maps to a distinct, non-zero exit code", () => {
-  const codes: readonly GardenErrorCode[] = [
+  const codes: readonly GroveErrorCode[] = [
     "usage",
     "not-a-repo",
     "refused",

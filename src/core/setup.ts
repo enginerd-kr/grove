@@ -2,7 +2,7 @@ import { cp, mkdir, symlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { Reporter } from "../report/reporter.ts";
 import { defaultBranch } from "./branches.ts";
-import { GardenError } from "./errors.ts";
+import { GroveError } from "./errors.ts";
 import { entryExists } from "./fs.ts";
 import { runGit, runShell } from "./git.ts";
 import { BARE_DIR, type RepoPaths } from "./layout.ts";
@@ -29,7 +29,7 @@ export { SETUP_FILE };
  * the fix is a `cp` from the worktree next door that nobody remembers the
  * spelling of. That copy is the bookkeeping this tool exists to remove.
  *
- * What to copy, link, and run is read from `.garden.toml` in the worktree —
+ * What to copy, link, and run is read from `.grove.toml` in the worktree —
  * see `setup-file.ts` for why it is a tracked file and what that costs.
  */
 
@@ -92,7 +92,7 @@ export function checkedSetupPath(key: "copy" | "link" | string, value: string): 
     segments.some((segment) => segment === ".." || segment === ".git" || segment === BARE_DIR);
 
   if (bad) {
-    throw new GardenError("usage", `${key}: ${JSON.stringify(value)} is not a usable path`, {
+    throw new GroveError("usage", `${key}: ${JSON.stringify(value)} is not a usable path`, {
       hint: "a relative path inside the worktree, such as `.env` or `config/local.json`",
     });
   }
@@ -101,7 +101,7 @@ export function checkedSetupPath(key: "copy" | "link" | string, value: string): 
 }
 
 /**
- * Reads the repository's `.garden.toml`, with its paths checked.
+ * Reads the repository's `.grove.toml`, with its paths checked.
  *
  * **The trunk's copy, not the worktree being set up.** Both were tenable and
  * this one is uniform: a branch cut last month has no file in it, and reading
@@ -239,15 +239,15 @@ export function describeSetup(result: SetupResult): string {
  * for the same reason: three files copied and then a failed install is two
  * facts, and swallowing the first one helps nobody debug the second.
  */
-export function failureFor(result: SetupResult): GardenError | undefined {
+export function failureFor(result: SetupResult): GroveError | undefined {
   if (!result.failed) return undefined;
 
-  return new GardenError(
+  return new GroveError(
     "setup-failed",
     `${JSON.stringify(result.failed.command)} exited ${result.failed.code}`,
     {
       details: result.failed.details,
-      hint: `fix it and run \`garden setup ${result.dir}\` again`,
+      hint: `fix it and run \`grove setup ${result.dir}\` again`,
     },
   );
 }
@@ -257,7 +257,7 @@ export function failureFor(result: SetupResult): GardenError | undefined {
  *
  * Worth a line of its own because of what else is in this tool: a copied `.env`
  * that nothing ignores makes a brand new worktree open dirty, and `x` in the
- * app — `garden reset --clean` — deletes exactly the untracked files this just
+ * app — `grove reset --clean` — deletes exactly the untracked files this just
  * put there. Saying so once, at the point the file arrives, is cheaper than
  * finding out the other way.
  */
@@ -318,7 +318,7 @@ async function takeOne(
  * Never throws for a command that failed — that is in the result, because the
  * files it copied first are worth reporting either way and because the two
  * callers want different things from it. `add` warns: it was asked for a
- * worktree and there is one. `garden setup` raises: it was asked for this.
+ * worktree and there is one. `grove setup` raises: it was asked for this.
  */
 export async function runSetup(
   repo: RepoPaths,
@@ -377,7 +377,7 @@ export async function runSetup(
         }
       } catch (error) {
         step.fail(`could not fill in ${dir}`);
-        throw new GardenError("setup-failed", `could not set up ${dir}`, {
+        throw new GroveError("setup-failed", `could not set up ${dir}`, {
           details: [error instanceof Error ? error.message : String(error)],
           cause: error,
         });
@@ -411,7 +411,7 @@ export async function runSetup(
    * This is the whole price of a configuration that travels with the project:
    * `copy` and `link` move files already on your disk, and `run` is a command
    * that arrived over the network. So the files land either way and the
-   * commands do not, until `garden trust` records these exact contents — and
+   * commands do not, until `grove trust` records these exact contents — and
    * they stop again the moment a pull changes them.
    */
   const untrusted =
@@ -437,9 +437,9 @@ export async function runSetup(
     const result = await runShell(command, {
       cwd: target.path,
       env: {
-        GARDEN_ROOT: repo.root,
-        GARDEN_WORKTREE: target.path,
-        GARDEN_BRANCH: target.branch ?? "",
+        GROVE_ROOT: repo.root,
+        GROVE_WORKTREE: target.path,
+        GROVE_BRANCH: target.branch ?? "",
       },
     });
 

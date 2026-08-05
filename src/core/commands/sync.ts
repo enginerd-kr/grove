@@ -1,6 +1,6 @@
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, fetchRemotes } from "../branches.ts";
-import { GardenError } from "../errors.ts";
+import { GroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import {
@@ -12,7 +12,7 @@ import {
 } from "../worktrees.ts";
 
 /**
- * `garden sync` — fetch, then bring worktrees up to date with the default branch.
+ * `grove sync` — fetch, then bring worktrees up to date with the default branch.
  *
  * Nothing here touches a worktree it has not first established is safe to touch.
  * A sync that half-finishes is worse than one that declines, because the user
@@ -91,8 +91,8 @@ function chooseTargets(
   const here = worktrees.find((record) => contains(record.path, cwd));
   if (here) return [here];
 
-  throw new GardenError("usage", "not inside a worktree, so there is nothing to sync", {
-    hint: "name one (`garden sync <branch>`) or pass --all",
+  throw new GroveError("usage", "not inside a worktree, so there is nothing to sync", {
+    hint: "name one (`grove sync <branch>`) or pass --all",
   });
 }
 
@@ -321,12 +321,12 @@ async function conflictedPaths(path: string): Promise<readonly string[]> {
  * `--all` it would otherwise be hidden behind a worktree that merely had
  * uncommitted changes.
  */
-export function failureFor(outcomes: readonly SyncOutcome[]): GardenError | undefined {
+export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undefined {
   const conflicted = outcomes.filter((outcome) => outcome.kind === "conflicted");
   const skipped = outcomes.filter((outcome) => outcome.kind === "skipped");
 
   if (conflicted.length > 0) {
-    return new GardenError("rebase-conflict", describe(conflicted, "conflicted"), {
+    return new GroveError("rebase-conflict", describe(conflicted, "conflicted"), {
       hint: "resolve them by hand, or sync after committing",
       details: conflicted.flatMap((outcome) => [
         `${outcome.dir}: ${outcome.reason ?? ""}`,
@@ -336,7 +336,7 @@ export function failureFor(outcomes: readonly SyncOutcome[]): GardenError | unde
   }
 
   if (skipped.length > 0) {
-    return new GardenError("refused", describe(skipped, "skipped"), {
+    return new GroveError("refused", describe(skipped, "skipped"), {
       details: skipped.flatMap((outcome) => [
         `${outcome.dir}: ${outcome.reason ?? ""}`,
         ...(outcome.conflicts ?? []).map((file) => `  ${file}`),

@@ -2,7 +2,7 @@ import { rmdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch } from "../branches.ts";
-import { GardenError } from "../errors.ts";
+import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
@@ -15,7 +15,7 @@ import {
 } from "../worktrees.ts";
 
 /**
- * `garden remove` — delete a worktree, after establishing that you meant it.
+ * `grove remove` — delete a worktree, after establishing that you meant it.
  *
  * The checks below are the command. `git worktree remove` already refuses a
  * dirty tree; what it will not tell you is that this is the branch everything
@@ -91,13 +91,13 @@ async function refuseUnsafe(
   // leaves that shell in a path that no longer exists, and every later command
   // fails for a reason that has nothing to do with what went wrong.
   if (contains(target.path, cwd)) {
-    throw new GardenError("refused", `you are inside ${target.path}`, {
+    throw new GroveError("refused", `you are inside ${target.path}`, {
       hint: "cd somewhere else first",
     });
   }
 
   if (target.locked !== undefined) {
-    throw new GardenError("refused", `${dir} is locked`, {
+    throw new GroveError("refused", `${dir} is locked`, {
       hint: `unlock it first: git -C ${repo.bare} worktree unlock ${target.path}`,
       details: target.locked.length > 0 ? [target.locked] : [],
     });
@@ -105,24 +105,20 @@ async function refuseUnsafe(
 
   if (!options.force) {
     if (worktrees.length === 1) {
-      throw new GardenError("refused", `${dir} is the only worktree`, {
+      throw new GroveError("refused", `${dir} is the only worktree`, {
         hint: "pass --force if you really want an empty repository",
       });
     }
 
     if (target.branch !== undefined && target.branch === (await defaultBranch(repo.bare))) {
-      throw new GardenError(
-        "refused",
-        `${target.branch} is the branch everything else syncs onto`,
-        {
-          hint: "pass --force if you are sure",
-        },
-      );
+      throw new GroveError("refused", `${target.branch} is the branch everything else syncs onto`, {
+        hint: "pass --force if you are sure",
+      });
     }
 
     const status = await statusOf(target.path);
     if (status.dirty) {
-      throw new GardenError("refused", `${dir} has uncommitted changes`, {
+      throw new GroveError("refused", `${dir} has uncommitted changes`, {
         hint: "commit or stash them, or pass --force to discard them",
         details: status.changed.slice(0, 5),
       });
@@ -169,7 +165,7 @@ async function deleteBranch(
   const result = await runGit(["branch", force ? "-D" : "-d", branch], { cwd: bare });
 
   if (result.code !== 0) {
-    throw new GardenError("refused", `the worktree is gone, but ${branch} has unmerged commits`, {
+    throw new GroveError("refused", `the worktree is gone, but ${branch} has unmerged commits`, {
       hint: "pass --force to delete the branch too, or push it first",
       details: [`the branch itself is still there: git -C ${bare} branch -D ${branch}`],
     });
@@ -196,5 +192,5 @@ async function unpushedWarning(bare: string, branch?: string): Promise<string | 
   const count = Number(result.stdout.trim());
   if (!Number.isFinite(count) || count === 0) return undefined;
 
-  return `branch ${branch} still holds ${count} unpushed commit(s); \`garden add ${branch}\` brings it back`;
+  return `branch ${branch} still holds ${count} unpushed commit(s); \`grove add ${branch}\` brings it back`;
 }

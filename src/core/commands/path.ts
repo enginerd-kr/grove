@@ -2,12 +2,12 @@ import type { RepoPaths } from "../layout.ts";
 import { listWorktrees, resolveTarget, worktreeDir } from "../worktrees.ts";
 
 /**
- * `garden path` — where a worktree is, said once, on stdout.
+ * `grove path` — where a worktree is, said once, on stdout.
  *
  * The smallest command in the tool, and the bridge out of its one hard limit: a
  * child process cannot move the shell that started it. So the shell asks, and
- * this answers — `cd "$(garden path feat/login)"` works bare, and the function
- * `shell-init` installs spells it `garden cd feat/login`.
+ * this answers — `cd "$(grove path feat/login)"` works bare, and the function
+ * `shell-init` installs spells it `grove cd feat/login`.
  *
  * No target means the repository root. The root is the one directory that is
  * never a worktree and never gets removed, which makes it the place to stand
