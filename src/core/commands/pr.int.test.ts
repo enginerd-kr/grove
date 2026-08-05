@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { createPlainReporter } from "../../report/reporter.ts";
 import type { GardenError } from "../errors.ts";
@@ -207,9 +207,18 @@ onPosix("gh missing entirely is its own answer, not a stack trace", async () => 
   await withRepo(async (repo, worktree) => {
     await commitIn(worktree, "a.txt", "First step");
 
-    // PATH with no gh anywhere in it — just enough for git itself to run.
+    // A PATH that provably lacks gh. "/usr/bin:/bin" was the first try and it
+    // failed on exactly the machine this test exists for: GitHub's runners
+    // ship gh at /usr/bin/gh. So the PATH is one fresh directory holding a
+    // symlink to the real git — enough for the push, and provably nothing else.
+    const gitOnly = join(repo.root, "git-only-bin");
+    await mkdir(gitOnly, { recursive: true });
+    const git = Bun.which("git");
+    if (git === null) throw new Error("no git on PATH");
+    await symlink(git, join(gitOnly, "git"));
+
     const restore = process.env.PATH;
-    process.env.PATH = "/usr/bin:/bin";
+    process.env.PATH = gitOnly;
     try {
       const error = await expectError(
         createPr(repo, repo.root, { target: "feat/new-thing", title: "t", body: "" }, silent()),
