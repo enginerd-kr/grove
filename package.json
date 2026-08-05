@@ -16,7 +16,8 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "ci": "biome ci . && tsc --noEmit && bun test"
+    "ci": "biome ci . && tsc --noEmit && bun test",
+    "compile": "bash scripts/build-binaries.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
@@ -27,6 +28,8 @@
   },
   "dependencies": {
     "ink": "^7.1.1",
-    "react": "^19.2.8"
-  }
+    "react": "^19.2.8",
+    "react-devtools-core": "file:./stubs/react-devtools-core"
+  },
+  "license": "MIT"
 }

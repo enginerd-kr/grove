@@ -6,7 +6,7 @@ import { cloneRepo } from "../core/commands/clone.ts";
 import { repoPaths } from "../core/layout.ts";
 import { withTempRepo } from "../core/test-utils.ts";
 import { createPlainReporter } from "../report/reporter.ts";
-import { shellInit } from "./shell-init.ts";
+import { isCompiledMain, shellInit } from "./shell-init.ts";
 
 /**
  * The wrapper, evaluated by a real shell — with nothing installed.
@@ -109,6 +109,14 @@ onPosix(
   },
   30000,
 );
+
+// The one thing the emitted function must never contain: the virtual path a
+// compiled binary calls its own entry script. It exists for no other process.
+test("a compiled binary is recognised by its virtual entry path", () => {
+  expect(isCompiledMain("/$bunfs/root/garden")).toBe(true);
+  expect(isCompiledMain("B:\\~BUN\\root\\garden.exe")).toBe(true);
+  expect(isCompiledMain("/Users/somebody/src/garden/src/cli.tsx")).toBe(false);
+});
 
 test("the function reaches back by the spelling that printed it", () => {
   // Not a `garden` it hopes is on PATH: the running runtime, quoted, so a bare
