@@ -772,6 +772,7 @@ completion rather than on start is what makes the exit code available — the `r
 | `bun run garden:dev`    | Same, with hot reload (`--watch`)                    |
 | `bun run build`     | Bundle to `dist/garden.js` (minified + sourcemap)        |
 | `bun run compile`   | Self-contained binaries for the four release targets |
+| (tag `vX.Y.Z`)      | Releases: binaries + checksums published, tap formula bumped |
 | `bun run typecheck` | Type check with `tsc --noEmit`                       |
 | `bun test`          | Run `*.test.ts` via `bun:test`                       |
 | `bun run lint`      | Lint + format check (Biome), no writes               |
