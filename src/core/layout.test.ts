@@ -60,7 +60,7 @@ test("case is preserved", () => {
   expect(slugifySegment("Feat")).not.toBe(slugifySegment("feat"));
 });
 
-test("a branch with no usable characters is a usage error naming --dir", () => {
+test("a branch with no usable characters is a usage error asking for another name", () => {
   for (const branch of ["///", "...", "---", "\uD55C\uAE00"]) {
     const thrown = (() => {
       try {
@@ -73,21 +73,7 @@ test("a branch with no usable characters is a usage error naming --dir", () => {
 
     expect(thrown).toBeInstanceOf(GroveError);
     expect((thrown as GroveError).code).toBe("usage");
-    expect((thrown as GroveError).hint).toContain("--dir");
-  }
-});
-
-test("--dir is validated, not rewritten", () => {
-  // Someone naming a directory explicitly means it; a silently slugified result
-  // would be worse than a refusal.
-  expect(worktreeRelPath("feat/login", "login")).toBe("login");
-  // Nesting is allowed now that it is the default.
-  expect(worktreeRelPath("feat/login", "work/login")).toBe("work/login");
-
-  // The failure this prevents: a worktree created outside the repo folder,
-  // where discovery would never find it again.
-  for (const override of ["../elsewhere", "nested/../..", "/abs/path", ".bare", ".git", "..", ""]) {
-    expect(() => worktreeRelPath("feat/login", override)).toThrow(GroveError);
+    expect((thrown as GroveError).hint).toContain("branch name");
   }
 });
 

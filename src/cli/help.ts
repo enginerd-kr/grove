@@ -93,12 +93,6 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         summary: "base a new branch on <base> instead of the default branch",
       },
       {
-        name: "dir",
-        type: "string",
-        placeholder: "<name>",
-        summary: "name the directory <name> instead of deriving it from the branch",
-      },
-      {
         name: "no-fetch",
         type: "boolean",
         summary: "skip the fetch that looks for a remote branch",

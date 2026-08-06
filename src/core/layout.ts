@@ -60,7 +60,8 @@ const RESERVED = new Set(["", ".", "..", BARE_DIR, ".git"]);
  * distinct.
  *
  * The result can be empty — a segment of nothing but dots and dashes has no
- * usable name — which `worktreeRelPath` turns into an error naming `--dir`.
+ * usable name — which `worktreeRelPath` turns into an error asking for a
+ * different branch name.
  */
 export function slugifySegment(segment: string): string {
   return segment
@@ -83,9 +84,7 @@ export function slugifySegment(segment: string): string {
  * one would have to be both a directory and a worktree. git already forbids
  * exactly that pair as a ref D/F conflict, so the filesystem agrees with it.
  */
-export function worktreeRelPath(branch: string, override?: string): string {
-  if (override !== undefined) return checkedOverride(override);
-
+export function worktreeRelPath(branch: string): string {
   const segments = branch
     .split("/")
     .map(slugifySegment)
@@ -96,37 +95,7 @@ export function worktreeRelPath(branch: string, override?: string): string {
       "usage",
       `cannot derive a directory from branch ${JSON.stringify(branch)}`,
       {
-        hint: "pass --dir <path> to choose one",
-      },
-    );
-  }
-
-  return segments.join("/");
-}
-
-/**
- * Validates `--dir` rather than rewriting it.
- *
- * Someone naming a directory explicitly means it, so a silently slugified
- * result would be worse than a refusal. Nesting is allowed — the default is
- * nested now — but the path must stay inside the repo folder, or the worktree
- * lands somewhere discovery will never find it again.
- */
-function checkedOverride(override: string): string {
-  const segments = override.split(/[/\\]/);
-  const bad =
-    override.startsWith("/") ||
-    override.startsWith("\\") ||
-    /^[A-Za-z]:/.test(override) ||
-    segments.length === 0 ||
-    segments.some((segment) => RESERVED.has(segment));
-
-  if (bad) {
-    throw new GroveError(
-      "usage",
-      `--dir must be a path inside the repo, got ${JSON.stringify(override)}`,
-      {
-        hint: "a relative path such as `feat/login`; no leading slash, no `..`",
+        hint: "pick a branch name with letters or digits in it",
       },
     );
   }

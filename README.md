@@ -114,11 +114,9 @@ One consequence: `feat` and `feat/test` cannot both exist. git already forbids t
 ref D/F conflict, so the filesystem simply agrees with it.
 
 The mapping is one-way and never inverted — a branch name needing sanitising cannot be
-reconstructed, and `--dir` makes it arbitrary anyway. `remove` and `sync` look the target up in
-`git worktree list` instead, so a branch name, a directory path, or a filesystem path all work.
-
-`--dir` accepts a nested path but is validated rather than rewritten: no leading slash, no
-`..`, nothing that would put a worktree outside the repo folder or inside another worktree.
+reconstructed, and a worktree made by hand can sit anywhere. `remove` and `sync` look the
+target up in `git worktree list` instead, so a branch name, a directory path, or a filesystem
+path all work.
 
 ### Setup
 
@@ -392,9 +390,8 @@ grove v0.1.0 · ~/work/repo · 7 worktrees · in main
 
 The list is the directory tree, because that is what the worktrees already are: `feat/login`
 lives in `feat/login`, so a flat list repeats the prefix on every row and hides the grouping the
-slashes were there to express. A `branch` column appears only for a worktree whose branch
-differs from the directory holding it, which `--dir` and a detached HEAD are the ways to
-produce.
+slashes were there to express. There is no separate branch column — the directory *is* the
+branch's name, which is the point of the naming rule above.
 
 **Two drift columns, because working in a worktree you have two questions.** `origin` is how far
 the branch has drifted from the one it tracks — is there anything to push, anything to pull.
@@ -425,6 +422,11 @@ one that looks different from across the terminal. Shape as well as colour, deli
 green-versus-yellow is invisible to a good number of people and to any terminal theme with
 opinions. The three states a dot cannot say keep their words beside it: `rebasing`, `detached`,
 `locked`.
+
+Each row ends with when the worktree was last worked in — the later of its last commit and its
+newest uncommitted edit, so the worktree you left mid-change reads as touched then, not at its
+last commit. Recent times are relative (`5m ago`, `2d ago`); past a week, "ago" stops meaning
+anything and the local date takes over (`2026-07-03 14:12`).
 
 **None of it waits for a keystroke.** Once on open and every minute after, the app fetches and
 then re-reads everything — so a build that dirtied a worktree, a branch created in another

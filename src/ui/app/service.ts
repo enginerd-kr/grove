@@ -323,8 +323,8 @@ export function createWorktreeService(
 
     trustAndRun: async (branch) => {
       // Resolved rather than assembled: the directory a branch lives in is
-      // whatever `git worktree list` says, and `--dir` and slugging both make
-      // guessing it from the name wrong.
+      // whatever `git worktree list` says, and slugging makes guessing it
+      // from the name wrong.
       const worktrees = await listWorktrees(repo.gitDir);
       const record = resolveTarget(branch, worktrees, { root: repo.root, cwd });
       const result = await trustAndRun(

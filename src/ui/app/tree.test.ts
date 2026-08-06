@@ -67,8 +67,9 @@ test("leaves are the rows an action can act on", () => {
 
 test("a worktree keeps its own name even where a folder shares it", () => {
   // `feat` and `feat/login` cannot both exist as branches — git calls that a
-  // ref D/F conflict — but `--dir` can still produce a directory named after a
-  // prefix, and it must not be swallowed by the group it looks like.
+  // ref D/F conflict — but slugging and hand-made worktrees can still produce
+  // a directory named after a prefix, and it must not be swallowed by the
+  // group it looks like.
   expect(shape([summary("feat"), summary("feat/login")])).toEqual(["feat", "feat/", "  login"]);
 });
 

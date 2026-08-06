@@ -58,9 +58,9 @@ export async function removeWorktree(
     // Clears the administrative files git leaves behind, so a later `add` of the
     // same directory name is not refused by a record of the one just deleted.
     await runGitOrThrow(["worktree", "prune"], { cwd: repo.gitDir });
-    // The base a nested `--dir` climbs back towards without passing it: a plain
-    // repository's worktrees sit beside the root, not under it, so pruning has
-    // to start one level out to reach them at all.
+    // The base a nested directory climbs back towards without passing it: a
+    // plain repository's worktrees sit beside the root, not under it, so
+    // pruning has to start one level out to reach them at all.
     await pruneEmptyParents(repo.kind === "plain" ? dirname(repo.root) : repo.root, target.path);
     step.succeed(`removed ${dir}`);
   } catch (error) {

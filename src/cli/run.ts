@@ -62,7 +62,6 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
         {
           branch: command.branch,
           from: command.from,
-          dir: command.dir,
           fetch: command.fetch,
           push: command.push,
           setup: command.setup,

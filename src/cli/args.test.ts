@@ -40,7 +40,6 @@ test("add defaults to fetching, setting up, and not pushing", () => {
     name: "add",
     branch: "feat/login",
     from: undefined,
-    dir: undefined,
     fetch: true,
     push: false,
     setup: true,

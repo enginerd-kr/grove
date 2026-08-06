@@ -77,7 +77,7 @@ export type SetupResult = {
 /**
  * A configured path, checked rather than rewritten.
  *
- * The same rule `--dir` follows and for a sharper reason: these paths are
+ * Checked for a sharp reason: these paths are
  * resolved twice, once against the worktree being filled and once against the
  * one being read from, so a `..` that escaped would let a line in a config file
  * copy `~/.ssh` into a directory somebody is about to commit from.
