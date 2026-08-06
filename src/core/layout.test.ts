@@ -3,10 +3,33 @@ import { GroveError } from "./errors.ts";
 import {
   contains,
   looksLikeRepoUrl,
+  plainRepoPaths,
   repoNameFromUrl,
+  repoPaths,
   slugifySegment,
   worktreeRelPath,
 } from "./layout.ts";
+
+test("repoPaths lays out the managed shape: .bare, and a .git pointing at it", () => {
+  expect(repoPaths("/work/repo")).toEqual({
+    root: "/work/repo",
+    gitDir: "/work/repo/.bare",
+    gitFile: "/work/repo/.git",
+    kind: "managed",
+  });
+});
+
+// The root is a plain repository's main checkout, so its git dir and its
+// pointer file are the same directory — there is no separate pointer to keep
+// in sync with a folder that might move.
+test("plainRepoPaths points gitDir and gitFile at the same .git", () => {
+  expect(plainRepoPaths("/work/plain")).toEqual({
+    root: "/work/plain",
+    gitDir: "/work/plain/.git",
+    gitFile: "/work/plain/.git",
+    kind: "plain",
+  });
+});
 
 // The tree on disk mirrors the tree in refs/heads: `feat/test` is a worktree
 // inside `feat/`, not a directory called `feat-test`.

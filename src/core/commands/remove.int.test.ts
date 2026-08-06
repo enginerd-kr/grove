@@ -56,7 +56,7 @@ onPosix(
 
       expect(result.path).toBe(join(repo.root, "feat", "login"));
       expect(await pathExists(result.path)).toBe(false);
-      expect((await listWorktrees(repo.bare)).map((w) => w.branch)).toEqual(["main"]);
+      expect((await listWorktrees(repo.gitDir)).map((w) => w.branch)).toEqual(["main"]);
 
       // Pruned, so re-adding the same directory is not refused by a leftover
       // administrative record.
@@ -252,7 +252,7 @@ onPosix(
       // Both rules apply here; either refusal is correct, and the point is that
       // one of them fires rather than which.
       expect(error.code).toBe("refused");
-      expect(await listWorktrees(repo.bare)).toHaveLength(1);
+      expect(await listWorktrees(repo.gitDir)).toHaveLength(1);
     });
   },
   30_000,
@@ -280,7 +280,7 @@ onPosix(
       expect(result.unpushedWarning).toContain("1 unpushed");
       expect(
         await gitOutput(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], {
-          cwd: repo.bare,
+          cwd: repo.gitDir,
         }),
       ).toContain("feat/login");
     });
@@ -319,7 +319,7 @@ onPosix(
       expect(result.branchDeleted).toBe(true);
       expect(
         await gitOutput(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], {
-          cwd: repo.bare,
+          cwd: repo.gitDir,
         }),
       ).not.toContain("feat/login");
     });
@@ -353,7 +353,7 @@ onPosix(
       expect(await pathExists(path)).toBe(false);
       expect(
         await gitOutput(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], {
-          cwd: repo.bare,
+          cwd: repo.gitDir,
         }),
       ).toContain("feat/login");
     });
@@ -386,7 +386,7 @@ onPosix(
   async () => {
     await withRepo(async (repo, work) => {
       await runGit(["worktree", "lock", "--reason", "held", join(repo.root, "feat", "login")], {
-        cwd: repo.bare,
+        cwd: repo.gitDir,
       });
 
       const error = await expectError(

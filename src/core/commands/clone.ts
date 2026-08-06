@@ -34,7 +34,7 @@ export type CloneOptions = {
 
 export type CloneResult = {
   readonly root: string;
-  readonly bare: string;
+  readonly gitDir: string;
   readonly defaultBranch: string;
   /** The branch that got the first worktree. */
   readonly branch: string;
@@ -86,7 +86,7 @@ export async function cloneRepo(
     // and shoves the progress bar around while it draws. The user just typed it.
     const step = reporter.step("cloning");
     try {
-      await runGitOrThrow(["clone", "--bare", "--progress", options.url, paths.bare], {
+      await runGitOrThrow(["clone", "--bare", "--progress", options.url, paths.gitDir], {
         cwd,
         onStderrLine: (line) => {
           const percent = parseGitProgress(line);
@@ -99,26 +99,26 @@ export async function cloneRepo(
       throw error;
     }
 
-    await configureRemote(paths.bare, reporter);
+    await configureRemote(paths.gitDir, reporter);
 
-    const trunk = await defaultBranch(paths.bare);
+    const trunk = await defaultBranch(paths.gitDir);
     const branch = options.branch ?? trunk;
 
     const worktree = join(root, worktreeRelPath(branch));
     await Bun.write(paths.gitFile, GIT_FILE_CONTENTS);
-    await createFirstWorktree(paths.bare, branch, worktree);
-    await pruneUnusedHeads(paths.bare, branch);
+    await createFirstWorktree(paths.gitDir, branch, worktree);
+    await pruneUnusedHeads(paths.gitDir, branch);
 
     reporter.info(`${relative(cwd, root) || root} is ready`);
     await sayWhatTheFileWants(paths, worktree, reporter);
 
-    return { root, bare: paths.bare, defaultBranch: trunk, branch, worktree };
+    return { root, gitDir: paths.gitDir, defaultBranch: trunk, branch, worktree };
   } catch (error) {
     // A partial `.bare` is worse than nothing: discovery would find it, every
     // command would then fail obscurely, and re-running clone would refuse
     // because the directory is no longer empty. Removing it makes clone
     // idempotent — the second attempt behaves like the first.
-    await rm(rootExisted ? paths.bare : root, { recursive: true, force: true });
+    await rm(rootExisted ? paths.gitDir : root, { recursive: true, force: true });
     throw error;
   }
 }

@@ -236,9 +236,18 @@ export async function statusOf(path: string): Promise<WorktreeStatus> {
   return parseStatus(result.stdout);
 }
 
-/** A worktree's directory relative to the repo root, always with `/` separators. */
+/**
+ * A worktree's directory relative to the repo root, always with `/` separators.
+ *
+ * `"."` for the root itself — a plain repository's main checkout, which `relative`
+ * would otherwise answer with the empty string. A hand-made sibling worktree
+ * (outside the root, which only a plain repository has) comes back as `../name`,
+ * honest about where it actually lives.
+ */
 export function worktreeDir(root: string, path: string): string {
-  return relative(root, path).split(sep).join("/");
+  const rel = relative(root, path).split(sep).join("/");
+
+  return rel.length === 0 ? "." : rel;
 }
 
 /**

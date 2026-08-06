@@ -50,7 +50,7 @@ async function resolveProposable(
   target: string,
   base: string,
 ): Promise<WorktreeRecord & { readonly branch: string }> {
-  const worktrees = await listWorktrees(repo.bare);
+  const worktrees = await listWorktrees(repo.gitDir);
   const record = resolveTarget(target, worktrees, { root: repo.root, cwd });
   const dir = worktreeDir(repo.root, record.path);
 
@@ -84,7 +84,7 @@ async function resolveProposable(
  * is how questions stop being read.
  */
 export async function prPreview(repo: RepoPaths, cwd: string, target: string): Promise<PrPreview> {
-  const base = await defaultBranch(repo.bare);
+  const base = await defaultBranch(repo.gitDir);
   const record = await resolveProposable(repo, cwd, target, base);
   const dir = worktreeDir(repo.root, record.path);
 
@@ -135,7 +135,7 @@ export async function createPr(
     throw new GroveError("usage", "a pull request needs a title");
   }
 
-  const base = await defaultBranch(repo.bare);
+  const base = await defaultBranch(repo.gitDir);
   const record = await resolveProposable(repo, cwd, options.target, base);
   const dir = worktreeDir(repo.root, record.path);
 

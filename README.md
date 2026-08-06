@@ -46,6 +46,28 @@ Running `grove clone https://github.com/org/repo.git` in `~/work` produces:
 Everything for one repository lives in one folder, and every command works out which folder
 it means from the directory you ran it in.
 
+### An ordinary clone or checkout
+
+grove also works standing inside a repository it did not lay out — a plain `git clone` or
+`git init`, no conversion involved. `grove list`, `add`, `sync`, `reset`, `remove`, `path`, and
+the app all recognise it; the root shows up as the worktree named `.`, since it is one, and
+`add` puts a new worktree beside the repository rather than inside it — `git worktree add
+../thing` is the convention already in use there:
+
+```bash
+git clone https://github.com/org/repo.git
+cd repo
+
+grove add feat/login        # -> ../repo-feat-login
+grove list
+#  * main        .                    clean
+#    feat/login  ../repo-feat-login   clean
+```
+
+Only standing *inside* an ordinary repository recognises it — a folder full of unrelated clones
+never gets adopted just for being nearby, the same rule a managed layout already follows.
+`remove` refuses the root itself, since it is the repository and not a worktree grove made.
+
 ## Commands
 
 ```bash

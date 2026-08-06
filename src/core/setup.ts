@@ -140,7 +140,7 @@ export async function pendingCommands(
   const plan = await repoSetupPlan(repo, fallback);
   if (plan.commands.length === 0 || plan.fingerprint === undefined) return [];
 
-  return (await isTrusted(repo.bare, plan.fingerprint)) ? [] : plan.commands;
+  return (await isTrusted(repo.gitDir, plan.fingerprint)) ? [] : plan.commands;
 }
 
 /**
@@ -156,7 +156,7 @@ export async function trustAndRun(
   reporter: Reporter,
 ): Promise<SetupResult> {
   const plan = await repoSetupPlan(repo, target.path);
-  if (plan.fingerprint !== undefined) await trust(repo.bare, plan.fingerprint);
+  if (plan.fingerprint !== undefined) await trust(repo.gitDir, plan.fingerprint);
 
   return runSetup(repo, target, {}, reporter);
 }
@@ -200,7 +200,7 @@ export async function repoSetupPlan(repo: RepoPaths, fallback?: string): Promise
 async function sourceWorktree(repo: RepoPaths, target: SetupTarget): Promise<Source> {
   let trunk: string;
   try {
-    trunk = await defaultBranch(repo.bare);
+    trunk = await defaultBranch(repo.gitDir);
   } catch {
     // A repository whose remote advertises no HEAD. Everything else here still
     // works, and failing the `add` this is running inside of would be a poor
@@ -208,7 +208,7 @@ async function sourceWorktree(repo: RepoPaths, target: SetupTarget): Promise<Sou
     return { kind: "none" };
   }
 
-  const worktrees = await listWorktrees(repo.bare);
+  const worktrees = await listWorktrees(repo.gitDir);
   const record = worktrees.find((entry) => entry.branch === trunk);
 
   if (!record) return { kind: "none", trunk };
@@ -417,7 +417,7 @@ export async function runSetup(
   const untrusted =
     plan.commands.length > 0 &&
     plan.fingerprint !== undefined &&
-    !(await isTrusted(repo.bare, plan.fingerprint));
+    !(await isTrusted(repo.gitDir, plan.fingerprint));
 
   if (untrusted) {
     // Named by the file that actually governs, which is the trunk's — pointing

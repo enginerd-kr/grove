@@ -208,7 +208,7 @@ export function createWorktreeService(
 
     standpoint: () => cwd,
 
-    fetch: () => fetchRemotes(repo.bare),
+    fetch: () => fetchRemotes(repo.gitDir),
 
     add: async (branch, from) => {
       // `setup: true` like the command line, because filling the worktree in is
@@ -325,7 +325,7 @@ export function createWorktreeService(
       // Resolved rather than assembled: the directory a branch lives in is
       // whatever `git worktree list` says, and `--dir` and slugging both make
       // guessing it from the name wrong.
-      const worktrees = await listWorktrees(repo.bare);
+      const worktrees = await listWorktrees(repo.gitDir);
       const record = resolveTarget(branch, worktrees, { root: repo.root, cwd });
       const result = await trustAndRun(
         repo,

@@ -3,7 +3,7 @@ import { basename, dirname, join, parse, resolve } from "node:path";
 import { GroveError } from "./errors.ts";
 import { childDirectories, pathExists } from "./fs.ts";
 import { runGit } from "./git.ts";
-import { BARE_DIR, type RepoPaths, repoPaths } from "./layout.ts";
+import { BARE_DIR, plainRepoPaths, type RepoKind, type RepoPaths, repoPaths } from "./layout.ts";
 
 /**
  * Working out which repository a command means.
@@ -35,22 +35,30 @@ async function canonicalize(path: string): Promise<string> {
   }
 }
 
+type GitFound = { readonly kind: RepoKind; readonly root: string };
+
 /**
  * Rule 2: ask git.
  *
  * Covers being anywhere inside a worktree, at any depth, and the repo root
  * itself — the `.git` file there makes git resolve the same common dir. The
- * `basename === ".bare"` check is what distinguishes a repository this tool
- * laid out from an ordinary clone that merely happens to be nearby.
+ * basename says which layout it is: `.bare` is one this tool laid out itself,
+ * `.git` is an ordinary clone or checkout standing on its own. Anything else —
+ * a bare repo named `foo.git`, a submodule's `.git/modules/<name>`, a
+ * `--separate-git-dir` — is a shape this rule declines to guess a root from.
  */
-async function fromGit(cwd: string): Promise<string | undefined> {
+async function fromGit(cwd: string): Promise<GitFound | undefined> {
   const result = await runGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd });
   if (result.code !== 0) return undefined;
 
   const commonDir = result.stdout.trim();
-  if (commonDir.length === 0 || basename(commonDir) !== BARE_DIR) return undefined;
+  if (commonDir.length === 0) return undefined;
 
-  return dirname(commonDir);
+  const base = basename(commonDir);
+  if (base === BARE_DIR) return { kind: "managed", root: dirname(commonDir) };
+  if (base === ".git") return { kind: "plain", root: dirname(commonDir) };
+
+  return undefined;
 }
 
 /** Rule 3: walk up looking for the marker, for when git cannot help. */
@@ -101,17 +109,26 @@ async function fromChildren(cwd: string): Promise<string | undefined> {
  * `explicit` is `-C/--repo`. It does not bypass the rules, it relocates them:
  * pointing at the repo folder, at a worktree inside it, or at the parent all
  * work, which matches what someone typing a path actually expects.
+ *
+ * A plain repository is recognised last, and only from rule 2 — never rules 3
+ * or 4, which stay `.bare`-marker-only. That preserves every existing answer
+ * bit-for-bit (a managed repository found by walking up or scanning children
+ * always wins) and means standing *beside* an ordinary clone still does not
+ * adopt it; only standing *inside* one does.
  */
 export async function findRepoRoot(cwd: string, explicit?: string): Promise<RepoPaths> {
   const from = await canonicalize(explicit === undefined ? resolve(cwd) : resolve(cwd, explicit));
 
-  const root = (await fromGit(from)) ?? (await fromAncestors(from)) ?? (await fromChildren(from));
+  const viaGit = await fromGit(from);
+  const managedRoot =
+    (viaGit?.kind === "managed" ? viaGit.root : undefined) ??
+    (await fromAncestors(from)) ??
+    (await fromChildren(from));
 
-  if (root === undefined) {
-    throw new GroveError("not-a-repo", `no worktree repository found from ${from}`, {
-      hint: `run \`grove clone <url>\` to create one, or -C <dir> to point at an existing one`,
-    });
-  }
+  if (managedRoot !== undefined) return repoPaths(managedRoot);
+  if (viaGit?.kind === "plain") return plainRepoPaths(viaGit.root);
 
-  return repoPaths(root);
+  throw new GroveError("not-a-repo", `no worktree repository found from ${from}`, {
+    hint: `run \`grove clone <url>\` to create one, or -C <dir> to point at an existing one`,
+  });
 }

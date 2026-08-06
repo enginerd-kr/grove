@@ -77,9 +77,10 @@ onPosix(
 // understood, there is just no repository here. A scratch directory, not
 // `import.meta.dir`: discovery walks upward, and on a machine where this very
 // checkout lives inside a grove-managed folder, the source tree is not
-// "outside a managed repo" at all.
+// "outside a managed repo" at all. It is also not a plain repo grove would
+// now recognise as-is — a directory `git init` never touched.
 onPosix(
-  "running outside a managed repo exits 3 with somewhere to go next",
+  "running outside any repo exits 3 with somewhere to go next",
   async () => {
     const outside = await mkdtemp(join(tmpdir(), "grove-outside-"));
     try {
