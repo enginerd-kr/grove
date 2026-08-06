@@ -1091,14 +1091,14 @@ export function App({
   // for rather than assumed — getting it wrong is a row of the list drawn off
   // the bottom of the screen.
   const banner = bannerRows(columns, terminalRows);
-  // A blank row above the banner, one between it and the column headings, and
-  // another between the last thing reported and the keys: the places the
-  // screen would otherwise run hard against its own furniture or the
-  // terminal's output.
+  // A blank row above the banner and one between it and the column headings:
+  // the places the screen would otherwise run hard against the terminal's
+  // output or its own furniture.
   const headerRows = banner + 1 + (labelled ? 2 : 1) + 1;
-  // The key bar is one row until the terminal is too narrow to hold the keys on
-  // one, which the folder hints (`a add under feat/`) reach first. Asked for
-  // rather than assumed, for the same reason as the banner.
+  // The rule over the keys, the bar itself, and the position row. The bar is
+  // one row until the terminal is too narrow to hold the keys on one, which
+  // the folder hints (`a add under feat/`) reach first. Asked for rather than
+  // assumed, for the same reason as the banner.
   const footerRows = 1 + statusBarRows(hints, columns) + 1;
   const detailRows =
     (mode.kind === "prompt" ? PROMPT_ROWS : 0) +
@@ -1332,9 +1332,11 @@ export function App({
         </Box>
       ) : null}
 
-      <Box marginTop={1}>
-        <StatusBar hints={hints} columns={columns} />
-      </Box>
+      {/* A rule rather than a blank row: the keys are chrome, not content, and
+          the line is what says so — the same convention that already separates
+          the header and the activity from the list. */}
+      <Text dimColor>{rule}</Text>
+      <StatusBar hints={hints} columns={columns} />
 
       {/* Last row, under the keys: how far into the list the cursor is. The row
           is kept even when there is nothing to say, so that a list scrolling
