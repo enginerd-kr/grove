@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 import { version } from "../../../package.json";
 import { BIN_NAME } from "../../cli/help.ts";
 import { theme } from "../theme.ts";
+import { type ChangelogEntry, latestChange } from "./changelog.ts";
 
 /**
  * The welcome: what this is, which build it is, and which folder it opened.
@@ -33,13 +34,35 @@ function roomy(columns: number, rows: number): boolean {
 }
 
 /**
+ * Below this many columns, the "What's new" column is absent even when the
+ * banner is roomy — squeezed under it, the info column's path and count would
+ * be the ones paying, and they answer "is this the folder I meant?" while the
+ * news only answers "what changed?".
+ */
+const WHATSNEW_COLUMNS = 84;
+/** More than this many bullets is a changelog, and the file is right there. */
+const WHATSNEW_BULLETS = 3;
+/** What the info column narrows to when the news sits beside it. */
+const INFO_WIDTH = 32;
+
+/** Rows the "What's new" column wants: a heading and its bullets, or none. */
+function whatsNewLines(columns: number, rows: number, entry = latestChange): number {
+  if (!roomy(columns, rows) || columns < WHATSNEW_COLUMNS) return 0;
+  if (entry === undefined || entry.bullets.length === 0) return 0;
+
+  return 1 + Math.min(WHATSNEW_BULLETS, entry.bullets.length);
+}
+
+/**
  * How many rows the banner takes at this size.
  *
  * Exported because the screen slices the list to what is left over, and it can
  * only do that if the number is known before anything is drawn.
  */
-export function bannerRows(columns: number, rows: number): number {
-  return roomy(columns, rows) ? ART.length + 2 : 1;
+export function bannerRows(columns: number, rows: number, entry = latestChange): number {
+  if (!roomy(columns, rows)) return 1;
+
+  return Math.max(ART.length, whatsNewLines(columns, rows, entry)) + 2;
 }
 
 /**
@@ -78,11 +101,21 @@ type Props = {
   readonly here?: string;
   readonly columns: number;
   readonly rows: number;
+  /** The latest changelog entry. A prop only so tests can hold it still. */
+  readonly whatsNew?: ChangelogEntry;
 };
 
-export function Banner({ repoRoot, worktrees, here, columns, rows }: Props) {
+export function Banner({
+  repoRoot,
+  worktrees,
+  here,
+  columns,
+  rows,
+  whatsNew = latestChange,
+}: Props) {
   const folder = describeFolder(worktrees, here);
   const release = ` v${version}`;
+  const news = whatsNewLines(columns, rows, whatsNew) > 0 ? whatsNew : undefined;
 
   if (!roomy(columns, rows)) {
     // One line, and the path is what yields: the name and the version are short
@@ -104,7 +137,7 @@ export function Banner({ repoRoot, worktrees, here, columns, rows }: Props) {
   // the one place that distinction has to be read at a glance.
   return (
     <Box borderStyle="round" borderColor={theme.muted} paddingX={1}>
-      <Box flexDirection="column" marginRight={ART_GAP}>
+      <Box flexDirection="column" width={ART_WIDTH} flexShrink={0} marginRight={ART_GAP}>
         {ART.map((line) => (
           <Text key={line} color={theme.ok}>
             {line}
@@ -112,7 +145,11 @@ export function Banner({ repoRoot, worktrees, here, columns, rows }: Props) {
         ))}
       </Box>
 
-      <Box flexDirection="column">
+      <Box
+        flexDirection="column"
+        flexShrink={0}
+        width={news === undefined ? undefined : INFO_WIDTH}
+      >
         <Text wrap="truncate">
           <Text bold color={theme.accent}>
             {BIN_NAME}
@@ -120,12 +157,33 @@ export function Banner({ repoRoot, worktrees, here, columns, rows }: Props) {
           <Text dimColor>{release}</Text>
         </Text>
         <Text dimColor wrap="truncate">
-          {shortenPath(repoRoot, Math.max(10, columns - ART_WIDTH - ART_GAP - 5))}
+          {shortenPath(
+            repoRoot,
+            news === undefined ? Math.max(10, columns - ART_WIDTH - ART_GAP - 5) : INFO_WIDTH,
+          )}
         </Text>
         <Text dimColor wrap="truncate">
           {folder}
         </Text>
       </Box>
+
+      {news !== undefined && (
+        <Box
+          flexDirection="column"
+          marginLeft={ART_GAP}
+          width={columns - 4 - ART_WIDTH - ART_GAP - INFO_WIDTH - ART_GAP}
+        >
+          <Text wrap="truncate">
+            <Text bold>What's new</Text>
+            <Text dimColor> v{news.version}</Text>
+          </Text>
+          {news.bullets.slice(0, WHATSNEW_BULLETS).map((bullet) => (
+            <Text key={bullet} dimColor wrap="truncate">
+              · {bullet}
+            </Text>
+          ))}
+        </Box>
+      )}
     </Box>
   );
 }

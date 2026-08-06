@@ -15,6 +15,7 @@ hooks/            useInterval
 app/App.tsx       the screen: rows, keys, and one mode at a time
 app/Setup.tsx     the screen when there is no repository yet: ask, clone, hand over
 app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
+app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths as the tree they are on disk
 app/service.ts    what the screens are allowed to do, as six functions
@@ -93,6 +94,12 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   same predicate the component renders from, so the two cannot disagree, and both are tested by
   rendering and counting lines rather than against a literal. The failure they prevent shows up
   at one window size only — the key bar drawn one row below the bottom of the terminal.
+- **"What's new" is baked in, not looked up.** The banner's third column is the top entry of
+  `CHANGELOG.md`, bundled as text at compile time (`app/changelog.ts`) the same way the version
+  is — the compiled binary runs on machines that have never seen the repository, and the app
+  makes no network calls. The column's height flows through `bannerRows` like everything else
+  above the list, and it only exists at all when the banner is roomy *and* wide enough that the
+  path and count are not the ones paying for it.
 - **The key bar packs its own lines** (`packHints`). A `Box` of one `Text` per hint does not
   break between hints when the terminal is too narrow for the row; it squeezes every box until
   the keys and their actions land on separate lines (`↑↓ ⏎ move` reading as `↑↓`/`move`). Each
