@@ -65,13 +65,13 @@ const CONTENT_ROWS = 8;
 
 /**
  * How many rows the banner takes at this size: the content, a row of breath
- * above and below it, the hand-drawn top border, and the bottom one.
+ * above it, the hand-drawn top border, and the bottom one.
  *
  * Exported because the screen slices the list to what is left over, and it can
  * only do that if the number is known before anything is drawn.
  */
 export function bannerRows(columns: number, rows: number): number {
-  return roomy(columns, rows) ? CONTENT_ROWS + 4 : 1;
+  return roomy(columns, rows) ? CONTENT_ROWS + 3 : 1;
 }
 
 /**
@@ -168,6 +168,8 @@ export function Banner({
   // say "this is taking your keys", and a card that borrowed it would blunt the
   // one place that distinction has to be read at a glance. The title is the
   // exception — it sits *in* the border, and the accent is what lifts it out.
+  // The version rides along muted, not accented: it is a fact to check, not
+  // the name the card is announcing.
   return (
     <Box flexDirection="column" width={columns}>
       {/* The top border, drawn by hand: Ink boxes cannot carry a title, so the
@@ -176,8 +178,9 @@ export function Banner({
       <Text wrap="truncate">
         <Text color={theme.muted}>{"╭─ "}</Text>
         <Text bold color={theme.accent}>
-          {title}
+          {BIN_NAME}
         </Text>
+        <Text color={theme.muted}>{release}</Text>
         <Text
           color={theme.muted}
         >{` ${"─".repeat(Math.max(0, columns - title.length - 5))}╮`}</Text>
@@ -189,7 +192,7 @@ export function Banner({
         borderColor={theme.muted}
         borderTop={false}
         paddingX={1}
-        paddingY={1}
+        paddingTop={1}
       >
         <Box flexDirection="column" alignItems="center" width={leftWidth} flexShrink={0}>
           <Text bold wrap="truncate">
@@ -239,14 +242,11 @@ export function Banner({
                 <Text color={theme.muted} wrap="truncate">
                   {"─".repeat(newsWidth)}
                 </Text>
-                <Text wrap="truncate">
-                  <Text bold color={theme.accent}>
-                    What's new
-                  </Text>
-                  <Text dimColor> v{news.version}</Text>
+                <Text bold color={theme.accent} wrap="truncate">
+                  What's new
                 </Text>
                 {news.bullets.slice(0, WHATSNEW_BULLETS).map((bullet) => (
-                  <Text key={bullet} dimColor wrap="truncate">
+                  <Text key={bullet} wrap="truncate">
                     · {bullet}
                   </Text>
                 ))}

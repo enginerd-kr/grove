@@ -87,7 +87,8 @@ test("tips and what's new sit beside the greeting when the terminal is wide enou
   const drawn = draw(100, 30, NEWS).join("\n");
 
   expect(drawn).toContain("Tips for getting started");
-  expect(drawn).toContain("What's new v9.9.9");
+  expect(drawn).toContain("What's new");
+  expect(drawn).not.toContain("v9.9.9");
   expect(drawn).toContain("· planted a hedge");
   // Three bullets at most; the changelog itself holds the rest.
   expect(drawn).toContain("· raked the paths");

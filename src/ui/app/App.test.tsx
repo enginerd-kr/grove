@@ -231,7 +231,10 @@ test("each row ends with how long ago the worktree was worked in", async () => {
   const frame = await waitFor(ui.lastFrame, (f) => f.includes("login"));
 
   expect(frame).toMatch(/worktree\s+origin\s+main\s+state/);
-  expect(frame).not.toContain("touched");
+  // It trails each row rather than heading the table — the header itself
+  // never spells the word out. (The changelog card may still mention it.)
+  const header = frame.split("\n").find((line) => /worktree\s+origin\s+main\s+state/.test(line));
+  expect(header).not.toContain("touched");
   // After the state dot, at the end of the line.
   expect(frame).toMatch(/main\s+↑0 ↓0\s+○\s+5m ago/);
   expect(frame).toMatch(/login\s+↑0 ↓0\s+○\s+2d ago/);
