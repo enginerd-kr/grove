@@ -38,6 +38,17 @@ jobs:
           test "$pkg" = "$GITHUB_REF_NAME" \
             || { echo "tag $GITHUB_REF_NAME does not match package.json $pkg" >&2; exit 1; }
 
+      # The banner's "What's new" column reads the changelog's first entry, and
+      # the release notes below are cut from the same section. A tag whose
+      # version the changelog does not lead with would ship a binary announcing
+      # the previous release; refuse before building.
+      - name: Assert CHANGELOG leads with this version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          first="$(grep -m1 -E '^## ' CHANGELOG.md | sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+          test "$first" = "$v" \
+            || { echo "CHANGELOG.md leads with '$first', tag wants '$v'" >&2; exit 1; }
+
       # CI runs on pull requests only, so the tag is the last gate between the
       # tree and the people brew hands these binaries to.
       - name: Lint, typecheck, test
@@ -54,13 +65,20 @@ jobs:
       - name: Checksums
         run: cd dist/release && shasum -a 256 *.tar.gz > SHA256SUMS
 
+      # The notes are the changelog's section for this version, not generated
+      # from PR titles: the release page and the app's "What's new" column
+      # should say the same thing, and the guard above proved the section is
+      # there to cut.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          awk -v v="${GITHUB_REF_NAME#v}" \
+            '$0 ~ "^## " v "([^0-9]|$)" {on=1; next} /^## /{on=0} on' \
+            CHANGELOG.md > notes.md
           gh release create "$GITHUB_REF_NAME" \
             dist/release/*.tar.gz dist/release/SHA256SUMS \
-            --title "$GITHUB_REF_NAME" --generate-notes
+            --title "$GITHUB_REF_NAME" --notes-file notes.md
 
       # The tap learns about the release by itself. A deploy key that can
       # reach nothing but enginerd-kr/homebrew-tap rewrites the formula's

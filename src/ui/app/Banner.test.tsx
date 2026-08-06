@@ -3,6 +3,7 @@ import { render } from "ink-testing-library";
 import { version } from "../../../package.json";
 import { plain } from "../test-utils.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
+import type { ChangelogEntry } from "./changelog.ts";
 
 /**
  * The banner, at the sizes where it changes shape.
@@ -14,9 +15,16 @@ import { Banner, bannerRows } from "./Banner.tsx";
  * frame you read from the top.
  */
 
-function draw(columns: number, rows: number) {
+function draw(columns: number, rows: number, whatsNew?: ChangelogEntry) {
   const { lastFrame } = render(
-    <Banner repoRoot="/work/repo" worktrees={3} here="main" columns={columns} rows={rows} />,
+    <Banner
+      repoRoot="/work/repo"
+      worktrees={3}
+      here="main"
+      columns={columns}
+      rows={rows}
+      whatsNew={whatsNew}
+    />,
   );
 
   return plain(lastFrame()).split("\n");
@@ -46,13 +54,48 @@ test("the art appears when there is room for it, and goes when there is not", ()
 
 test("`bannerRows` is what the banner actually draws", () => {
   for (const [columns, rows] of [
+    [100, 30],
     [90, 30],
+    [84, 22],
+    [83, 22],
     [80, 22],
     [80, 21],
     [40, 12],
   ] as const) {
     expect(draw(columns, rows)).toHaveLength(bannerRows(columns, rows));
   }
+});
+
+const NEWS: ChangelogEntry = {
+  version: "9.9.9",
+  bullets: ["planted a hedge", "watered the beds", "raked the paths", "swept the shed"],
+};
+
+test("what's new appears beside the info when the terminal is wide enough", () => {
+  const drawn = draw(100, 30, NEWS).join("\n");
+
+  expect(drawn).toContain("What's new v9.9.9");
+  expect(drawn).toContain("· planted a hedge");
+  // Three bullets at most; the changelog itself holds the rest.
+  expect(drawn).toContain("· raked the paths");
+  expect(drawn).not.toContain("swept the shed");
+  // The info column keeps saying what it always said.
+  expect(drawn).toContain("3 worktrees · in main");
+});
+
+test("what's new goes when the terminal is narrow or short", () => {
+  expect(draw(83, 30, NEWS).join("\n")).not.toContain("What's new");
+  expect(draw(100, 12, NEWS).join("\n")).not.toContain("What's new");
+});
+
+test("`bannerRows` tracks the bullet count, and a bullet-less entry is no entry", () => {
+  for (const bullets of [0, 1, 2, 5]) {
+    const entry = { version: "9.9.9", bullets: NEWS.bullets.slice(0, bullets) };
+
+    expect(draw(100, 30, entry)).toHaveLength(bannerRows(100, 30, entry));
+  }
+
+  expect(draw(100, 30, { version: "9.9.9", bullets: [] }).join("\n")).not.toContain("What's new");
 });
 
 test("an empty repository says so rather than counting to zero", () => {
