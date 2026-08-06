@@ -18,8 +18,9 @@ import type { SetupService } from "./service.ts";
 
 const PATHS: RepoPaths = {
   root: "/work/repo",
-  bare: "/work/repo/.bare",
+  gitDir: "/work/repo/.bare",
   gitFile: "/work/repo/.git",
+  kind: "managed",
 };
 
 function stub(overrides: Partial<SetupService> = {}): {

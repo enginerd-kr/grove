@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { GroveError } from "./errors.ts";
-import { parseStatus, parseWorktreeList, resolveTarget, type WorktreeRecord } from "./worktrees.ts";
+import {
+  parseStatus,
+  parseWorktreeList,
+  resolveTarget,
+  type WorktreeRecord,
+  worktreeDir,
+} from "./worktrees.ts";
 
 /** Real output shapes, copied from git rather than imagined. */
 const PORCELAIN = [
@@ -134,6 +140,20 @@ test("a rename's original path is not counted as a second change", () => {
   expect(status.changed).toEqual(["new name.txt", "after.txt"]);
 });
 
+// A plain repository's root is itself a worktree, so `relative` would answer
+// with the empty string; `.` is what `resolveTarget` and the tree can use.
+test("worktreeDir names the root itself '.'", () => {
+  expect(worktreeDir("/work/plain", "/work/plain")).toBe(".");
+  expect(worktreeDir("/work/plain", "/work/plain/src")).toBe("src");
+});
+
+// A hand-made sibling worktree — only possible for a plain repository, where
+// worktrees are not confined to the root — comes back honest about being
+// outside it, `../` and all.
+test("worktreeDir reports a sibling worktree as ../name", () => {
+  expect(worktreeDir("/work/plain", "/work/plain-feat-login")).toBe("../plain-feat-login");
+});
+
 const ROOT = "/work/repo";
 const WORKTREES: readonly WorktreeRecord[] = [
   { path: "/work/repo/main", branch: "main", detached: false, bare: false },
@@ -169,6 +189,25 @@ test("branch wins over a directory of the same name", () => {
   // "main" is both a branch and a directory here. Branch is what people say out
   // loud, so it is what wins.
   expect(resolveTarget("main", clashing, { root: ROOT, cwd: ROOT }).path).toBe("/work/repo/other");
+});
+
+test("a target resolves the root as '.' and a sibling as ../name", () => {
+  const plainRoot = "/work/plain";
+  const plainWorktrees: readonly WorktreeRecord[] = [
+    { path: plainRoot, branch: "main", detached: false, bare: false },
+    { path: "/work/plain-feat-login", branch: "feat/login", detached: false, bare: false },
+  ];
+
+  expect(resolveTarget(".", plainWorktrees, { root: plainRoot, cwd: plainRoot }).path).toBe(
+    plainRoot,
+  );
+  expect(
+    resolveTarget("../plain-feat-login", plainWorktrees, { root: plainRoot, cwd: plainRoot }).path,
+  ).toBe("/work/plain-feat-login");
+  // Branch first, same as ever — the directory route is a fallback.
+  expect(
+    resolveTarget("feat/login", plainWorktrees, { root: plainRoot, cwd: plainRoot }).path,
+  ).toBe("/work/plain-feat-login");
 });
 
 test("an unknown target lists what is actually there", () => {

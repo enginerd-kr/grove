@@ -43,7 +43,7 @@ export async function removeWorktree(
   options: RemoveOptions,
   reporter: Reporter,
 ): Promise<RemoveResult> {
-  const worktrees = await listWorktrees(repo.bare);
+  const worktrees = await listWorktrees(repo.gitDir);
   const target = resolveTarget(options.target, worktrees, { root: repo.root, cwd });
   const dir = worktreeDir(repo.root, target.path);
 
@@ -53,12 +53,15 @@ export async function removeWorktree(
   try {
     await runGitOrThrow(
       ["worktree", "remove", ...(options.force ? ["--force"] : []), target.path],
-      { cwd: repo.bare },
+      { cwd: repo.gitDir },
     );
     // Clears the administrative files git leaves behind, so a later `add` of the
     // same directory name is not refused by a record of the one just deleted.
-    await runGitOrThrow(["worktree", "prune"], { cwd: repo.bare });
-    await pruneEmptyParents(repo.root, target.path);
+    await runGitOrThrow(["worktree", "prune"], { cwd: repo.gitDir });
+    // The base a nested `--dir` climbs back towards without passing it: a plain
+    // repository's worktrees sit beside the root, not under it, so pruning has
+    // to start one level out to reach them at all.
+    await pruneEmptyParents(repo.kind === "plain" ? dirname(repo.root) : repo.root, target.path);
     step.succeed(`removed ${dir}`);
   } catch (error) {
     step.fail(`could not remove ${dir}`);
@@ -66,7 +69,7 @@ export async function removeWorktree(
   }
 
   if (options.deleteBranch && target.branch !== undefined) {
-    await deleteBranch(repo.bare, target.branch, options.force, reporter);
+    await deleteBranch(repo.gitDir, target.branch, options.force, reporter);
 
     return { path: target.path, branch: target.branch, branchDeleted: true };
   }
@@ -75,7 +78,7 @@ export async function removeWorktree(
     path: target.path,
     branch: target.branch,
     branchDeleted: false,
-    unpushedWarning: await unpushedWarning(repo.bare, target.branch),
+    unpushedWarning: await unpushedWarning(repo.gitDir, target.branch),
   };
 }
 
@@ -87,6 +90,19 @@ async function refuseUnsafe(
   worktrees: readonly WorktreeRecord[],
   options: RemoveOptions,
 ): Promise<void> {
+  // Not overridable by --force, and not merely the "only worktree" refusal
+  // below: in a plain repository the root is the repository, not a worktree
+  // grove made, and there is no folder left to hold another one afterwards.
+  if (repo.kind === "plain" && target.path === repo.root) {
+    throw new GroveError(
+      "refused",
+      `${dir} is the repository itself, not a grove-managed worktree`,
+      {
+        hint: "grove only removes worktrees it can recreate; delete the repository by hand if you mean it",
+      },
+    );
+  }
+
   // Not overridable by --force. Deleting the directory your shell is sitting in
   // leaves that shell in a path that no longer exists, and every later command
   // fails for a reason that has nothing to do with what went wrong.
@@ -98,7 +114,7 @@ async function refuseUnsafe(
 
   if (target.locked !== undefined) {
     throw new GroveError("refused", `${dir} is locked`, {
-      hint: `unlock it first: git -C ${repo.bare} worktree unlock ${target.path}`,
+      hint: `unlock it first: git -C ${repo.gitDir} worktree unlock ${target.path}`,
       details: target.locked.length > 0 ? [target.locked] : [],
     });
   }
@@ -110,7 +126,7 @@ async function refuseUnsafe(
       });
     }
 
-    if (target.branch !== undefined && target.branch === (await defaultBranch(repo.bare))) {
+    if (target.branch !== undefined && target.branch === (await defaultBranch(repo.gitDir))) {
       throw new GroveError("refused", `${target.branch} is the branch everything else syncs onto`, {
         hint: "pass --force if you are sure",
       });

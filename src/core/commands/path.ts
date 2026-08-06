@@ -29,7 +29,7 @@ export async function worktreePath(
 ): Promise<PathResult> {
   if (target === undefined) return { path: repo.root, dir: "." };
 
-  const worktrees = await listWorktrees(repo.bare);
+  const worktrees = await listWorktrees(repo.gitDir);
   const record = resolveTarget(target, worktrees, { root: repo.root, cwd });
 
   return { path: record.path, dir: worktreeDir(repo.root, record.path), branch: record.branch };

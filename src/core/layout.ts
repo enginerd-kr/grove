@@ -12,16 +12,33 @@ import { GroveError } from "./errors.ts";
 /** The bare clone, kept inside the repo directory so one folder holds everything. */
 export const BARE_DIR = ".bare";
 
+/**
+ * `"managed"` is a repository this tool laid out itself — `.bare` plus a `.git`
+ * pointer file. `"plain"` is an ordinary `git clone`/`git init`, recognised as-is
+ * rather than converted: its git dir is `<root>/.git`, and the root itself is a
+ * worktree (the one nothing ever removes).
+ */
+export type RepoKind = "managed" | "plain";
+
 export type RepoPaths = {
-  /** The directory holding `.bare` and every worktree. */
+  /** The directory every worktree is found relative to. For `plain`, also a worktree itself. */
   readonly root: string;
-  readonly bare: string;
-  /** `<root>/.git`, a file pointing at `.bare` so git works from the root too. */
+  /** The git common dir — `<root>/.bare` or `<root>/.git` — cwd for repo-level git calls. */
+  readonly gitDir: string;
+  /** `<root>/.git`: a pointer file in `managed`, the same directory as `gitDir` in `plain`. */
   readonly gitFile: string;
+  readonly kind: RepoKind;
 };
 
 export function repoPaths(root: string): RepoPaths {
-  return { root, bare: join(root, BARE_DIR), gitFile: join(root, ".git") };
+  return { root, gitDir: join(root, BARE_DIR), gitFile: join(root, ".git"), kind: "managed" };
+}
+
+/** A repository this tool did not create — an ordinary `.git`-based clone or checkout. */
+export function plainRepoPaths(root: string): RepoPaths {
+  const gitDir = join(root, ".git");
+
+  return { root, gitDir, gitFile: gitDir, kind: "plain" };
 }
 
 /** The contents of `<root>/.git`. Relative so the repo folder can be moved. */

@@ -58,16 +58,16 @@ export async function syncWorktrees(
   options: SyncOptions,
   reporter: Reporter,
 ): Promise<readonly SyncOutcome[]> {
-  const worktrees = await listWorktrees(repo.bare);
+  const worktrees = await listWorktrees(repo.gitDir);
   const targets = chooseTargets(worktrees, repo.root, cwd, options);
 
   // One fetch for the whole run: the remote does not change between worktrees,
   // and `--all` over ten of them should not mean ten round trips.
   const step = reporter.step("fetching");
-  await fetchRemotes(repo.bare);
+  await fetchRemotes(repo.gitDir);
   step.succeed("fetched");
 
-  const trunk = await defaultBranch(repo.bare);
+  const trunk = await defaultBranch(repo.gitDir);
   const outcomes: SyncOutcome[] = [];
 
   for (const target of targets) {

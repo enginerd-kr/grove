@@ -72,7 +72,7 @@ onPosix(
 
       expect(result.source).toBe("new");
       expect(await gitOutput(["rev-parse", "HEAD"], { cwd: result.path })).toBe(
-        await gitOutput(["rev-parse", "origin/main"], { cwd: repo.bare }),
+        await gitOutput(["rev-parse", "origin/main"], { cwd: repo.gitDir }),
       );
 
       // And tracks nothing. The base is `origin/main`, and git's
@@ -85,7 +85,7 @@ onPosix(
           await runGit(
             ["for-each-ref", "--format=%(upstream:short)", "refs/heads/feat/brand-new"],
             {
-              cwd: repo.bare,
+              cwd: repo.gitDir,
             },
           )
         ).stdout.trim(),
@@ -119,7 +119,7 @@ onPosix(
       expect(
         (
           await runGit(["for-each-ref", "--format=%(upstream:short)", "refs/heads/test-2"], {
-            cwd: repo.bare,
+            cwd: repo.gitDir,
           })
         ).stdout.trim(),
       ).toBe("");
@@ -148,7 +148,7 @@ onPosix(
       );
 
       expect(await gitOutput(["rev-parse", "HEAD"], { cwd: result.path })).toBe(
-        await gitOutput(["rev-parse", "origin/feat/login"], { cwd: repo.bare }),
+        await gitOutput(["rev-parse", "origin/feat/login"], { cwd: repo.gitDir }),
       );
       expect(await pathExists(join(result.path, "login.txt"))).toBe(true);
     });
@@ -237,7 +237,7 @@ onPosix(
       );
 
       expect(again.alreadyPresent).toBe(true);
-      expect(await listWorktrees(repo.bare)).toHaveLength(2);
+      expect(await listWorktrees(repo.gitDir)).toHaveLength(2);
     });
   },
   30_000,

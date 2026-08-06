@@ -51,14 +51,14 @@ onPosix(
   "configures the fetch refspec so remote-tracking refs actually appear",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
-      const { bare } = await cloneRepo(work, { url: originUrl }, silent());
+      const { gitDir } = await cloneRepo(work, { url: originUrl }, silent());
 
-      expect(await gitOutput(["config", "--get", "remote.origin.fetch"], { cwd: bare })).toBe(
+      expect(await gitOutput(["config", "--get", "remote.origin.fetch"], { cwd: gitDir })).toBe(
         "+refs/heads/*:refs/remotes/origin/*",
       );
 
       const refs = await gitOutput(["for-each-ref", "--format=%(refname)", "refs/remotes/"], {
-        cwd: bare,
+        cwd: gitDir,
       });
       expect(refs).toContain("refs/remotes/origin/main");
       // The branch that is *not* the default is the one a wrong refspec loses.
@@ -75,15 +75,15 @@ onPosix(
   "keeps only the branch that has a worktree in refs/heads",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
-      const { bare } = await cloneRepo(work, { url: originUrl }, silent());
+      const { gitDir } = await cloneRepo(work, { url: originUrl }, silent());
 
       expect(
         await gitOutput(["for-each-ref", "--format=%(refname:short)", "refs/heads/"], {
-          cwd: bare,
+          cwd: gitDir,
         }),
       ).toBe("main");
       // HEAD has to point at a ref that survived the pruning.
-      expect(await gitOutput(["symbolic-ref", "--short", "HEAD"], { cwd: bare })).toBe("main");
+      expect(await gitOutput(["symbolic-ref", "--short", "HEAD"], { cwd: gitDir })).toBe("main");
     });
   },
   30_000,
@@ -102,7 +102,7 @@ onPosix(
       expect(result.worktree).toBe(join(result.root, "feat", "login"));
       expect(await pathExists(join(result.worktree, "login.txt"))).toBe(true);
 
-      expect(await gitOutput(["symbolic-ref", "--short", "HEAD"], { cwd: result.bare })).toBe(
+      expect(await gitOutput(["symbolic-ref", "--short", "HEAD"], { cwd: result.gitDir })).toBe(
         "feat/login",
       );
     });
@@ -241,14 +241,20 @@ onPosix(
 );
 
 onPosix(
-  "an ordinary clone nearby is not mistaken for a managed repo",
+  "standing inside an ordinary clone recognises it, as-is",
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const plain = join(work, "plain");
       await runGit(["clone", originUrl, plain], { cwd: work });
 
-      const error = await expectError(findRepoRoot(plain));
+      const found = await findRepoRoot(plain);
+      expect(found.root).toBe(plain);
+      expect(found.kind).toBe("plain");
+      expect(found.gitDir).toBe(join(plain, ".git"));
 
+      // Rule 3/4 stay `.bare`-marker-only: standing *beside* it, rather than in
+      // it, never adopts a plain clone the way -C or a nested cwd does.
+      const error = await expectError(findRepoRoot(work));
       expect(error.code).toBe("not-a-repo");
     });
   },

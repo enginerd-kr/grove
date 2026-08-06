@@ -398,7 +398,7 @@ onPosix(
   async () => {
     await withRepo(async ({ repo, work }) => {
       await runGitOrThrow(["worktree", "add", "--detach", join(repo.root, "det"), "main"], {
-        cwd: repo.bare,
+        cwd: repo.gitDir,
       });
 
       const outcomes = await syncWorktrees(
@@ -553,7 +553,7 @@ onPosix(
       expect(outcome?.kind).toBe("rebased");
       expect(outcome?.pushed).toBeUndefined();
       expect(
-        (await runGit(["rev-parse", "--verify", "origin/local-only"], { cwd: repo.bare })).code,
+        (await runGit(["rev-parse", "--verify", "origin/local-only"], { cwd: repo.gitDir })).code,
       ).not.toBe(0);
     });
   },

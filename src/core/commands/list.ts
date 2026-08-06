@@ -55,9 +55,12 @@ export async function listWorktreeSummaries(
   repo: RepoPaths,
   cwd: string,
 ): Promise<readonly WorktreeSummary[]> {
-  const [records, trunk] = await Promise.all([listWorktrees(repo.bare), defaultBranch(repo.bare)]);
+  const [records, trunk] = await Promise.all([
+    listWorktrees(repo.gitDir),
+    defaultBranch(repo.gitDir),
+  ]);
   // After `trunk` is known, and once for every branch rather than per worktree.
-  const drift = await driftFrom(repo.bare, trunk);
+  const drift = await driftFrom(repo.gitDir, trunk);
 
   const summaries = await Promise.all(
     records.map(async (record) => {

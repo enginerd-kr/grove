@@ -305,7 +305,7 @@ onPosix("an ignored one is not", async () => {
     await configure(repo, 'copy = [".env"]');
     // `info/exclude` in the common dir, which is where a rule that is yours
     // rather than the project's belongs — and it reaches every worktree.
-    await Bun.write(join(repo.bare, "info", "exclude"), ".env\n");
+    await Bun.write(join(repo.gitDir, "info", "exclude"), ".env\n");
 
     const { reporter, lines } = recording();
     await add(repo, "feat/login", {}, reporter);

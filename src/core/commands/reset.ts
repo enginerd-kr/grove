@@ -76,7 +76,7 @@ export async function resetWorktree(
   options: ResetOptions,
   reporter: Reporter,
 ): Promise<ResetResult> {
-  const worktrees = await listWorktrees(repo.bare);
+  const worktrees = await listWorktrees(repo.gitDir);
   const target = resolveTarget(options.target, worktrees, { root: repo.root, cwd });
   const dir = worktreeDir(repo.root, target.path);
 

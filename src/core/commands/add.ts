@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranchExists, remoteBranchExists } from "../branches.ts";
 import { GroveError } from "../errors.ts";
@@ -65,9 +65,9 @@ export async function addWorktree(
   options: AddOptions,
   reporter: Reporter,
 ): Promise<AddResult> {
-  const dir = worktreeRelPath(options.branch, options.dir);
-  const path = join(repo.root, dir);
-  const worktrees = await listWorktrees(repo.bare);
+  const path = join(worktreeBase(repo), worktreeRelSegment(repo, options));
+  const dir = worktreeDir(repo.root, path);
+  const worktrees = await listWorktrees(repo.gitDir);
 
   const existing = await checkAlreadyThere(repo.root, options.branch, path, worktrees);
   if (existing) return existing;
@@ -88,13 +88,13 @@ export async function addWorktree(
   // a worktree at all.
   const plan = options.setup ? await repoSetupPlan(repo) : undefined;
 
-  const source = await resolveSource(repo.bare, options, reporter);
+  const source = await resolveSource(repo.gitDir, options, reporter);
 
   const step = reporter.step(`adding ${options.branch}`);
   try {
     // `git worktree add` creates intermediate directories itself, so a nested
     // path needs no mkdir of ours.
-    await runGitOrThrow(argsFor(source, options, path), { cwd: repo.bare });
+    await runGitOrThrow(argsFor(source, options, path), { cwd: repo.gitDir });
     step.succeed(`added ${dir}`);
   } catch (error) {
     step.fail(`could not add ${options.branch}`);
@@ -115,6 +115,36 @@ export async function addWorktree(
     alreadyPresent: false,
     setup,
   };
+}
+
+/**
+ * Where new worktrees go: inside the root for a managed repository, beside it
+ * for a plain one.
+ *
+ * A plain repository's root is itself the main checkout, so there is no
+ * spare folder to nest a worktree inside — `git worktree add ../thing` is the
+ * convention its users already have, and this follows it.
+ */
+function worktreeBase(repo: RepoPaths): string {
+  return repo.kind === "plain" ? dirname(repo.root) : repo.root;
+}
+
+/**
+ * The new worktree's path, relative to `worktreeBase`.
+ *
+ * `--dir` is honoured exactly as it is for a managed repository — a path
+ * checked rather than rewritten, now resolved against the parent instead of
+ * the root. Without one, a plain repository gets a name prefixed with the
+ * repository's own — `myapp-feat-login` beside `myapp` — so a shared parent
+ * directory does not fill with bare branch names that collide with whatever
+ * else lives there.
+ */
+function worktreeRelSegment(repo: RepoPaths, options: AddOptions): string {
+  if (repo.kind === "plain" && options.dir === undefined) {
+    return `${basename(repo.root)}-${worktreeRelPath(options.branch).replaceAll("/", "-")}`;
+  }
+
+  return worktreeRelPath(options.branch, options.dir);
 }
 
 /**
