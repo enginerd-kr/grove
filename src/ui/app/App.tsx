@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { version } from "../../../package.json";
 import type { Drift } from "../../core/branches.ts";
 import {
   describeNotes,
@@ -107,6 +108,12 @@ type Props = {
   readonly onCd?: (path: string) => Promise<void> | void;
   /** How often to refresh, in ms. Defaults to `REFRESH_MS`; tests drive it faster. */
   readonly refreshMs?: number;
+  /**
+   * Resolves to a newer released version, or `undefined` for nothing to say.
+   * Absent means don't ask at all — the source tree and the tests have no
+   * upgrade to be told about.
+   */
+  readonly checkUpdate?: () => Promise<string | undefined>;
 };
 
 /**
@@ -410,7 +417,15 @@ function Row({
   );
 }
 
-export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFRESH_MS }: Props) {
+export function App({
+  service,
+  repoRoot,
+  store,
+  onCancel,
+  onCd,
+  refreshMs = REFRESH_MS,
+  checkUpdate,
+}: Props) {
   const { exit } = useApp();
   const { columns, rows: terminalRows } = useWindowSize();
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
@@ -605,33 +620,62 @@ export function App({ service, repoRoot, store, onCancel, onCd, refreshMs = REFR
   useEffect(() => {
     let live = true;
 
+    // Started before the list is awaited so the two overlap, and the screen
+    // never waits on the network to become interactive. A rejection is the
+    // same as "nothing to say" — a check nobody asked for reports no failure.
+    const update =
+      checkUpdate === undefined
+        ? Promise.resolve(undefined)
+        : checkUpdate().then(
+            (latest) => latest,
+            () => undefined,
+          );
+
     void (async () => {
       try {
         const summaries = await service.list();
         if (live) setRows(summaries);
+      } catch (error) {
+        if (live) setMessage(messageFor(error));
+        return;
+      } finally {
+        if (live) setMode({ kind: "list" });
+      }
+
+      const latest = await update;
+      if (!live) return;
+      // One slot, three claims, one setter: whatever already owns the line —
+      // an error, an action's outcome — keeps it; a released upgrade outranks
+      // the shell tip because it is news and the shell tip is standing advice.
+      setMessage((previous) => {
+        if (previous !== undefined) return previous;
+        if (latest !== undefined) {
+          return {
+            kind: "info",
+            text: `tip: grove v${latest} is out — this is v${version}`,
+            hint: "upgrade: brew upgrade grove",
+          };
+        }
         // With no shell function listening, half of what this screen does is
         // quietly unavailable — q cannot land the shell where enter walked —
         // and nothing on screen would ever say so. A rule that hides is a rule
         // nobody can learn, so the one line that installs it opens the
         // session, in the message slot the first action reclaims.
-        if (live && onCd === undefined) {
-          setMessage({
+        if (onCd === undefined) {
+          return {
             kind: "info",
             text: "tip: the shell function is not installed, so q cannot land your shell where you stood",
             hint: `install once: eval "$(grove shell-init zsh)" in your shell's rc file — or bash, fish`,
-          });
+          };
         }
-      } catch (error) {
-        if (live) setMessage(messageFor(error));
-      } finally {
-        if (live) setMode({ kind: "list" });
-      }
+        return previous;
+      });
     })();
 
     return () => {
       live = false;
     };
-  }, [service, onCd]);
+  }, [service, onCd, checkUpdate]);
 
   // Where the shell really is: the standpoint at launch, for `q` to compare
   // against before deciding the shell needs moving at all.

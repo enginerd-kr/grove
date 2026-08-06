@@ -18,8 +18,13 @@ for t in "${targets[@]}"; do
   # whose static `import 'react-devtools-core'` would otherwise fail to
   # resolve, that package being an optional peer nobody installs. A build that
   # succeeds is the proof the define worked; without it, this line fails.
+  # GROVE_RELEASE marks the binary as a released build — the only kind with an
+  # upgrade to be told about, so the only kind that checks for one. A source
+  # tree never sets it and is never nagged to "upgrade" to something older
+  # than itself.
   bun build src/cli.tsx --compile "--target=bun-${t}" \
     --define 'process.env.DEV="false"' \
+    --define 'process.env.GROVE_RELEASE="true"' \
     --minify --sourcemap \
     --outfile "dist/compile/${t}/grove"
 

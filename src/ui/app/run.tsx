@@ -1,11 +1,13 @@
 import { resolve } from "node:path";
 import { render } from "ink";
 import { useMemo, useState } from "react";
+import { version } from "../../../package.json";
 import { findRepoRoot } from "../../core/discover.ts";
 import { isGroveError } from "../../core/errors.ts";
 import { isEmptyOrMissing } from "../../core/fs.ts";
 import { killRunningGit } from "../../core/git.ts";
 import type { RepoPaths } from "../../core/layout.ts";
+import { checkForUpdate } from "../../core/update-check.ts";
 import { createStoreReporter, LineStore } from "../../report/lines.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import { App } from "./App.tsx";
@@ -30,6 +32,22 @@ export type AppOptions = {
   /** Installed as the git trace when `--verbose` was passed. */
   readonly onReporter?: (reporter: Reporter) => void;
 };
+
+/**
+ * Whether this launch should ask GitHub about a newer release.
+ *
+ * Only the compiled binary has an upgrade to be told about — a source tree is
+ * usually *ahead* of the latest release, and would be nagged to "upgrade" to a
+ * version older than itself. `GROVE_RELEASE` is baked in by the compile script;
+ * `GROVE_UPDATE_CHECK` overrides in both directions, `0` to opt out of the
+ * check entirely and `1` to exercise it from source.
+ */
+function updateCheckEnabled(): boolean {
+  if (process.env.GROVE_UPDATE_CHECK === "0") return false;
+  if (process.env.GROVE_UPDATE_CHECK === "1") return true;
+
+  return process.env.GROVE_RELEASE === "true";
+}
 
 async function discover(cwd: string, repo?: string): Promise<RepoPaths | undefined> {
   try {
@@ -79,6 +97,12 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCd }: GroveProp
           createWorktreeService(paths, cwd, reporter, { shellFollows: onCd !== undefined }),
     [paths, cwd, reporter, onCd],
   );
+  // Memoised like the services and for the same reason: `App`'s startup effect
+  // depends on it, so a new function every render would be a check every render.
+  const checkUpdate = useMemo(
+    () => (updateCheckEnabled() ? () => checkForUpdate({ currentVersion: version }) : undefined),
+    [],
+  );
 
   if (paths === undefined || worktrees === undefined) {
     return (
@@ -100,6 +124,7 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCd }: GroveProp
       store={store}
       onCancel={killRunningGit}
       onCd={onCd}
+      checkUpdate={checkUpdate}
     />
   );
 }
