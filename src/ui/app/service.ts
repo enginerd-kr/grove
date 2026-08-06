@@ -1,5 +1,6 @@
 import { relative } from "node:path";
 import { fetchRemotes } from "../../core/branches.ts";
+import { copyToClipboard } from "../../core/clipboard.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
@@ -222,14 +223,20 @@ export function createWorktreeService(
         reporter,
       );
 
-      if (result.alreadyPresent) return `${result.branch} already has a worktree`;
+      // Best-effort and silent on failure: the worktree exists either way, and
+      // a screen with no clipboard tool installed has nothing useful to say
+      // about it beyond what `add` already reported.
+      const copied = await copyToClipboard(result.path);
+      const suffix = copied ? ", path copied" : "";
+
+      if (result.alreadyPresent) return `${result.branch} already has a worktree${suffix}`;
       // Said back rather than assumed: `from` is only honoured for a branch that
       // did not already exist, and the difference is worth a word.
       if (result.source === "new" && from !== undefined) {
-        return `added ${result.branch} from ${from}`;
+        return `added ${result.branch} from ${from}${suffix}`;
       }
 
-      return `added ${result.branch} (${result.source})`;
+      return `added ${result.branch} (${result.source})${suffix}`;
     },
 
     remove: async (target) => {
