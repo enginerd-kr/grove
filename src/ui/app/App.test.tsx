@@ -631,6 +631,65 @@ test("opening with a listening shell says nothing about it", async () => {
   expect(frame).not.toContain("shell-init");
 });
 
+// The update check is a prop for the same reason the service is: the screen
+// should not know about GitHub, only about having been told a version.
+function mountChecking(service: WorktreeService, checkUpdate: () => Promise<string | undefined>) {
+  const instance = render(
+    <App service={service} repoRoot="/repo" store={new LineStore()} checkUpdate={checkUpdate} />,
+  );
+
+  return { ...instance, frame: () => plain(instance.lastFrame()) };
+}
+
+test("a newer release opens the session with the upgrade tip", async () => {
+  const { service } = stub();
+  const ui = mountChecking(service, async () => "9.9.9");
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("9.9.9"));
+  expect(frame).toContain("grove v9.9.9 is out");
+  expect(frame).toContain(`this is v${version}`);
+  expect(frame).toContain("brew upgrade grove");
+});
+
+// One slot, and news outranks standing advice: the shell tip will still be
+// true tomorrow, the release is what changed today.
+test("the upgrade tip wins the slot over the shell tip", async () => {
+  const { service } = stub();
+  const ui = mountChecking(service, async () => "9.9.9");
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("9.9.9"));
+  expect(frame).not.toContain("shell-init");
+});
+
+test("a check that fails leaves the shell tip to open the session", async () => {
+  const { service } = stub();
+  const ui = mountChecking(service, () => Promise.reject(new Error("offline")));
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("shell-init"));
+  expect(frame).not.toContain("offline");
+});
+
+test("a check that finds nothing changes nothing", async () => {
+  const { service } = stub();
+  const ui = mountChecking(service, async () => undefined);
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("shell-init"));
+  expect(frame).toContain("the shell function is not installed");
+});
+
+// A screen that failed to list has one thing to say, and it is not a tip.
+test("a failed first read keeps the slot, upgrade or not", async () => {
+  const { service } = stub({
+    list: async () => {
+      throw new Error("fatal: not a grove");
+    },
+  });
+  const ui = mountChecking(service, async () => "9.9.9");
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("fatal: not a grove"));
+  expect(frame).not.toContain("9.9.9");
+});
+
 // Enter moves the standpoint inside the app — the whole reason it exists is
 // that "cd somewhere else first" should be one keystroke that never leaves the
 // screen. The real shell is `q`'s business, not enter's.
