@@ -9,6 +9,7 @@ import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
+import { installShellInit } from "./install.ts";
 import { type Shell, shellInit } from "./shell-init.ts";
 
 /**
@@ -96,6 +97,21 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "shell-init": {
       // No repository involved: this runs from rc files, before any repo exists.
       reporter.out(shellInit(command.shell as Shell));
+      return;
+    }
+
+    case "install": {
+      // No repository involved either — same reason as `shell-init` above.
+      const result = await installShellInit(command.shell);
+
+      if (result.outcome === "already-installed") {
+        reporter.info(`already installed in ${result.rcFile}`);
+      } else {
+        reporter.info(`added to ${result.rcFile} — restart your shell, or run: ${result.line}`);
+      }
+
+      if (global.json) reporter.out(JSON.stringify(result, null, 2));
+      else reporter.out(result.rcFile);
       return;
     }
 

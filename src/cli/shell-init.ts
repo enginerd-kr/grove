@@ -60,17 +60,35 @@ export function isCompiledMain(main: string): boolean {
 }
 
 /**
- * How the function should invoke grove: the way grove is running right now.
+ * How grove is running right now, as the words that re-create the invocation.
  *
  * `process.execPath` is the runtime and `Bun.main` is the entry script —
  * together they re-create this very invocation whether it came from an
  * installed `grove` on PATH, `bun run grove`, or a path typed out in full.
  * Compiled, the executable alone is the whole invocation.
  */
-function invocation(quote: (word: string) => string): string {
-  const words = isCompiledMain(Bun.main) ? [process.execPath] : [process.execPath, Bun.main];
+function invocationWords(): readonly string[] {
+  return isCompiledMain(Bun.main) ? [process.execPath] : [process.execPath, Bun.main];
+}
 
-  return words.map(quote).join(" ");
+function invocation(quote: (word: string) => string): string {
+  return invocationWords().map(quote).join(" ");
+}
+
+/**
+ * The line `grove install` appends to an rc file.
+ *
+ * Built from the same words the printed function calls back through, so the
+ * line this writes and the line a bare checkout would be told to write by
+ * hand are never out of step. fish parses its own `$(...)` with fish quoting
+ * rather than POSIX, which is why the choice of `quote` follows `shell` here
+ * too.
+ */
+export function evalLine(shell: Shell): string {
+  const quote = shell === "fish" ? fishQuote : posixQuote;
+  const words = [...invocationWords(), "shell-init", shell].map(quote).join(" ");
+
+  return `eval "$(${words})"`;
 }
 
 export function shellInit(shell: Shell): string {

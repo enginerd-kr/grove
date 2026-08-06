@@ -274,6 +274,12 @@ test("shell-init takes exactly the shells it has scripts for", () => {
   expect(parseCliArgs(["shell-init", "tcsh"]).kind).toBe("error");
 });
 
+test("install takes an optional shell, but only one it has scripts for", () => {
+  expect(run(["install"])).toEqual({ name: "install", shell: undefined });
+  expect(run(["install", "fish"])).toEqual({ name: "install", shell: "fish" });
+  expect(parseCliArgs(["install", "tcsh"]).kind).toBe("error");
+});
+
 // `grove cd` reaching the binary means the function is not installed, and the
 // useful answer is the line that installs it — not a list of commands.
 test("a bare `grove cd` explains the shell function instead of playing dumb", () => {
@@ -294,6 +300,7 @@ test("every command in the table parses without a special case", () => {
     reset: ["reset", "target"],
     path: ["path"],
     "shell-init": ["shell-init", "zsh"],
+    install: ["install"],
     sync: ["sync"],
   };
 

@@ -16,16 +16,25 @@ with [Biome](https://biomejs.dev) for linting and formatting. No dependencies be
 brew install enginerd-kr/tap/grove
 ```
 
-Then one line in your shell's rc file, for `grove cd` and the app's enter-to-go —
-see [Going places](#going-places) for what it does and why a binary alone cannot:
+Then, for `grove cd` and the app's enter-to-go — see [Going places](#going-places) for
+what it does and why a binary alone cannot:
+
+```bash
+grove install
+```
+
+Detects the running shell from `$SHELL` and appends the one line it needs to that
+shell's rc file — `~/.zshrc`, `~/.config/fish/config.fish`, or whichever of
+`~/.bashrc`, `~/.bash_profile`, `~/.profile` bash already reads. Safe to run more
+than once, and safe to skip in favour of adding the line yourself:
 
 ```bash
 eval "$(grove shell-init zsh)"    # zsh, bash, or fish
 ```
 
-From a checkout instead (needs Bun): `bun install`, then the same eval with the
-long spelling — `eval "$(bun /path/to/grove/src/cli.tsx shell-init zsh)"` — since
-the wrapper calls back by whatever spelling printed it.
+From a checkout instead (needs Bun): `bun install`, then `bun src/cli.tsx install`,
+or the eval above with the long spelling — `eval "$(bun /path/to/grove/src/cli.tsx
+shell-init zsh)"` — since the wrapper calls back by whatever spelling printed it.
 
 ## Layout
 
@@ -79,6 +88,7 @@ grove sync [target]         # fetch, then bring worktrees up to date
 grove reset <target>        # throw away a worktree's uncommitted changes
 grove remove <target>       # delete a worktree
 grove path [target]         # print a worktree's directory — no target means the repo root
+grove install [shell]       # add shell-init's line to your shell's rc file
 grove shell-init <shell>    # the function behind `grove cd` and enter-to-cd
 ```
 
@@ -309,7 +319,8 @@ direnv) is a shell function wearing the tool's name. So the binary answers and t
 cd "$(grove path feat/login)"     # works bare, anywhere
 ```
 
-One line in your shell's rc file installs the short spelling:
+`grove install` installs the short spelling — detecting the shell and the rc file it
+reads — or one line in that rc file does it by hand:
 
 ```bash
 eval "$(grove shell-init zsh)"    # zsh, bash, or fish
@@ -336,8 +347,10 @@ find-go-and-land in five keys. Without the function installed enter still works 
 only the landing is missing, and `remove` keeps measuring against where your shell really is,
 which is what keeps it from stranding a shell nothing can move. Everything that is not `cd`
 passes straight through, exit code and all, so scripts wrapping grove see no difference. And
-the app says so itself: opened with nothing listening, the first message on screen is the one
-line that installs the function.
+the app says so itself: a released `grove`, opened with nothing listening for the first time,
+offers to run `grove install` right there before the list even opens — once, whichever way it
+is answered. Every launch after that either has the function or gets the standing tip in the
+message slot, never the screen again.
 
 The root default is not decoration. `remove` refuses to delete the directory your shell is
 standing in — deleting it would strand the shell somewhere that no longer exists, with every
@@ -822,6 +835,7 @@ src/
     args.ts            subcommand parsing — pure, no fs and no process
     help.ts            the command surface, described once
     shell-init.ts      the function `grove cd` and enter-to-cd live in
+    install.ts         writes shell-init's eval line into an rc file
     exit-codes.ts      GroveErrorCode -> exit code, as a total switch
     run.ts             dispatch, and how results are printed
   core/                knows nothing about argv, stdout, or Ink

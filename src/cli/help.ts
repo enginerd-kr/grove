@@ -124,6 +124,22 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     flags: [],
   },
   {
+    name: "install",
+    aliases: [],
+    args: "[shell]",
+    summary: "add shell-init's eval line to your shell's rc file",
+    description: [
+      "Detects the running shell from $SHELL when [shell] is omitted, and",
+      "appends the line `shell-init` prints to the rc file that shell reads —",
+      "~/.zshrc, ~/.config/fish/config.fish, or for bash whichever of",
+      "~/.bashrc, ~/.bash_profile, ~/.profile already exists.",
+      "",
+      "Safe to run more than once: a shell that already has the line, in any",
+      "spelling, is left alone.",
+    ],
+    flags: [],
+  },
+  {
     name: "shell-init",
     aliases: [],
     args: "<shell>",
