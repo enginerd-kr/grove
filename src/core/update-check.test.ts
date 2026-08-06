@@ -91,7 +91,7 @@ test("a fresh cache answers without a request — that is what it is for", async
   });
 });
 
-test("a fresh cache that matches the binary is silence, not a request", async () => {
+test("a no-update cache under an hour old is silence, not a request", async () => {
   await withCacheDir(async (cachePath) => {
     await Bun.write(cachePath, JSON.stringify({ checkedAt: T0, latest: "0.2.1" }));
     const api = gitHub({ tag_name: "v9.9.9" });
@@ -99,7 +99,7 @@ test("a fresh cache that matches the binary is silence, not a request", async ()
     const latest = await checkForUpdate({
       currentVersion: "0.2.1",
       cachePath,
-      now: () => T0 + HOUR,
+      now: () => T0 + 30 * 60 * 1000,
       fetcher: api.fetcher,
     });
 
@@ -108,10 +108,47 @@ test("a fresh cache that matches the binary is silence, not a request", async ()
   });
 });
 
-test("a cache past its day is asked again", async () => {
+// A "no update" answer ages out in an hour, well short of the day a "found
+// one" answer gets — a release minutes after the last check should not go
+// unreported for a day. This is the fix for exactly that report.
+test("a no-update cache past an hour is asked again, even within the same day", async () => {
   await withCacheDir(async (cachePath) => {
     await Bun.write(cachePath, JSON.stringify({ checkedAt: T0, latest: "0.2.1" }));
     const api = gitHub({ tag_name: "v0.2.5" });
+
+    const latest = await checkForUpdate({
+      currentVersion: "0.2.1",
+      cachePath,
+      now: () => T0 + 2 * HOUR,
+      fetcher: api.fetcher,
+    });
+
+    expect(latest).toBe("0.2.5");
+    expect(api.calls()).toBe(1);
+  });
+});
+
+test("an update-found cache survives most of a day without a request", async () => {
+  await withCacheDir(async (cachePath) => {
+    await Bun.write(cachePath, JSON.stringify({ checkedAt: T0, latest: "0.3.0" }));
+    const api = gitHub({ tag_name: "v9.9.9" });
+
+    const latest = await checkForUpdate({
+      currentVersion: "0.2.1",
+      cachePath,
+      now: () => T0 + 23 * HOUR,
+      fetcher: api.fetcher,
+    });
+
+    expect(latest).toBe("0.3.0");
+    expect(api.calls()).toBe(0);
+  });
+});
+
+test("a cache past its day is asked again", async () => {
+  await withCacheDir(async (cachePath) => {
+    await Bun.write(cachePath, JSON.stringify({ checkedAt: T0, latest: "0.3.0" }));
+    const api = gitHub({ tag_name: "v0.3.0" });
 
     const latest = await checkForUpdate({
       currentVersion: "0.2.1",
@@ -120,7 +157,7 @@ test("a cache past its day is asked again", async () => {
       fetcher: api.fetcher,
     });
 
-    expect(latest).toBe("0.2.5");
+    expect(latest).toBe("0.3.0");
     expect(api.calls()).toBe(1);
   });
 });

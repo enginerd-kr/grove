@@ -10,10 +10,16 @@ import { join } from "node:path";
  * is slow and only knows what its last `brew update` fetched. The answer lands
  * in a cache file so every launch of the day can tip without a request, and so
  * a dead network costs one timeout per day rather than one per launch.
+ *
+ * A cached "no update" ages out in an hour rather than a day: a release
+ * published minutes after that answer was cached would otherwise stay
+ * unreported for up to 24 hours. A cached "update found" keeps the full day —
+ * that answer only gets more true with time, so there's nothing to re-earn.
  */
 
 const RELEASES_URL = "https://api.github.com/repos/enginerd-kr/grove/releases/latest";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 const VERSION_SHAPE = /^\d+\.\d+\.\d+$/;
 
 type Cache = { readonly checkedAt: number; readonly latest: string };
@@ -96,8 +102,12 @@ export async function checkForUpdate(options: UpdateCheckOptions): Promise<strin
 
   try {
     const cache = await readCache(cachePath);
-    if (cache !== undefined && now() - cache.checkedAt < DAY_MS) {
-      return isNewer(cache.latest, currentVersion) ? cache.latest : undefined;
+    if (cache !== undefined) {
+      const knownUpdate = isNewer(cache.latest, currentVersion);
+      const ttl = knownUpdate ? DAY_MS : HOUR_MS;
+      if (now() - cache.checkedAt < ttl) {
+        return knownUpdate ? cache.latest : undefined;
+      }
     }
 
     const fetched = await fetchLatest(fetcher);
