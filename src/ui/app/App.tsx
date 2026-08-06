@@ -198,6 +198,12 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * The space between the list's columns, one constant so the header and every
+ * row agree on it — a gap that drifted between them would shear the columns.
+ */
+const GAP = "    ";
+
 /** Pads or truncates to exactly `width`, so columns stay columns. */
 function padTo(text: string, width: number): string {
   if (width <= 0) return "";
@@ -205,14 +211,6 @@ function padTo(text: string, width: number): string {
 
   return `${text.slice(0, Math.max(0, width - 1))}…`;
 }
-
-/**
- * The space between columns — one constant, because the width arithmetic has
- * to subtract exactly what the cells draw. A gap widened in the rows and not
- * in the sums is a line pushed past the screen edge and truncated.
- */
-const GAP = 4;
-const SEP = " ".repeat(GAP);
 
 type Widths = {
   readonly tree: number;
@@ -381,7 +379,7 @@ function Row({
     <Text color={selected ? theme.accent : undefined} wrap="truncate">
       {`${selected ? "▸" : " "} ${row.summary.current ? "*" : " "} `}
       {padTo(`${indent}${row.label}`, widths.tree)}
-      {SEP}
+      {GAP}
       {widths.remote > 0 ? (
         <>
           <DriftCell
@@ -394,7 +392,7 @@ function Row({
             width={widths.remote}
             selected={selected}
           />
-          {SEP}
+          {GAP}
         </>
       ) : null}
       {widths.trunk > 0 ? (
@@ -405,7 +403,7 @@ function Row({
             width={widths.trunk}
             selected={selected}
           />
-          {SEP}
+          {GAP}
         </>
       ) : null}
       <StateCell summary={row.summary} width={widths.state} selected={selected} />
@@ -415,7 +413,7 @@ function Row({
           the dot rather than at the far edge of the screen. */}
       {widths.touched > 0 ? (
         <>
-          {SEP}
+          {GAP}
           <Text dimColor={!selected}>
             {padTo(describeTouched(row.summary, Date.now()), widths.touched)}
           </Text>
@@ -1093,13 +1091,14 @@ export function App({
   // for rather than assumed — getting it wrong is a row of the list drawn off
   // the bottom of the screen.
   const banner = bannerRows(columns, terminalRows);
-  // A blank row above the banner, and another between the last thing reported
-  // and the keys: the two places the screen would otherwise start and end hard
-  // against the terminal's own output.
-  const headerRows = banner + (labelled ? 2 : 1) + 1;
-  // The key bar is one row until the terminal is too narrow to hold the keys on
-  // one, which the folder hints (`a add under feat/`) reach first. Asked for
-  // rather than assumed, for the same reason as the banner.
+  // A blank row above the banner and one between it and the column headings:
+  // the places the screen would otherwise run hard against the terminal's
+  // output or its own furniture.
+  const headerRows = banner + 1 + (labelled ? 2 : 1) + 1;
+  // The rule over the keys, the bar itself, and the position row. The bar is
+  // one row until the terminal is too narrow to hold the keys on one, which
+  // the folder hints (`a add under feat/`) reach first. Asked for rather than
+  // assumed, for the same reason as the banner.
   const footerRows = 1 + statusBarRows(hints, columns) + 1;
   const detailRows =
     (mode.kind === "prompt" ? PROMPT_ROWS : 0) +
@@ -1126,7 +1125,9 @@ export function App({
   // What did not fit is said rather than silently dropped — the whole reason
   // this exists is that a line went missing off the top without saying so.
   const clipped = Math.max(0, lines.length - room);
-  const activity = clipped > 0 ? lines.slice(-Math.max(0, room - 1)) : lines;
+  // `room - 1` can reach zero, and `slice(-0)` is the whole array — which on a
+  // cramped screen is every line drawn over whatever sat below the activity.
+  const activity = clipped > 0 ? (room > 1 ? lines.slice(-(room - 1)) : []) : lines;
   const activityRows = activity.length > 0 ? activity.length + (clipped > 0 ? 1 : 0) + 1 : 0;
 
   const listHeight = Math.max(
@@ -1192,10 +1193,10 @@ export function App({
     // `touched` goes first, then `trunk`: "is there anything uncommitted here"
     // and "is there anything to push" are the two a narrow terminal should keep.
     // The constant 4 is the marker prefix (`▸ * `); each column then costs its
-    // width plus the gap in front of it.
-    const gaps = 4 + GAP;
+    // width plus one `GAP` in front of it.
+    const gaps = 4 + GAP.length;
     const spare = (...widths: number[]) =>
-      columns - treeColumn - gaps - widths.reduce((a, b) => a + b + GAP, 0);
+      columns - treeColumn - gaps - widths.reduce((a, b) => a + b + GAP.length, 0);
     const fits = (...widths: number[]) => spare(...widths) >= LABELS.state;
 
     const remote = fits(remoteWidth) ? remoteWidth : 0;
@@ -1234,15 +1235,19 @@ export function App({
         rows={terminalRows}
       />
 
+      {/* The breath between the card and the table under it — counted into
+          `headerRows` above, like every other row this column draws. */}
+      <Box height={1} />
+
       {labelled ? (
         <Text dimColor wrap="truncate">
           {"    "}
           {padTo("worktree", widths.tree)}
-          {SEP}
-          {widths.remote > 0 ? `${padTo("origin", widths.remote)}${SEP}` : ""}
+          {GAP}
+          {widths.remote > 0 ? `${padTo("origin", widths.remote)}${GAP}` : ""}
           {/* Named after the branch it compares against, since `master` and
               `trunk` are both things people call it. */}
-          {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}${SEP}` : ""}
+          {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}${GAP}` : ""}
           state
         </Text>
       ) : null}
@@ -1344,9 +1349,11 @@ export function App({
         </Box>
       ) : null}
 
-      <Box marginTop={1}>
-        <StatusBar hints={hints} columns={columns} />
-      </Box>
+      {/* A rule rather than a blank row: the keys are chrome, not content, and
+          the line is what says so — the same convention that already separates
+          the header and the activity from the list. */}
+      <Text dimColor>{rule}</Text>
+      <StatusBar hints={hints} columns={columns} />
 
       {/* Last row, under the keys: how far into the list the cursor is. The row
           is kept even when there is nothing to say, so that a list scrolling

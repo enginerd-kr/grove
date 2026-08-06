@@ -5,28 +5,34 @@ import { theme } from "../theme.ts";
 import { type ChangelogEntry, latestChange } from "./changelog.ts";
 
 /**
- * The welcome: what this is, which build it is, and which folder it opened.
+ * The welcome: a card with the name in its border, a greeting over the art on
+ * the left, and a column of tips and news down the right.
  *
- * Those are the three things someone wants in the first second of a full-screen
- * app they did not hand a path to, and all three are expensive to check any
- * other way — the app takes the alternate buffer, so the command that started
- * it is no longer on screen to read the `-C` back off.
+ * The left half answers the questions that are expensive to answer any other
+ * way — which build this is, and which folder it opened. The app takes the
+ * alternate buffer, so the command that started it is no longer on screen to
+ * read the `-C` back off. The right half is the part that earns the card its
+ * size: one tip matched to the state of the folder, and what changed in the
+ * release you are looking at.
  *
  * It costs rows, so it gives them back when there are none to spare: below a
- * short or narrow terminal the art and the border go and the same facts are
- * drawn as one line. The list is what the terminal is for, and a banner that
- * squeezed it would be decoration charging rent.
+ * short or narrow terminal the card goes and the same facts are drawn as one
+ * line. The list is what the terminal is for, and a banner that squeezed it
+ * would be decoration charging rent.
  */
 
 /** A sprout, in half-blocks. Three rows, seven columns, and never wider. */
 const ART = ["▗▄▖ ▗▄▖", "▝▜█▄█▛▘", "   ▐▌"] as const;
 
-/** The art's width, plus the gap that separates it from the text beside it. */
+/** The art's width — the block is centred whole, so its rows stay aligned. */
 const ART_WIDTH = 7;
-const ART_GAP = 2;
 
-/** Below either of these, the banner is a single line. */
-const ROOMY_ROWS = 22;
+/**
+ * Below either of these, the banner is a single line. The card is twelve rows
+ * tall, and on a stock 24-row terminal that is half the screen — so the card
+ * asks for a terminal with rows to spare, not merely enough to fit in.
+ */
+const ROOMY_ROWS = 28;
 const ROOMY_COLUMNS = 52;
 
 function roomy(columns: number, rows: number): boolean {
@@ -34,35 +40,38 @@ function roomy(columns: number, rows: number): boolean {
 }
 
 /**
- * Below this many columns, the "What's new" column is absent even when the
- * banner is roomy — squeezed under it, the info column's path and count would
- * be the ones paying, and they answer "is this the folder I meant?" while the
- * news only answers "what changed?".
+ * Below this many columns, the right-hand column is absent even when the card
+ * is drawn — squeezed beside it, the greeting and the path would be the ones
+ * paying, and they answer "is this the folder I meant?" while the tips only
+ * answer "what could I do next?".
  */
-const WHATSNEW_COLUMNS = 84;
+const TIPS_COLUMNS = 84;
 /** More than this many bullets is a changelog, and the file is right there. */
 const WHATSNEW_BULLETS = 3;
-/** What the info column narrows to when the news sits beside it. */
-const INFO_WIDTH = 32;
-
-/** Rows the "What's new" column wants: a heading and its bullets, or none. */
-function whatsNewLines(columns: number, rows: number, entry = latestChange): number {
-  if (!roomy(columns, rows) || columns < WHATSNEW_COLUMNS) return 0;
-  if (entry === undefined || entry.bullets.length === 0) return 0;
-
-  return 1 + Math.min(WHATSNEW_BULLETS, entry.bullets.length);
-}
+/** What the greeting column holds to when the tips sit beside it. */
+const LEFT_WIDTH = 34;
+/** What the divider between the columns costs: a margin, the line, a gap. */
+const DIVIDER_WIDTH = 4;
 
 /**
- * How many rows the banner takes at this size.
+ * The card's inside is a fixed eight rows: the left column always draws its
+ * greeting, its art, and its two facts with a breath around the art, and the
+ * right column is never taller — two rows of tip, and at most a rule, a
+ * heading, three bullets and a pointer. A constant beats a calculation here:
+ * a card that changed height with the changelog would bounce the list under it
+ * from release to release.
+ */
+const CONTENT_ROWS = 8;
+
+/**
+ * How many rows the banner takes at this size: the content, a row of breath
+ * above and below it, the hand-drawn top border, and the bottom one.
  *
  * Exported because the screen slices the list to what is left over, and it can
  * only do that if the number is known before anything is drawn.
  */
-export function bannerRows(columns: number, rows: number, entry = latestChange): number {
-  if (!roomy(columns, rows)) return 1;
-
-  return Math.max(ART.length, whatsNewLines(columns, rows, entry)) + 2;
+export function bannerRows(columns: number, rows: number): number {
+  return roomy(columns, rows) ? CONTENT_ROWS + 4 : 1;
 }
 
 /**
@@ -92,6 +101,24 @@ function describeFolder(worktrees?: number, here?: string): string {
   return here === undefined ? counted : `${counted} · in ${here}`;
 }
 
+/** The person at the keyboard, by the name the OS knows them under. */
+function greeting(): string {
+  const name = process.env.USER ?? process.env.USERNAME ?? "";
+
+  return name.length === 0 ? "Welcome back!" : `Welcome back ${name}!`;
+}
+
+/**
+ * One tip, picked by what the folder is waiting for. The same three states
+ * `describeFolder` reads, answered with the key that moves each one along.
+ */
+function tipFor(worktrees?: number): string {
+  if (worktrees === undefined) return `run ${BIN_NAME} clone <url> to plant a repository here`;
+  if (worktrees === 0) return "press a to plant your first worktree";
+
+  return "press a to add, enter to go, ? to filter";
+}
+
 type Props = {
   /** The folder the app opened — the answer to "is this the one I meant?". */
   readonly repoRoot: string;
@@ -115,7 +142,6 @@ export function Banner({
 }: Props) {
   const folder = describeFolder(worktrees, here);
   const release = ` v${version}`;
-  const news = whatsNewLines(columns, rows, whatsNew) > 0 ? whatsNew : undefined;
 
   if (!roomy(columns, rows)) {
     // One line, and the path is what yields: the name and the version are short
@@ -132,58 +158,106 @@ export function Banner({
     );
   }
 
+  const withTips = columns >= TIPS_COLUMNS;
+  const news = whatsNew !== undefined && whatsNew.bullets.length > 0 ? whatsNew : undefined;
+  const leftWidth = withTips ? LEFT_WIDTH : columns - 4;
+  const newsWidth = Math.max(10, columns - 4 - LEFT_WIDTH - DIVIDER_WIDTH);
+  const title = `${BIN_NAME}${release}`;
+
   // Muted rather than accented: the accent border is what the add prompt uses to
-  // say "this is taking your keys", and a banner that borrowed it would blunt
-  // the one place that distinction has to be read at a glance.
+  // say "this is taking your keys", and a card that borrowed it would blunt the
+  // one place that distinction has to be read at a glance. The title is the
+  // exception — it sits *in* the border, and the accent is what lifts it out.
   return (
-    <Box borderStyle="round" borderColor={theme.muted} paddingX={1}>
-      <Box flexDirection="column" width={ART_WIDTH} flexShrink={0} marginRight={ART_GAP}>
-        {ART.map((line) => (
-          <Text key={line} color={theme.ok}>
-            {line}
-          </Text>
-        ))}
-      </Box>
+    <Box flexDirection="column" width={columns}>
+      {/* The top border, drawn by hand: Ink boxes cannot carry a title, so the
+          box below leaves its top off and this line supplies it, corner to
+          corner, sized to meet the sides exactly. */}
+      <Text wrap="truncate">
+        <Text color={theme.muted}>{"╭─ "}</Text>
+        <Text bold color={theme.accent}>
+          {title}
+        </Text>
+        <Text
+          color={theme.muted}
+        >{` ${"─".repeat(Math.max(0, columns - title.length - 5))}╮`}</Text>
+      </Text>
 
       <Box
-        flexDirection="column"
-        flexShrink={0}
-        width={news === undefined ? undefined : INFO_WIDTH}
+        width={columns}
+        borderStyle="round"
+        borderColor={theme.muted}
+        borderTop={false}
+        paddingX={1}
+        paddingY={1}
       >
-        <Text wrap="truncate">
-          <Text bold color={theme.accent}>
-            {BIN_NAME}
+        <Box flexDirection="column" alignItems="center" width={leftWidth} flexShrink={0}>
+          <Text bold wrap="truncate">
+            {greeting()}
           </Text>
-          <Text dimColor>{release}</Text>
-        </Text>
-        <Text dimColor wrap="truncate">
-          {shortenPath(
-            repoRoot,
-            news === undefined ? Math.max(10, columns - ART_WIDTH - ART_GAP - 5) : INFO_WIDTH,
-          )}
-        </Text>
-        <Text dimColor wrap="truncate">
-          {folder}
-        </Text>
-      </Box>
-
-      {news !== undefined && (
-        <Box
-          flexDirection="column"
-          marginLeft={ART_GAP}
-          width={columns - 4 - ART_WIDTH - ART_GAP - INFO_WIDTH - ART_GAP}
-        >
-          <Text wrap="truncate">
-            <Text bold>What's new</Text>
-            <Text dimColor> v{news.version}</Text>
+          <Box height={1} />
+          {/* The block centred whole, not line by line — centring each row
+              separately would shear the sprout apart. */}
+          <Box flexDirection="column" width={ART_WIDTH}>
+            {ART.map((line) => (
+              <Text key={line} color={theme.ok}>
+                {line}
+              </Text>
+            ))}
+          </Box>
+          <Box height={1} />
+          <Text dimColor underline wrap="truncate">
+            {shortenPath(repoRoot, leftWidth)}
           </Text>
-          {news.bullets.slice(0, WHATSNEW_BULLETS).map((bullet) => (
-            <Text key={bullet} dimColor wrap="truncate">
-              · {bullet}
-            </Text>
-          ))}
+          <Text dimColor wrap="truncate">
+            {folder}
+          </Text>
         </Box>
-      )}
+
+        {withTips && (
+          <Box
+            flexDirection="column"
+            // Sized by arithmetic, not left to grow: a Text only truncates
+            // against a width its box actually has, and grown-to-content is
+            // how a long bullet walks through the border.
+            width={newsWidth + 3}
+            flexShrink={0}
+            marginLeft={1}
+            paddingLeft={2}
+            borderStyle="single"
+            borderColor={theme.muted}
+            borderTop={false}
+            borderBottom={false}
+            borderRight={false}
+          >
+            <Text bold color={theme.accent} wrap="truncate">
+              Tips for getting started
+            </Text>
+            <Text wrap="truncate">{tipFor(worktrees)}</Text>
+            {news !== undefined && (
+              <>
+                <Text color={theme.muted} wrap="truncate">
+                  {"─".repeat(newsWidth)}
+                </Text>
+                <Text wrap="truncate">
+                  <Text bold color={theme.accent}>
+                    What's new
+                  </Text>
+                  <Text dimColor> v{news.version}</Text>
+                </Text>
+                {news.bullets.slice(0, WHATSNEW_BULLETS).map((bullet) => (
+                  <Text key={bullet} dimColor wrap="truncate">
+                    · {bullet}
+                  </Text>
+                ))}
+                <Text dimColor italic wrap="truncate">
+                  CHANGELOG.md for more
+                </Text>
+              </>
+            )}
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }
