@@ -145,9 +145,23 @@ function stub(overrides: Partial<WorktreeService> = {}): {
 
 // The app refreshes once a minute. The tests that are *about* the refreshing
 // drive it faster; the rest inherit it and are simply never ticked.
+//
+// Size is pinned rather than left to `useWindowSize`: `ink-testing-library`'s
+// stub stdout never reports a row count, so Ink falls back to asking the real
+// terminal running the tests — and a banner that turns roomy or narrow with
+// whatever window happens to be open is not a terminal size any test meant to
+// assert against. 24 rows keeps the banner in its one-line form, which is what
+// every test below but `Banner.test.tsx` itself is written against.
 function mount(service: WorktreeService, refreshMs?: number, store = new LineStore()) {
   const instance = render(
-    <App service={service} repoRoot="/repo" store={store} refreshMs={refreshMs} />,
+    <App
+      service={service}
+      repoRoot="/repo"
+      store={store}
+      refreshMs={refreshMs}
+      columns={100}
+      rows={24}
+    />,
   );
 
   return { ...instance, frame: () => plain(instance.lastFrame()) };
@@ -497,9 +511,10 @@ test("`x` works on a worktree that is dirty only from untracked files", async ()
 
 // The price of a configuration that travels with the project: `copy` and
 // `link` move files already on the disk, and a command came in with a pull.
-// The screen is the only surface that can hold the question — `grove add` has
-// to behave the same in a pipe as under a terminal — so it asks here.
-test("`a` asks about the commands the new worktree's file wants to run", async () => {
+// `grove add` on the command line has to behave the same in a pipe as under a
+// terminal, so it prints and skips; the screen just made the worktree itself,
+// so it runs them right after, the same way `--trust` would.
+test("`a` runs the commands the new worktree's file wants to run", async () => {
   const { service, calls } = stub({
     pendingCommands: async () => ["bun install", "./scripts/postinstall.sh"],
   });
@@ -512,43 +527,17 @@ test("`a` asks about the commands the new worktree's file wants to run", async (
   await waitFor(ui.lastFrame, (f) => f.includes("feat/new"));
   ui.stdin.write(keys.enter);
 
-  const asked = await waitFor(ui.lastFrame, (f) => f.includes("run it here?"));
-
-  // The commands themselves, not a count of them: "trust 2 commands?" is a
-  // question nobody can answer.
-  expect(asked).toContain('"bun install"');
-  expect(asked).toContain('"./scripts/postinstall.sh"');
-  expect(asked).toContain("y run it");
-  // The worktree was made either way; only the commands waited.
-  expect(calls.added).toEqual([{ branch: "feat/new", from: "main" }]);
-  expect(calls.trusted).toEqual([]);
-
-  ui.stdin.write("n");
-  await waitFor(ui.lastFrame, (f) => !f.includes("run it here?"));
-  expect(calls.trusted).toEqual([]);
-});
-
-test("`y` to that question runs them, against the worktree just made", async () => {
-  const { service, calls } = stub({ pendingCommands: async () => ["bun install"] });
-  const ui = mount(service);
-  await waitFor(ui.lastFrame, (f) => f.includes("login"));
-
-  ui.stdin.write("a");
-  await waitFor(ui.lastFrame, (f) => f.includes("new branch"));
-  ui.stdin.write("feat/new");
-  await waitFor(ui.lastFrame, (f) => f.includes("feat/new"));
-  ui.stdin.write(keys.enter);
-  await waitFor(ui.lastFrame, (f) => f.includes("run it here?"));
-
-  ui.stdin.write("y");
   await waitFor(ui.lastFrame, (f) => f.includes("1 run in"));
 
+  // The worktree was made, and the commands ran right after it — nothing asked.
+  expect(calls.added).toEqual([{ branch: "feat/new", from: "main" }]);
   expect(calls.trusted).toEqual(["feat/new"]);
 });
 
 // Every ordinary repository: no file, or one whose commands are already
-// recorded. Nothing is drawn, and `a` is the one-step thing it has always been.
-test("nothing is asked when nothing is waiting", async () => {
+// recorded (those already ran as part of `add` itself). Nothing is drawn, and
+// `a` is the one-step thing it has always been.
+test("nothing runs a second time when nothing is waiting", async () => {
   const { service, calls } = stub();
   const ui = mount(service);
   await waitFor(ui.lastFrame, (f) => f.includes("login"));
@@ -560,7 +549,6 @@ test("nothing is asked when nothing is waiting", async () => {
   ui.stdin.write(keys.enter);
   await waitFor(ui.lastFrame, (f) => f.includes("added feat/new"));
 
-  expect(ui.frame()).not.toContain("run it here?");
   expect(calls.trusted).toEqual([]);
 });
 

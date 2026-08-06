@@ -11,7 +11,6 @@ import {
   type WorktreeSummary,
 } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
-import { SETUP_FILE } from "../../core/setup-file.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
@@ -48,16 +47,7 @@ import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tre
 type Pending =
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
   | { readonly kind: "many"; readonly label: string; readonly paths: readonly string[] }
-  | { readonly kind: "reset"; readonly summary: WorktreeSummary }
-  /**
-   * The one entry here that deletes nothing, and the most serious of them.
-   *
-   * A worktree has just been made, its files are in place, and its
-   * `.grove.toml` wants to run commands that arrived with a pull. Saying yes
-   * is saying they may run on this machine — so the commands themselves are the
-   * question, because reading them is the whole of the safeguard.
-   */
-  | { readonly kind: "trust"; readonly branch: string; readonly commands: readonly string[] };
+  | { readonly kind: "reset"; readonly summary: WorktreeSummary };
 
 type Mode =
   | { readonly kind: "list" }
@@ -115,6 +105,14 @@ type Props = {
    * upgrade to be told about.
    */
   readonly checkUpdate?: () => Promise<string | undefined>;
+  /**
+   * Overrides the live terminal size. Absent everywhere but the tests: a real
+   * screen answers this itself, and `ink-testing-library`'s stub stdout never
+   * reports a row count, which would otherwise leave the banner's roomy/narrow
+   * choice depending on whatever terminal happens to be running the tests.
+   */
+  readonly columns?: number;
+  readonly rows?: number;
 };
 
 /**
@@ -320,15 +318,6 @@ function describePending(target: Pending): string {
     return `remove all ${target.paths.length} under ${target.label}? the directories go, the branches stay`;
   }
 
-  // The commands themselves, not a count of them. "trust 2 commands?" is a
-  // question nobody can answer, and this is the one place in the app where the
-  // answer is what stands between a pull and code running on your machine.
-  if (target.kind === "trust") {
-    const commands = target.commands.map((command) => JSON.stringify(command)).join(", ");
-
-    return `${SETUP_FILE} wants to run ${commands} — run it here?`;
-  }
-
   // Both kinds, counted apart. `x` deletes untracked files too, and one of
   // those may be work git has never seen a copy of — folding it into "3
   // changes" would be the sentence someone regrets having skimmed.
@@ -339,9 +328,8 @@ function describePending(target: Pending): string {
 
 /** How loudly to ask, which is not the same for all three questions. */
 function colourFor(target: Pending): string | undefined {
-  // Agreeing to run code that came in over the network is a risk of the same
-  // order as throwing work away, and of a different kind from a removal.
-  if (target.kind === "reset" || target.kind === "trust") return theme.danger;
+  // Discarding changes for good is a risk of a different kind from a removal.
+  if (target.kind === "reset") return theme.danger;
 
   return theme.warn;
 }
@@ -431,9 +419,13 @@ export function App({
   onCd,
   refreshMs = REFRESH_MS,
   checkUpdate,
+  columns: columnsOverride,
+  rows: rowsOverride,
 }: Props) {
   const { exit } = useApp();
-  const { columns, rows: terminalRows } = useWindowSize();
+  const live = useWindowSize();
+  const columns = columnsOverride ?? live.columns;
+  const terminalRows = rowsOverride ?? live.rows;
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
   const [cursorKey, setCursorKey] = useState<string | undefined>(undefined);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
@@ -553,28 +545,30 @@ export function App({
   /**
    * What follows an `a` that made a worktree whose file wants to run commands.
    *
-   * The dialog is here and not on the command line because this is the only
-   * surface that can hold one. `grove add` has to behave the same in a pipe as
-   * under a terminal, so there it prints the commands and skips them; the
-   * screen is already a terminal by construction, the worktree is on the row in
-   * front of you, and the question is one keystroke from the answer.
+   * Run here and not asked about, unlike `grove add` on the command line: that
+   * surface has to behave the same in a pipe as under a terminal, so it prints
+   * the commands and skips them. The screen just made the worktree itself, so
+   * there is nothing left to confirm — the commands run the same way `--trust`
+   * would make them.
    *
-   * Nothing is asked when the file has no commands or the answer is already
-   * recorded, which is every ordinary repository.
+   * Nothing runs when the file has no commands, which is every ordinary
+   * repository.
    */
-  const askAboutCommands = useCallback(
+  const runPendingCommands = useCallback(
     async (branch: string) => {
       try {
         const commands = await service.pendingCommands();
         if (commands.length === 0) return;
 
-        setMode({ kind: "confirm", target: { kind: "trust", branch, commands } });
+        await perform(`running ${plural(commands.length, "command")}`, () =>
+          service.trustAndRun(branch),
+        );
       } catch {
         // The worktree is made and its files are in place; failing to work out
-        // whether to ask about the commands is not worth a second red line.
+        // whether there were commands to run is not worth a second red line.
       }
     },
-    [service],
+    [service, perform],
   );
 
   /**
@@ -763,11 +757,10 @@ export function App({
           );
         }
 
-        // The question about the file's commands comes after, not instead:
-        // `perform` has drawn what the worktree got, and this asks about the
-        // half it did not.
+        // The file's commands run after, not instead: `perform` has drawn what
+        // the worktree got, and this runs the half it did not.
         return void perform(`adding ${value}`, () => service.add(value, mode.from)).then(() =>
-          askAboutCommands(value),
+          runPendingCommands(value),
         );
       }
       if (key.backspace || key.delete) {
@@ -859,12 +852,6 @@ export function App({
         if (target.kind === "reset") {
           return void perform(`resetting ${target.summary.dir}`, () =>
             service.reset(target.summary.path),
-          );
-        }
-
-        if (target.kind === "trust") {
-          return void perform(`running ${plural(target.commands.length, "command")}`, () =>
-            service.trustAndRun(target.branch),
           );
         }
 
@@ -1035,14 +1022,6 @@ export function App({
       ];
     }
     if (mode.kind === "confirm") {
-      // Named for what `y` actually does, which is not always removing.
-      if (mode.target.kind === "trust") {
-        return [
-          { keys: "y", action: "run it" },
-          { keys: "n", action: "skip" },
-        ];
-      }
-
       return [
         { keys: "y", action: mode.target.kind === "reset" ? "discard" : "remove" },
         { keys: "n", action: "keep" },

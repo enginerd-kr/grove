@@ -84,17 +84,18 @@ export type WorktreeService = {
   /**
    * The commands a worktree was just denied, if any.
    *
-   * Asked straight after `a`, because that is when the question means
-   * something: the files are in place, the commands are not, and what is being
-   * agreed to is on the screen. Empty for every repository that has no
-   * `.grove.toml` and every one whose file is already trusted.
+   * Checked straight after `a`, because that is when it matters: the files are
+   * in place and the commands are not. Empty for every repository that has no
+   * `.grove.toml` and every one whose file is already trusted — `add` already
+   * ran those.
    */
   readonly pendingCommands: () => Promise<readonly string[]>;
   /**
-   * `y` to that question: record the file as read, then run what it says.
+   * Records the file as read, then runs what it says.
    *
-   * The same record `grove add --trust` writes, so answering here answers for
-   * the command line too — and a pull that changes the file asks again.
+   * The same record `grove add --trust` writes, so running here trusts the
+   * command line too — and a pull that changes the file runs it again from
+   * here rather than skipping it silently.
    */
   readonly trustAndRun: (branch: string) => Promise<string>;
   /** Title and body a PR would open with — `gh --fill`'s guesses, shown first. */
