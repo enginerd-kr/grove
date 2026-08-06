@@ -4,6 +4,11 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.3 — 2026-08-06
+
+- `grove install` detects your shell and adds the `grove cd` / enter-to-go line to its rc file, so `shell-init` no longer has to be wired up by hand
+- A fresh `grove`, opened without the shell function listening, now offers to install it on the spot — once, before the app opens
+
 ## 0.3.2 — 2026-08-06
 
 - New worktrees copy their path to the clipboard, so opening one in another terminal tab is a paste away

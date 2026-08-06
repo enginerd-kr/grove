@@ -9,7 +9,7 @@ import {
   GLOBAL_FLAGS,
   SUBCOMMANDS,
 } from "./help.ts";
-import { isShell, SHELLS } from "./shell-init.ts";
+import { isShell, SHELLS, type Shell } from "./shell-init.ts";
 
 /**
  * Argument parsing, kept apart from the process it drives.
@@ -49,6 +49,7 @@ export type GroveCommand =
   | { readonly name: "list" }
   | { readonly name: "path"; readonly target?: string }
   | { readonly name: "shell-init"; readonly shell: string }
+  | { readonly name: "install"; readonly shell?: Shell }
   | {
       readonly name: "reset";
       readonly target: string;
@@ -115,7 +116,8 @@ function unknownSubcommand(name: string): CliCommand {
       kind: "error",
       message:
         "`grove cd` is a shell function, and it is not installed in this shell.\n" +
-        'Add to your shell\'s rc file:  eval "$(grove shell-init zsh)"   # or bash, fish',
+        "Run `grove install`, or add to your shell's rc file yourself:\n" +
+        '  eval "$(grove shell-init zsh)"   # or bash, fish',
     };
   }
 
@@ -184,6 +186,15 @@ function buildCommand(
         );
       }
       return { name: "shell-init", shell: first };
+    }
+    case "install": {
+      if (first !== undefined && !isShell(first)) {
+        return usageError(
+          spec,
+          `${JSON.stringify(first)} is not a shell this knows; expected ${SHELLS.join(", ")}`,
+        );
+      }
+      return { name: "install", shell: first };
     }
     case "reset": {
       if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to reset`);
