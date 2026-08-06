@@ -197,6 +197,12 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
+/**
+ * The space between the list's columns, one constant so the header and every
+ * row agree on it — a gap that drifted between them would shear the columns.
+ */
+const GAP = "    ";
+
 /** Pads or truncates to exactly `width`, so columns stay columns. */
 function padTo(text: string, width: number): string {
   if (width <= 0) return "";
@@ -379,11 +385,11 @@ function Row({
     <Text color={selected ? theme.accent : undefined} wrap="truncate">
       {`${selected ? "▸" : " "} ${row.summary.current ? "*" : " "} `}
       {padTo(`${indent}${row.label}`, widths.tree)}
-      {"  "}
+      {GAP}
       {widths.branch > 0 ? (
         <>
           <Text dimColor={!selected}>{padTo(branchAside(row.summary), widths.branch)}</Text>
-          {"  "}
+          {GAP}
         </>
       ) : null}
       {widths.remote > 0 ? (
@@ -398,7 +404,7 @@ function Row({
             width={widths.remote}
             selected={selected}
           />
-          {"  "}
+          {GAP}
         </>
       ) : null}
       {widths.trunk > 0 ? (
@@ -409,7 +415,7 @@ function Row({
             width={widths.trunk}
             selected={selected}
           />
-          {"  "}
+          {GAP}
         </>
       ) : null}
       <StateCell summary={row.summary} width={widths.state} selected={selected} />
@@ -1085,10 +1091,11 @@ export function App({
   // for rather than assumed — getting it wrong is a row of the list drawn off
   // the bottom of the screen.
   const banner = bannerRows(columns, terminalRows);
-  // A blank row above the banner, and another between the last thing reported
-  // and the keys: the two places the screen would otherwise start and end hard
-  // against the terminal's own output.
-  const headerRows = banner + (labelled ? 2 : 1) + 1;
+  // A blank row above the banner, one between it and the column headings, and
+  // another between the last thing reported and the keys: the places the
+  // screen would otherwise run hard against its own furniture or the
+  // terminal's output.
+  const headerRows = banner + 1 + (labelled ? 2 : 1) + 1;
   // The key bar is one row until the terminal is too narrow to hold the keys on
   // one, which the folder hints (`a add under feat/`) reach first. Asked for
   // rather than assumed, for the same reason as the banner.
@@ -1118,7 +1125,9 @@ export function App({
   // What did not fit is said rather than silently dropped — the whole reason
   // this exists is that a line went missing off the top without saying so.
   const clipped = Math.max(0, lines.length - room);
-  const activity = clipped > 0 ? lines.slice(-Math.max(0, room - 1)) : lines;
+  // `room - 1` can reach zero, and `slice(-0)` is the whole array — which on a
+  // cramped screen is every line drawn over whatever sat below the activity.
+  const activity = clipped > 0 ? (room > 1 ? lines.slice(-(room - 1)) : []) : lines;
   const activityRows = activity.length > 0 ? activity.length + (clipped > 0 ? 1 : 0) + 1 : 0;
 
   const listHeight = Math.max(
@@ -1166,9 +1175,11 @@ export function App({
     // Dropped when what is left cannot hold the state column's own heading, and
     // the trunk column goes first: "is there anything uncommitted here" and "is
     // there anything to push" are the two a narrow terminal should keep.
-    const gaps = branch > 0 ? 8 : 6;
+    // The cursor prefix, plus one `GAP` per column drawn before the drift pair.
+    const gaps = 4 + (branch > 0 ? 2 : 1) * GAP.length;
     const fits = (...widths: number[]) =>
-      columns - treeColumn - branch - gaps - widths.reduce((a, b) => a + b + 2, 0) >= LABELS.state;
+      columns - treeColumn - branch - gaps - widths.reduce((a, b) => a + b + GAP.length, 0) >=
+      LABELS.state;
 
     const remote = fits(remoteWidth) ? remoteWidth : 0;
     const trunk = remote > 0 && fits(remoteWidth, trunkWidth) ? trunkWidth : 0;
@@ -1182,7 +1193,7 @@ export function App({
       trunk,
       state: Math.max(
         0,
-        columns - treeColumn - branch - gaps - taken.reduce((a, b) => a + b + 2, 0),
+        columns - treeColumn - branch - gaps - taken.reduce((a, b) => a + b + GAP.length, 0),
       ),
     };
   }, [tree, columns, trunkName]);
@@ -1204,18 +1215,22 @@ export function App({
         rows={terminalRows}
       />
 
+      {/* The breath between the card and the table under it — counted into
+          `headerRows` above, like every other row this column draws. */}
+      <Box height={1} />
+
       {/* The branch column appears only when some worktree's branch differs from
           the directory it sits in, so the label has to come and go with it. */}
       {labelled ? (
         <Text dimColor wrap="truncate">
           {"    "}
           {padTo("worktree", widths.tree)}
-          {"  "}
-          {widths.branch > 0 ? `${padTo("branch", widths.branch)}  ` : ""}
-          {widths.remote > 0 ? `${padTo("origin", widths.remote)}  ` : ""}
+          {GAP}
+          {widths.branch > 0 ? `${padTo("branch", widths.branch)}${GAP}` : ""}
+          {widths.remote > 0 ? `${padTo("origin", widths.remote)}${GAP}` : ""}
           {/* Named after the branch it compares against, since `master` and
               `trunk` are both things people call it. */}
-          {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}  ` : ""}
+          {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}${GAP}` : ""}
           state
         </Text>
       ) : null}
