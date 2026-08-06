@@ -148,7 +148,7 @@ export function Setup({ service, folder, inPlace, store, onReady, onCancel }: Pr
 
       {message !== undefined ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text color={message.kind === "error" ? theme.danger : undefined} wrap="truncate">
+          <Text color={message.kind === "error" ? theme.danger : theme.accent} wrap="truncate">
             {message.text}
           </Text>
           {message.hint === undefined ? null : (

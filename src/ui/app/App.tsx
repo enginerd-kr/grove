@@ -1317,7 +1317,7 @@ export function App({
 
       {message !== undefined && mode.kind !== "busy" ? (
         <Box flexDirection="column">
-          <Text color={message.kind === "error" ? theme.danger : undefined} wrap="truncate">
+          <Text color={message.kind === "error" ? theme.danger : theme.accent} wrap="truncate">
             {message.text}
           </Text>
           {message.hint === undefined ? null : (
