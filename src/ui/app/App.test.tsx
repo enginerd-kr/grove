@@ -210,6 +210,33 @@ test("the remote column says how far each worktree has drifted from origin", asy
   expect(frame).not.toContain("2 ahead");
 });
 
+// "Which of these was I just in" is a question the list can answer before a key
+// is pressed. It trails each row rather than heading a column — the header
+// stays as it was — and rows with no time to show (the stubs everywhere else)
+// draw nothing at all.
+test("each row ends with how long ago the worktree was worked in", async () => {
+  const { service } = stub({
+    list: async () => [
+      summary({
+        dir: "main",
+        isDefault: true,
+        current: true,
+        touched: Date.now() - 5 * 60_000,
+      }),
+      summary({ dir: "feat/login", touched: Date.now() - 2 * 24 * 60 * 60_000 }),
+    ],
+  });
+  const ui = mount(service);
+
+  const frame = await waitFor(ui.lastFrame, (f) => f.includes("login"));
+
+  expect(frame).toMatch(/worktree\s+origin\s+main\s+state/);
+  expect(frame).not.toContain("touched");
+  // After the state dot, at the end of the line.
+  expect(frame).toMatch(/main\s+↑0 ↓0\s+○\s+5m ago/);
+  expect(frame).toMatch(/login\s+↑0 ↓0\s+○\s+2d ago/);
+});
+
 // The state column is about a working tree, and a working tree is edited from
 // somewhere else. Waiting for `R` makes the screen a photograph of whenever you
 // last pressed a key.

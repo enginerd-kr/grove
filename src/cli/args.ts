@@ -40,7 +40,6 @@ export type GroveCommand =
       readonly name: "add";
       readonly branch: string;
       readonly from?: string;
-      readonly dir?: string;
       readonly fetch: boolean;
       readonly push: boolean;
       readonly setup: boolean;
@@ -164,7 +163,6 @@ function buildCommand(
         name: "add",
         branch: first,
         from: str(values, "from"),
-        dir: str(values, "dir"),
         fetch: !bool(values, "no-fetch"),
         push: bool(values, "push"),
         setup: !bool(values, "no-setup"),

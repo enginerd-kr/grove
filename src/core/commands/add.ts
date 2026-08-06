@@ -22,7 +22,6 @@ export type AddOptions = {
   readonly branch: string;
   /** Base for a branch that does not exist yet. Defaults to the remote's default. */
   readonly from?: string;
-  readonly dir?: string;
   /** Fetch before deciding the branch is missing. On by default. */
   readonly fetch: boolean;
   readonly push: boolean;
@@ -77,7 +76,7 @@ export async function addWorktree(
 
   if (await pathExists(path)) {
     throw new GroveError("state-conflict", `${dir} already exists`, {
-      hint: "pass --dir <path> to use a different directory",
+      hint: "move or delete that directory first",
     });
   }
 
@@ -132,19 +131,18 @@ function worktreeBase(repo: RepoPaths): string {
 /**
  * The new worktree's path, relative to `worktreeBase`.
  *
- * `--dir` is honoured exactly as it is for a managed repository — a path
- * checked rather than rewritten, now resolved against the parent instead of
- * the root. Without one, a plain repository gets a name prefixed with the
- * repository's own — `myapp-feat-login` beside `myapp` — so a shared parent
- * directory does not fill with bare branch names that collide with whatever
- * else lives there.
+ * Always derived from the branch — the directory *is* the branch's name, which
+ * is what lets the list say one thing instead of two. A plain repository gets
+ * a name prefixed with the repository's own — `myapp-feat-login` beside
+ * `myapp` — so a shared parent directory does not fill with bare branch names
+ * that collide with whatever else lives there.
  */
 function worktreeRelSegment(repo: RepoPaths, options: AddOptions): string {
-  if (repo.kind === "plain" && options.dir === undefined) {
+  if (repo.kind === "plain") {
     return `${basename(repo.root)}-${worktreeRelPath(options.branch).replaceAll("/", "-")}`;
   }
 
-  return worktreeRelPath(options.branch, options.dir);
+  return worktreeRelPath(options.branch);
 }
 
 /**
@@ -224,7 +222,7 @@ function refuseNameCollision(
 
   if (clash) {
     throw new GroveError("state-conflict", `${worktreeDir(root, clash.path)} already exists here`, {
-      hint: "directories differing only by case collide on macOS and Windows; pass --dir",
+      hint: "directories differing only by case collide on macOS and Windows; pick a name that differs by more",
     });
   }
 }
@@ -232,13 +230,13 @@ function refuseNameCollision(
 /**
  * Refuses a worktree that would sit inside another, or swallow one.
  *
- * Newly possible now that directories nest: `feat/test` lives under `feat/`, so
- * a `--dir feat` would put one worktree inside the other. git allows it, and the
- * result is quietly broken — the outer worktree reports the inner one's files as
- * untracked, and `git clean` there deletes someone's work.
- *
- * Branches alone cannot reach this (git forbids `feat` and `feat/test` as a ref
- * D/F conflict); `--dir` can.
+ * Possible because directories nest: `feat/test` lives under `feat/`. The refs
+ * almost rule it out (git forbids `feat` and `feat/test` as a ref D/F
+ * conflict), but slugging can close the gap — `feat!` lands on the directory
+ * `feat` — and a worktree made by hand or by an older version can sit
+ * anywhere. git allows the nesting, and the result is quietly broken: the
+ * outer worktree reports the inner one's files as untracked, and `git clean`
+ * there deletes someone's work.
  */
 function refuseNesting(root: string, path: string, worktrees: readonly WorktreeRecord[]): void {
   const clash = worktrees.find(
@@ -250,7 +248,9 @@ function refuseNesting(root: string, path: string, worktrees: readonly WorktreeR
     throw new GroveError(
       "state-conflict",
       `that would nest with the worktree at ${worktreeDir(root, clash.path)}`,
-      { hint: "one worktree inside another makes each report the other's files; pass --dir" },
+      {
+        hint: "one worktree inside another makes each report the other's files; pick another branch name",
+      },
     );
   }
 }

@@ -144,29 +144,6 @@ onPosix(
 );
 
 onPosix(
-  "add honours --dir, resolved against the parent rather than the root",
-  async () => {
-    await withPlainRepo(async ({ repo, work }) => {
-      const result = await addWorktree(
-        repo,
-        {
-          branch: "feat/login",
-          dir: "custom-login",
-          fetch: true,
-          push: false,
-          setup: false,
-          trust: false,
-        },
-        silent(),
-      );
-
-      expect(result.path).toBe(join(work, "custom-login"));
-    });
-  },
-  30_000,
-);
-
-onPosix(
   "remove refuses the repository root even with force",
   async () => {
     await withPlainRepo(async ({ repo, work, plain }) => {

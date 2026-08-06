@@ -248,18 +248,21 @@ onPosix(
   async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const repo = await cloned(work, originUrl);
-      await addWorktree(
-        repo,
-        {
-          branch: "feat/login",
-          dir: "somewhere-else",
-          fetch: true,
-          push: false,
-          setup: true,
-          trust: false,
-        },
-        silent(),
+      // A worktree grove did not lay out — raw git puts the branch wherever it
+      // is told, which is exactly the state this error has to name.
+      const made = await runGit(
+        [
+          "worktree",
+          "add",
+          "--track",
+          "-b",
+          "feat/login",
+          join(repo.root, "somewhere-else"),
+          "origin/feat/login",
+        ],
+        { cwd: repo.gitDir },
       );
+      expect(made.code).toBe(0);
 
       const error = await expectError(
         addWorktree(
@@ -292,7 +295,7 @@ onPosix(
       );
 
       expect(error.code).toBe("state-conflict");
-      expect(error.hint).toContain("--dir");
+      expect(error.hint).toContain("move or delete");
     });
   },
   30_000,
@@ -330,6 +333,32 @@ onPosix(
   30_000,
 );
 
+// The two halves of "when was I last here": the commit answers for a clean
+// worktree, and an uncommitted edit — which is newer by definition — takes over
+// the moment there is one.
+onPosix(
+  "a worktree's latest touch follows its newest edit, committed or not",
+  async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const repo = await cloned(work, originUrl);
+
+      const before = await listWorktreeSummaries(repo, work);
+      const clean = before.find((s) => s.isDefault);
+      // The fixture pins its commit dates, so the clean answer is exact.
+      expect(clean?.touched).toBe(Date.parse("2026-01-01T00:00:00Z"));
+
+      await Bun.write(join(clean?.path ?? "", "scratch.txt"), "wip");
+
+      const after = await listWorktreeSummaries(repo, work);
+      const edited = after.find((s) => s.isDefault);
+      expect(edited?.dirty).toBe(true);
+      // The file was written just now, and now is what the summary reports.
+      expect(Math.abs(Date.now() - (edited?.touched ?? 0))).toBeLessThan(60_000);
+    });
+  },
+  30_000,
+);
+
 onPosix(
   "a deeply nested branch nests just as deeply",
   async () => {
@@ -352,8 +381,9 @@ onPosix(
 
 // git allows one worktree inside another and the result is quietly broken: the
 // outer one reports the inner one's files as untracked, and `git clean` there
-// deletes someone's work. Branches cannot reach this (git forbids `feat` and
-// `feat/x` as a ref D/F conflict), but --dir can.
+// deletes someone's work. The refs almost rule it out (git forbids `feat` and
+// `feat/x` as a ref D/F conflict), but slugging can close the gap: `feat!`
+// lands on the directory `feat`, which holds `feat/login`.
 onPosix(
   "refuses a worktree that would nest inside another",
   async () => {
@@ -368,23 +398,19 @@ onPosix(
       const swallowing = await expectError(
         addWorktree(
           repo,
-          { branch: "other", dir: "feat", fetch: false, push: false, setup: true, trust: false },
+          { branch: "feat!", fetch: false, push: false, setup: true, trust: false },
           silent(),
         ),
       );
       expect(swallowing.code).toBe("state-conflict");
 
+      // The other direction: a directory that would sit inside the worktree.
+      // The ref could never be created — `feat/login` exists — but the refusal
+      // has to come from the nesting check, before git is asked anything.
       const swallowed = await expectError(
         addWorktree(
           repo,
-          {
-            branch: "other",
-            dir: "feat/login/inner",
-            fetch: false,
-            push: false,
-            setup: true,
-            trust: false,
-          },
+          { branch: "feat/login/inner", fetch: false, push: false, setup: true, trust: false },
           silent(),
         ),
       );
@@ -405,7 +431,7 @@ onPosix(
       const error = await expectError(
         addWorktree(
           repo,
-          { branch: "feat/x", dir: "MAIN", fetch: false, push: false, setup: true, trust: false },
+          { branch: "MAIN", fetch: false, push: false, setup: true, trust: false },
           silent(),
         ),
       );

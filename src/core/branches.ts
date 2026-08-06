@@ -60,6 +60,42 @@ export async function driftFrom(bare: string, base: string): Promise<Map<string,
 }
 
 /**
+ * When each of these commits was made, in one call, as epoch milliseconds.
+ *
+ * One call rather than one per worktree, for the same reason as `driftFrom`:
+ * this feeds a screen that redraws on a timer, and `--no-walk` reads exactly
+ * the commits it is handed without walking anything's history.
+ *
+ * Tolerant the same way too. A sha that cannot be shown — or a git that cannot
+ * answer — leaves the map short rather than failing the read, and the column
+ * this feeds simply stays empty for those rows.
+ */
+export async function commitTimes(
+  bare: string,
+  shas: readonly string[],
+): Promise<ReadonlyMap<string, number>> {
+  const times = new Map<string, number>();
+  if (shas.length === 0) return times;
+
+  const result = await runGit(["log", "--no-walk=unsorted", "--format=%H %ct", ...shas], {
+    cwd: bare,
+  });
+  if (result.code !== 0) return times;
+
+  for (const line of result.stdout.split("\n")) {
+    const match = /^([0-9a-f]+) (\d+)$/.exec(line.trim());
+    if (!match) continue;
+
+    const [, sha, seconds] = match;
+    if (sha === undefined) continue;
+
+    times.set(sha, Number(seconds) * 1000);
+  }
+
+  return times;
+}
+
+/**
  * The branch everything else is measured against.
  *
  * Read from `refs/remotes/origin/HEAD` rather than from the bare repo's own

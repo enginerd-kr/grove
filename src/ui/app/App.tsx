@@ -6,6 +6,7 @@ import type { Drift } from "../../core/branches.ts";
 import {
   describeNotes,
   describeRemote,
+  describeTouched,
   describeTrunk,
   type WorktreeSummary,
 } from "../../core/commands/list.ts";
@@ -205,11 +206,19 @@ function padTo(text: string, width: number): string {
   return `${text.slice(0, Math.max(0, width - 1))}…`;
 }
 
+/**
+ * The space between columns — one constant, because the width arithmetic has
+ * to subtract exactly what the cells draw. A gap widened in the rows and not
+ * in the sums is a line pushed past the screen edge and truncated.
+ */
+const GAP = 4;
+const SEP = " ".repeat(GAP);
+
 type Widths = {
   readonly tree: number;
-  readonly branch: number;
   readonly remote: number;
   readonly trunk: number;
+  readonly touched: number;
   readonly state: number;
 };
 
@@ -339,13 +348,6 @@ function colourFor(target: Pending): string | undefined {
   return theme.warn;
 }
 
-/** The branch, when the directory does not already say it. */
-function branchAside(summary: WorktreeSummary): string {
-  if (summary.branch === undefined) return "(detached)";
-
-  return summary.branch === summary.dir ? "" : summary.branch;
-}
-
 function Row({
   row,
   selected,
@@ -379,13 +381,7 @@ function Row({
     <Text color={selected ? theme.accent : undefined} wrap="truncate">
       {`${selected ? "▸" : " "} ${row.summary.current ? "*" : " "} `}
       {padTo(`${indent}${row.label}`, widths.tree)}
-      {"  "}
-      {widths.branch > 0 ? (
-        <>
-          <Text dimColor={!selected}>{padTo(branchAside(row.summary), widths.branch)}</Text>
-          {"  "}
-        </>
-      ) : null}
+      {SEP}
       {widths.remote > 0 ? (
         <>
           <DriftCell
@@ -398,7 +394,7 @@ function Row({
             width={widths.remote}
             selected={selected}
           />
-          {"  "}
+          {SEP}
         </>
       ) : null}
       {widths.trunk > 0 ? (
@@ -409,10 +405,22 @@ function Row({
             width={widths.trunk}
             selected={selected}
           />
-          {"  "}
+          {SEP}
         </>
       ) : null}
       <StateCell summary={row.summary} width={widths.state} selected={selected} />
+      {/* Right beside the state, without a heading of its own: "when was I
+          last here" is an aside about the row, not a column the eye scans
+          down — and the state column is content-sized so this sits next to
+          the dot rather than at the far edge of the screen. */}
+      {widths.touched > 0 ? (
+        <>
+          {SEP}
+          <Text dimColor={!selected}>
+            {padTo(describeTouched(row.summary, Date.now()), widths.touched)}
+          </Text>
+        </>
+      ) : null}
     </Text>
   );
 }
@@ -1143,14 +1151,9 @@ export function App({
     );
     // The heading is content too: a column sized only to its rows truncates its
     // own label the moment the rows are shorter than it (`↑0 ↓0` under `remo…`).
-    const LABELS = { branch: 6, remote: 6, state: 5 };
+    const LABELS = { remote: 6, state: 5 };
 
-    // Only when something has one to show: a branch matching its directory is
-    // the ordinary case, and a column of blanks would be worse than no column.
     const leaves = leavesOf(tree);
-    const asides = leaves.map((leaf) => branchAside(leaf.summary).length);
-    const branch =
-      Math.max(0, ...asides) === 0 ? 0 : Math.min(Math.max(LABELS.branch, ...asides), 24);
 
     // Each sized to its contents and its own heading — `no upstream` for one,
     // the trunk's name for the other, which is however long someone called it.
@@ -1163,27 +1166,54 @@ export function App({
       ...leaves.map((leaf) => describeTrunk(leaf.summary).length),
     );
 
-    // Dropped when what is left cannot hold the state column's own heading, and
-    // the trunk column goes first: "is there anything uncommitted here" and "is
-    // there anything to push" are the two a narrow terminal should keep.
-    const gaps = branch > 0 ? 8 : 6;
-    const fits = (...widths: number[]) =>
-      columns - treeColumn - branch - gaps - widths.reduce((a, b) => a + b + 2, 0) >= LABELS.state;
+    // Only when something has a time to show. No heading and no minimum,
+    // because it trails the row rather than heading a column — its width is
+    // just the longest thing it will say.
+    const now = Date.now();
+    const touchedWidth = Math.max(
+      0,
+      ...leaves.map((leaf) => describeTouched(leaf.summary, now).length),
+    );
+
+    // The state column stopped being the row's flexible remainder when the
+    // touched aside moved in behind it: sized to what it actually says — the
+    // dot, plus the unusual states written out — the time sits beside the
+    // state rather than at the far edge of the screen.
+    const stateWidth = Math.max(
+      LABELS.state,
+      ...leaves.map((leaf) => {
+        const notes = describeNotes(leaf.summary);
+
+        return notes.length === 0 ? 1 : notes.length + 2;
+      }),
+    );
+
+    // Dropped when what is left cannot hold the state column's own heading.
+    // `touched` goes first, then `trunk`: "is there anything uncommitted here"
+    // and "is there anything to push" are the two a narrow terminal should keep.
+    // The constant 4 is the marker prefix (`▸ * `); each column then costs its
+    // width plus the gap in front of it.
+    const gaps = 4 + GAP;
+    const spare = (...widths: number[]) =>
+      columns - treeColumn - gaps - widths.reduce((a, b) => a + b + GAP, 0);
+    const fits = (...widths: number[]) => spare(...widths) >= LABELS.state;
 
     const remote = fits(remoteWidth) ? remoteWidth : 0;
     const trunk = remote > 0 && fits(remoteWidth, trunkWidth) ? trunkWidth : 0;
+    // The aside must leave the state column whole, not just its heading.
+    const touched =
+      touchedWidth > 0 && trunk > 0 && spare(remoteWidth, trunkWidth, touchedWidth) >= stateWidth
+        ? touchedWidth
+        : 0;
 
-    const taken = [remote, trunk].filter((width) => width > 0);
+    const taken = [remote, trunk, touched].filter((width) => width > 0);
 
     return {
       tree: treeColumn,
-      branch,
       remote,
       trunk,
-      state: Math.max(
-        0,
-        columns - treeColumn - branch - gaps - taken.reduce((a, b) => a + b + 2, 0),
-      ),
+      touched,
+      state: Math.max(0, Math.min(stateWidth, spare(...taken))),
     };
   }, [tree, columns, trunkName]);
 
@@ -1204,18 +1234,15 @@ export function App({
         rows={terminalRows}
       />
 
-      {/* The branch column appears only when some worktree's branch differs from
-          the directory it sits in, so the label has to come and go with it. */}
       {labelled ? (
         <Text dimColor wrap="truncate">
           {"    "}
           {padTo("worktree", widths.tree)}
-          {"  "}
-          {widths.branch > 0 ? `${padTo("branch", widths.branch)}  ` : ""}
-          {widths.remote > 0 ? `${padTo("origin", widths.remote)}  ` : ""}
+          {SEP}
+          {widths.remote > 0 ? `${padTo("origin", widths.remote)}${SEP}` : ""}
           {/* Named after the branch it compares against, since `master` and
               `trunk` are both things people call it. */}
-          {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}  ` : ""}
+          {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}${SEP}` : ""}
           state
         </Text>
       ) : null}

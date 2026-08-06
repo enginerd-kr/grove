@@ -254,9 +254,9 @@ export function worktreeDir(root: string, path: string): string {
  * Finds the worktree a user means by `target`.
  *
  * The branch-to-directory mapping is never inverted. It is lossy — a branch
- * whose name needed sanitising cannot be reconstructed from the result — and
- * `--dir` makes it arbitrary anyway, so the answer is looked up in what git
- * reports rather than recomputed.
+ * whose name needed sanitising cannot be reconstructed from the result — and a
+ * worktree made by hand can sit anywhere, so the answer is looked up in what
+ * git reports rather than recomputed.
  *
  * Order matters. Branch first, because that is what people say out loud; then
  * the directory, which for a nested layout is the whole relative path (`feat`

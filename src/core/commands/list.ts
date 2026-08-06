@@ -1,4 +1,6 @@
-import { type Drift, defaultBranch, driftFrom } from "../branches.ts";
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
+import { commitTimes, type Drift, defaultBranch, driftFrom } from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
@@ -42,6 +44,15 @@ export type WorktreeSummary = {
    * detached HEAD, and a git too old to answer in one call.
    */
   readonly trunk?: Drift;
+  /**
+   * When this worktree was last worked in, as epoch milliseconds.
+   *
+   * The later of the HEAD commit's time and the newest uncommitted edit —
+   * because "when was I last here" has two honest answers, and the commit alone
+   * gives the wrong one for exactly the worktree you left mid-change. Absent
+   * when neither can be read, and the column simply stays blank.
+   */
+  readonly touched?: number;
   readonly locked: boolean;
   /** A rebase is stopped part-way here and needs finishing or aborting. */
   readonly rebasing: boolean;
@@ -50,6 +61,35 @@ export type WorktreeSummary = {
   /** True for the worktree the command was run from. */
   readonly current: boolean;
 };
+
+/**
+ * The newest thing that happened in a worktree, committed or not.
+ *
+ * The commit time answers for a clean worktree; a dirty one is newer than its
+ * last commit by definition, so the changed files' mtimes are read too — and
+ * `status` has already named them, which is what keeps this a handful of stats
+ * rather than a walk of the tree. A path that cannot be statted is a deletion
+ * or a rename's old name, and says nothing about when.
+ */
+async function latestTouch(
+  path: string,
+  changed: readonly string[],
+  committed: number | undefined,
+): Promise<number | undefined> {
+  const mtimes = await Promise.all(
+    changed.map(async (file) => {
+      try {
+        return (await stat(join(path, file))).mtimeMs;
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+
+  const known = [committed, ...mtimes].filter((time): time is number => time !== undefined);
+
+  return known.length === 0 ? undefined : Math.max(...known);
+}
 
 export async function listWorktreeSummaries(
   repo: RepoPaths,
@@ -60,7 +100,13 @@ export async function listWorktreeSummaries(
     defaultBranch(repo.gitDir),
   ]);
   // After `trunk` is known, and once for every branch rather than per worktree.
-  const drift = await driftFrom(repo.gitDir, trunk);
+  const [drift, committed] = await Promise.all([
+    driftFrom(repo.gitDir, trunk),
+    commitTimes(
+      repo.gitDir,
+      records.map((record) => record.head).filter((head): head is string => head !== undefined),
+    ),
+  ]);
 
   const summaries = await Promise.all(
     records.map(async (record) => {
@@ -82,6 +128,11 @@ export async function listWorktreeSummaries(
           record.branch === undefined || record.branch === trunk
             ? undefined
             : drift.get(record.branch),
+        touched: await latestTouch(
+          record.path,
+          status.changed,
+          record.head === undefined ? undefined : committed.get(record.head),
+        ),
         locked: record.locked !== undefined,
         rebasing: record.rebasing === true,
         isDefault: record.branch === trunk,
@@ -173,6 +224,42 @@ export function describeTrunk(summary: WorktreeSummary): string {
   if (summary.trunk === undefined) return "";
 
   return `↑${summary.trunk.ahead} ↓${summary.trunk.behind}`;
+}
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/**
+ * The touched column: how long ago, until "ago" stops meaning anything.
+ *
+ * `5m ago` is an answer about now — which of these was I just in — and that
+ * question fades within a week. Past it the honest answer is a date, because
+ * "34d ago" is arithmetic the reader has to undo to learn what `2026-07-03
+ * 14:12` just says. Local time, since "when was I last here" is a question
+ * about the reader's day and not about UTC.
+ *
+ * A timestamp from the future reads as `now`: clocks drift, and a column that
+ * said `-2m ago` would be reporting the drift rather than the worktree.
+ */
+export function describeTouched(summary: WorktreeSummary, now: number): string {
+  if (summary.touched === undefined) return "";
+
+  const age = now - summary.touched;
+  if (age < MINUTE) return "now";
+  if (age < HOUR) return `${Math.floor(age / MINUTE)}m ago`;
+  if (age < DAY) return `${Math.floor(age / HOUR)}h ago`;
+  if (age < 7 * DAY) return `${Math.floor(age / DAY)}d ago`;
+
+  const date = new Date(summary.touched);
+
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(
+    date.getHours(),
+  )}:${pad2(date.getMinutes())}`;
 }
 
 /**
