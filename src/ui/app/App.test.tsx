@@ -651,9 +651,19 @@ test("opening with a listening shell says nothing about it", async () => {
 
 // The update check is a prop for the same reason the service is: the screen
 // should not know about GitHub, only about having been told a version.
-function mountChecking(service: WorktreeService, checkUpdate: () => Promise<string | undefined>) {
+function mountChecking(
+  service: WorktreeService,
+  checkUpdate: () => Promise<string | undefined>,
+  tipRotateMs?: number,
+) {
   const instance = render(
-    <App service={service} repoRoot="/repo" store={new LineStore()} checkUpdate={checkUpdate} />,
+    <App
+      service={service}
+      repoRoot="/repo"
+      store={new LineStore()}
+      checkUpdate={checkUpdate}
+      tipRotateMs={tipRotateMs}
+    />,
   );
 
   return { ...instance, frame: () => plain(instance.lastFrame()) };
@@ -669,14 +679,55 @@ test("a newer release opens the session with the upgrade tip", async () => {
   expect(frame).toContain("brew upgrade grove");
 });
 
-// One slot, and news outranks standing advice: the shell tip will still be
-// true tomorrow, the release is what changed today.
-test("the upgrade tip wins the slot over the shell tip", async () => {
+// One slot, and news goes first: the shell tip will still be true tomorrow,
+// the release is what changed today.
+test("the upgrade tip opens the session ahead of the shell tip", async () => {
   const { service } = stub();
   const ui = mountChecking(service, async () => "9.9.9");
 
   const frame = await waitFor(ui.lastFrame, (f) => f.includes("9.9.9"));
   expect(frame).not.toContain("shell-init");
+});
+
+// A release and no listening shell are both true at once here, alongside the
+// standing `GENERAL_TIPS` — the slot takes turns rather than picking one
+// permanent winner. The pick is random, so this only asserts both dynamic
+// tips get a turn somewhere in a generous run, not a fixed order.
+test("a release and the shell tip both take a turn in the rotation", async () => {
+  const { service } = stub();
+  const ui = mountChecking(service, async () => "9.9.9", 15);
+
+  await waitFor(ui.lastFrame, (f) => f.includes("9.9.9"));
+  const shellSeen = await waitFor(ui.lastFrame, (f) => f.includes("shell-init"), {
+    timeoutMs: 5000,
+  });
+  expect(shellSeen).toContain("the shell function is not installed");
+
+  const upgradeSeenAgain = await waitFor(ui.lastFrame, (f) => f.includes("9.9.9"), {
+    timeoutMs: 5000,
+  });
+  expect(upgradeSeenAgain).toContain("grove v9.9.9 is out");
+});
+
+// Even with neither dynamic tip in play — no release, shell function
+// installed — the standing library keeps the slot turning instead of
+// sitting on one line all session.
+test("with no dynamic tip in play, the standing tips still rotate", async () => {
+  const { service } = stub();
+  const instance = render(
+    <App
+      service={service}
+      repoRoot="/repo"
+      store={new LineStore()}
+      checkUpdate={async () => undefined}
+      onCd={() => {}}
+      tipRotateMs={15}
+    />,
+  );
+  const frame = () => plain(instance.lastFrame());
+
+  const first = await waitFor(frame, (f) => f.includes("tip:"));
+  await waitFor(frame, (f) => f.includes("tip:") && f !== first, { timeoutMs: 3000 });
 });
 
 test("a check that fails leaves the shell tip to open the session", async () => {

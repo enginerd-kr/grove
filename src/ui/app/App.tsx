@@ -99,6 +99,8 @@ type Props = {
   readonly onCd?: (path: string) => Promise<void> | void;
   /** How often to refresh, in ms. Defaults to `REFRESH_MS`; tests drive it faster. */
   readonly refreshMs?: number;
+  /** How often the message slot turns to its next tip, in ms. Defaults to `TIP_ROTATE_MS`; tests drive it faster. */
+  readonly tipRotateMs?: number;
   /**
    * Resolves to a newer released version, or `undefined` for nothing to say.
    * Absent means don't ask at all — the source tree and the tests have no
@@ -165,6 +167,19 @@ const MIN_LIST_ROWS = 3;
  * each one would be unusable offline while telling you nothing you could act on.
  */
 const REFRESH_MS = 60_000;
+// Long enough to read a tip and its hint before it turns — this is standing
+// advice, not a spinner, so it should not feel like it is racing the reader.
+const TIP_ROTATE_MS = 60_000;
+
+// Standing advice about features that are easy to miss, shown alongside
+// whatever the session earned (a release, a missing shell function) so the
+// slot always has more than one thing to say and rotation is never a no-op.
+const GENERAL_TIPS: readonly Message[] = [
+  { kind: "info", text: "tip: ? opens one prompt for both filtering and raw git" },
+  { kind: "info", text: "tip: h and l don't stop at the first fold — they keep going" },
+  { kind: "info", text: "tip: a starts the new branch from wherever the cursor is" },
+  { kind: "info", text: "tip: p shows the commits before it asks for a title" },
+];
 
 /** A new set with `key` in it, and one without — `Set` is mutable and state is not. */
 function with_(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
@@ -418,6 +433,7 @@ export function App({
   onCancel,
   onCd,
   refreshMs = REFRESH_MS,
+  tipRotateMs = TIP_ROTATE_MS,
   checkUpdate,
   columns: columnsOverride,
   rows: rowsOverride,
@@ -439,6 +455,10 @@ export function App({
   const typed = useRef("");
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
   const [message, setMessage] = useState<Message | undefined>(undefined);
+  // Every tip that earned the slot on this open: whichever of the release
+  // and missing-shell-function tips apply, plus the standing `GENERAL_TIPS`.
+  // Never empty once set. See the rotation `useInterval` below.
+  const [tipPool, setTipPool] = useState<readonly Message[]>([]);
 
   const lines = useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
 
@@ -644,38 +664,60 @@ export function App({
 
       const latest = await update;
       if (!live) return;
-      // One slot, three claims, one setter: whatever already owns the line —
-      // an error, an action's outcome — keeps it; a released upgrade outranks
-      // the shell tip because it is news and the shell tip is standing advice.
-      setMessage((previous) => {
-        if (previous !== undefined) return previous;
-        if (latest !== undefined) {
-          return {
-            kind: "info",
-            text: `tip: grove v${latest} is out — this is v${version}`,
-            hint: "upgrade: brew upgrade grove",
-          };
-        }
-        // With no shell function listening, half of what this screen does is
-        // quietly unavailable — q cannot land the shell where enter walked —
-        // and nothing on screen would ever say so. A rule that hides is a rule
-        // nobody can learn, so the one line that installs it opens the
-        // session, in the message slot the first action reclaims.
-        if (onCd === undefined) {
-          return {
-            kind: "info",
-            text: "tip: the shell function is not installed, so q cannot land your shell where you stood",
-            hint: `install once: eval "$(grove shell-init zsh)" in your shell's rc file — or bash, fish`,
-          };
-        }
-        return previous;
-      });
+      // One slot, several claims: whatever already owns the line — an error,
+      // an action's outcome — keeps it. A released upgrade goes first because
+      // it is news; the shell tip is standing advice, so it can wait its turn.
+      const tips: Message[] = [];
+      if (latest !== undefined) {
+        tips.push({
+          kind: "info",
+          text: `tip: grove v${latest} is out — this is v${version}`,
+          hint: "upgrade: brew upgrade grove",
+        });
+      }
+      // With no shell function listening, half of what this screen does is
+      // quietly unavailable — q cannot land the shell where enter walked —
+      // and nothing on screen would ever say so. A rule that hides is a rule
+      // nobody can learn, so the one line that installs it opens the
+      // session, in the message slot the first action reclaims.
+      if (onCd === undefined) {
+        tips.push({
+          kind: "info",
+          text: "tip: the shell function is not installed, so q cannot land your shell where you stood",
+          hint: `install once: eval "$(grove shell-init zsh)" in your shell's rc file — or bash, fish`,
+        });
+      }
+
+      tips.push(...GENERAL_TIPS);
+
+      setTipPool(tips);
+      setMessage((previous) => (previous !== undefined ? previous : tips[0]));
     })();
 
     return () => {
       live = false;
     };
   }, [service, onCd, checkUpdate]);
+
+  // Jumps the slot to a random tip in the pool, never the one just shown —
+  // unless something else has claimed the slot since, in which case there is
+  // nothing left to rotate and this quietly does nothing. A pool of one
+  // ticks forever without changing anything, which costs nothing, so there
+  // is no separate case for it.
+  useInterval(
+    () => {
+      setMessage((current) => {
+        // biome-ignore lint/complexity/useIndexOf: current may be undefined, which indexOf's Message-typed search element rejects
+        const at = tipPool.findIndex((tip) => tip === current);
+        if (at === -1 || tipPool.length < 2) return current;
+
+        let next = at;
+        while (next === at) next = Math.floor(Math.random() * tipPool.length);
+        return tipPool[next];
+      });
+    },
+    tipPool.length > 1 ? tipRotateMs : null,
+  );
 
   // Where the shell really is: the standpoint at launch, for `q` to compare
   // against before deciding the shell needs moving at all.
