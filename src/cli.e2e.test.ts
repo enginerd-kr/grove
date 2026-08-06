@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { version } from "../package.json";
 import { withTempRepo } from "./core/test-utils.ts";
@@ -72,15 +74,23 @@ onPosix(
 );
 
 // Distinct from the errors above: the command exists and the request was
-// understood, there is just no repository here.
+// understood, there is just no repository here. A scratch directory, not
+// `import.meta.dir`: discovery walks upward, and on a machine where this very
+// checkout lives inside a grove-managed folder, the source tree is not
+// "outside a managed repo" at all.
 onPosix(
   "running outside a managed repo exits 3 with somewhere to go next",
   async () => {
-    const { exitCode, stdout, stderr } = await runCli(["list"], { cwd: import.meta.dir });
+    const outside = await mkdtemp(join(tmpdir(), "grove-outside-"));
+    try {
+      const { exitCode, stdout, stderr } = await runCli(["list"], { cwd: outside });
 
-    expect(exitCode).toBe(3);
-    expect(stderr).toContain("grove clone");
-    expect(stdout).toBe("");
+      expect(exitCode).toBe(3);
+      expect(stderr).toContain("grove clone");
+      expect(stdout).toBe("");
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   },
   20_000,
 );
