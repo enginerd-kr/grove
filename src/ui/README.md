@@ -64,6 +64,14 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   a ref, so a tick cannot start before the last one finished. `refreshMs` is a prop with that
   default: the tests that are *about* the refreshing drive it in milliseconds, and the rest
   inherit it and are simply never ticked.
+- **The clock backs off once nobody's pressed a key in a while**, doubling `refreshMs` each tick
+  the idle stretch is still open, capped at five times it. The fetch behind it is real network
+  and process cost paid for a screen nobody is reading, which is what makes a `grove` left open
+  overnight expensive rather than idle. Idle is timed from the last key (`useInput` stamps a
+  ref on every one, whatever it does), not from the last render, so it survives typing into `a`'s
+  prompt without ever seeing the list move. Any key snaps the delay back to `refreshMs`
+  immediately, rather than waiting for a backed-off tick to notice — otherwise reopening the
+  screen after a while away could wait minutes for its first refresh.
 - **The cursor is a row, not an index.** With the list re-reading itself, a worktree appearing
   above the selected one would slide the selection down without anybody touching a key, and the
   next `r` would be aimed at something else. `move` still resolves inside the state updater, so

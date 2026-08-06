@@ -171,6 +171,23 @@ const REFRESH_MS = 60_000;
 // advice, not a spinner, so it should not feel like it is racing the reader.
 const TIP_ROTATE_MS = 60_000;
 
+/**
+ * How far the clock is let drift once nobody is at the keyboard, and how long
+ * "nobody" has to have been true before it starts.
+ *
+ * A fetch every minute is right while someone is driving the screen, but
+ * `grove` left open on a desk pays that cost with nobody there to spend it
+ * on — the network round trip and the `git` calls behind it are real work,
+ * done for an answer nobody is about to read. Idle is measured from the last
+ * key, not the last render, so typing a name into `a`'s prompt counts as
+ * being there even though nothing in the list moved. Both scale off
+ * `refreshMs` rather than standing as fixed minutes, so a test driving the
+ * interval in milliseconds exercises the same backoff a real session would,
+ * only compressed.
+ */
+const IDLE_AFTER_FACTOR = 2;
+const MAX_REFRESH_FACTOR = 5;
+
 // Standing advice about features that are easy to miss, shown alongside
 // whatever the session earned (a release, a missing shell function) so the
 // slot always has more than one thing to say and rotation is never a no-op.
@@ -773,9 +790,36 @@ export function App({
     void catchUp();
   }, [catchUp]);
 
-  useInterval(() => void catchUp(), mode.kind === "busy" ? null : refreshMs);
+  // The clock's own delay, separate from `refreshMs` itself: the interval
+  // reads this, and each tick is what's allowed to widen it. A ref for the
+  // last keystroke rather than state — it moves on every key, and nothing
+  // should re-render because of that, only because the delay it feeds
+  // eventually changes.
+  const lastInputAt = useRef(Date.now());
+  const [refreshDelay, setRefreshDelay] = useState(refreshMs);
+  const idleAfterMs = refreshMs * IDLE_AFTER_FACTOR;
+  const maxRefreshMs = refreshMs * MAX_REFRESH_FACTOR;
+
+  useInterval(
+    () => {
+      void catchUp();
+      setRefreshDelay((current) => {
+        const idleFor = Date.now() - lastInputAt.current;
+        return idleFor < idleAfterMs ? refreshMs : Math.min(current * 2, maxRefreshMs);
+      });
+    },
+    mode.kind === "busy" ? null : refreshDelay,
+  );
 
   useInput((input, key) => {
+    // Any key is "somebody's here," whatever it does — including the ones
+    // handled below that leave the mode untouched. Snapping the delay back
+    // now, rather than waiting for the next tick to notice, is what keeps a
+    // backed-off clock from making the screen wait minutes for its first
+    // refresh after being read again.
+    lastInputAt.current = Date.now();
+    setRefreshDelay(refreshMs);
+
     if (key.ctrl && input === "c") {
       onCancel?.();
       exit();
