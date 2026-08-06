@@ -4,6 +4,12 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.2 — 2026-08-06
+
+- New worktrees copy their path to the clipboard, so opening one in another terminal tab is a paste away
+- The tip line is colored so it reads against the default line, not the dim hint underneath it
+- A new release is re-checked for within the hour instead of a full day, and the tip line now cycles through more advice
+
 ## 0.3.1 — 2026-08-06
 
 - Adding a worktree runs its `.grove.toml` commands right away, instead of asking first
