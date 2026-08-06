@@ -4,6 +4,11 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.1 — 2026-08-06
+
+- Adding a worktree runs its `.grove.toml` commands right away, instead of asking first
+- Welcome banner: a quieter version number, brighter changelog bullets, and a tighter card
+
 ## 0.3.0 — 2026-08-06
 
 - Each worktree row now shows when it was last touched — `5m ago`, `2d ago`, or a date
