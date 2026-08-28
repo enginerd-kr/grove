@@ -238,6 +238,10 @@ export function describeSetup(result: SetupResult): string {
  * what did land before it raises what did not — the same shape `sync` uses, and
  * for the same reason: three files copied and then a failed install is two
  * facts, and swallowing the first one helps nobody debug the second.
+ *
+ * No hint. It used to name `grove setup <worktree>`, which is not a command
+ * this tool has, and advice that sends somebody to a help page is worse than
+ * none — what they need is on `details`, which is what the command itself said.
  */
 export function failureFor(result: SetupResult): GroveError | undefined {
   if (!result.failed) return undefined;
@@ -245,10 +249,7 @@ export function failureFor(result: SetupResult): GroveError | undefined {
   return new GroveError(
     "setup-failed",
     `${JSON.stringify(result.failed.command)} exited ${result.failed.code}`,
-    {
-      details: result.failed.details,
-      hint: `fix it and run \`grove setup ${result.dir}\` again`,
-    },
+    { details: result.failed.details },
   );
 }
 
@@ -318,7 +319,8 @@ async function takeOne(
  * Never throws for a command that failed — that is in the result, because the
  * files it copied first are worth reporting either way and because the two
  * callers want different things from it. `add` warns: it was asked for a
- * worktree and there is one. `grove setup` raises: it was asked for this.
+ * worktree and there is one. The screen's configure question raises: it was
+ * asked for this.
  */
 export async function runSetup(
   repo: RepoPaths,

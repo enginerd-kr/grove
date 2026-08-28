@@ -6,6 +6,7 @@ import { StatusBar } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { theme } from "../theme.ts";
 import { Banner } from "./Banner.tsx";
+import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
 import type { SetupService } from "./service.ts";
 
@@ -148,14 +149,7 @@ export function Setup({ service, folder, inPlace, store, onReady, onCancel }: Pr
 
       {message !== undefined ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text color={message.kind === "error" ? theme.danger : theme.accent} wrap="truncate">
-            {message.text}
-          </Text>
-          {message.hint === undefined ? null : (
-            <Text dimColor wrap="truncate">
-              {message.hint}
-            </Text>
-          )}
+          <MessageView message={message} />
         </Box>
       ) : null}
 
