@@ -4,6 +4,11 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.4 — 2026-08-28
+
+- `.grove.toml`'s `[setup]` takes an `env` key, so a setup command gets the credential or setting the shell grove was launched from does not have
+- An error now shows what the failing thing said — the setup command's own output, the worktrees an ambiguous name matched — instead of only that it failed
+
 ## 0.3.3 — 2026-08-06
 
 - `grove install` detects your shell and adds the `grove cd` / enter-to-go line to its rc file, so `shell-init` no longer has to be wired up by hand

@@ -17,7 +17,8 @@ import { BARE_DIR } from "./layout.ts";
  * [setup]
  * copy = [".env", "local.properties"]
  * link = ["node_modules"]
- * run  = ["bun install"]
+ * env  = { UV_INDEX_USERNAME = "PLACE_HOLDER" }
+ * run  = ["uv sync"]
  * ```
  *
  * The cost of travelling is `run`: a `git pull` can now hand you a command that
@@ -26,16 +27,25 @@ import { BARE_DIR } from "./layout.ts";
  * created — and `run` does not, until `grove trust` says so. See `trust.ts`.
  *
  * TOML because Bun parses it with no dependency, and because a file people are
- * expected to read and review deserves comments. It is read out of the worktree
- * being set up rather than out of the trunk: the file arrives with the branch,
- * so a branch that adds a build step brings the step with it.
+ * expected to read and review deserves comments. It is read out of the trunk's
+ * worktree and not out of the one being set up — see `readSetupPlan` — which is
+ * also what makes `env` usable: the committed file carries placeholders, and the
+ * real values are an uncommitted edit to the one copy every worktree reads.
  */
 
 export const SETUP_FILE = ".grove.toml";
 
+/** One `NAME=value` from `env`, split where the first `=` is. */
+export type SetupEnv = {
+  readonly name: string;
+  readonly value: string;
+};
+
 export type SetupPlan = {
   readonly copy: readonly string[];
   readonly link: readonly string[];
+  /** Given to every command, over the environment grove was started in. */
+  readonly env: readonly SetupEnv[];
   /** Command lines, run in the order the file lists them. */
   readonly commands: readonly string[];
   /** Absent when the worktree has no `.grove.toml`. */
@@ -44,12 +54,18 @@ export type SetupPlan = {
   readonly fingerprint?: string;
 };
 
-export const EMPTY_PLAN: SetupPlan = { copy: [], link: [], commands: [] };
+export const EMPTY_PLAN: SetupPlan = { copy: [], link: [], env: [], commands: [] };
 
 /** How much of the file asked for something. Zero means there is nothing to do. */
 export function plannedCount(plan: SetupPlan): number {
   return plan.copy.length + plan.link.length + plan.commands.length;
 }
+
+/** What each key's error says to write instead, so the advice is about that key. */
+const EXAMPLES: Readonly<Record<string, string>> = {
+  run: "bun install",
+  env: "UV_INDEX_USERNAME=PLACE_HOLDER",
+};
 
 /**
  * One key, which may be written as a list or as the single thing it usually is.
@@ -64,14 +80,97 @@ function stringsAt(table: Record<string, unknown>, key: string): readonly string
 
   if (!Array.isArray(value) || value.some((each) => typeof each !== "string")) {
     throw new GroveError("usage", `${SETUP_FILE}: setup.${key} must be a list of strings`, {
-      hint: `for example: ${key} = [${JSON.stringify(key === "run" ? "bun install" : ".env")}]`,
+      hint: `for example: ${key} = [${JSON.stringify(EXAMPLES[key] ?? ".env")}]`,
     });
   }
 
   return value as readonly string[];
 }
 
-const KNOWN = new Set(["copy", "link", "run"]);
+const KNOWN = new Set(["copy", "link", "env", "run"]);
+
+/** A name a shell would accept, which is the only kind worth passing to one. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The name, checked once, wherever the two spellings below found it. */
+function checkedEnvName(name: string, wrote: string): string {
+  if (ENV_NAME.test(name)) return name;
+
+  throw new GroveError("usage", `${SETUP_FILE}: setup.env has no name in ${wrote}`, {
+    hint: `a name, then its value: ${EXAMPLES.env} — or UV_INDEX_USERNAME = "PLACE_HOLDER"`,
+  });
+}
+
+/**
+ * A TOML scalar as the string a process will actually receive.
+ *
+ * `PORT = 3000` is what somebody writes, and refusing it to insist on `"3000"`
+ * would be pedantry about a shape with one reading — an environment holds
+ * strings, so a number written in the file was always going to become one. A
+ * list or a table is a different matter: there is no obvious string for those,
+ * and guessing one is how a config file starts lying.
+ */
+function scalar(value: unknown, name: string): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+
+  throw new GroveError("usage", `${SETUP_FILE}: setup.env.${name} must be a string`, {
+    hint: `for example: ${name} = "PLACE_HOLDER"`,
+  });
+}
+
+/**
+ * `env`, written either way round.
+ *
+ * ```toml
+ * env = ["UV_INDEX_USERNAME=PLACE_HOLDER"]        # a list of NAME=value
+ * env = { UV_INDEX_USERNAME = "PLACE_HOLDER" }    # the same, as a table
+ *
+ * [setup.env]                                     # and the same again
+ * UV_INDEX_USERNAME = "PLACE_HOLDER"
+ * ```
+ *
+ * Both, because they are the same file to a reader and the second is the one
+ * TOML would have chosen: a table is what a set of named values *is*, it quotes
+ * its own values so a password full of `#` survives, and it is the spelling
+ * anybody arriving from JSON or from a `.env` file already writes. The list
+ * stays because `NAME=value` is what the shell prints and what people paste.
+ *
+ * The list form splits at the *first* `=`, so a value may hold as many more as
+ * it likes — a token or a URL routinely does, and a second rule about escaping
+ * them would be a worse file to read than the one line it saves.
+ *
+ * Values live here rather than in the environment grove happened to start in
+ * because that environment is the thing that keeps not being there: the
+ * credential exported from `~/.zshrc` is missing from every non-interactive
+ * shell, from a login shell, and from anything a launcher started, and the
+ * failure it produces is a 401 from inside `uv` that says nothing about shells.
+ *
+ * The file is committed with placeholders and the trunk's working copy holds
+ * the real ones — which is exactly how much secrecy this offers, and it is not
+ * much: the values sit in a file git can see, one `git add -A` away from being
+ * pushed. For a real secret, keep pointing the tool at a credential store; this
+ * is for the settings that merely have to *be there*.
+ */
+function envAt(table: Record<string, unknown>): readonly SetupEnv[] {
+  const value = table.env;
+
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return Object.entries(value).map(([name, each]) => ({
+      name: checkedEnvName(name, JSON.stringify(name)),
+      value: scalar(each, name),
+    }));
+  }
+
+  return stringsAt(table, "env").map((line) => {
+    const at = line.indexOf("=");
+
+    return {
+      name: checkedEnvName(at === -1 ? "" : line.slice(0, at), JSON.stringify(line)),
+      value: line.slice(at + 1),
+    };
+  });
+}
 
 /**
  * Parses the file, refusing what it cannot act on.
@@ -115,6 +214,7 @@ export function parseSetupFile(text: string): SetupPlan {
   return {
     copy: stringsAt(table, "copy"),
     link: stringsAt(table, "link"),
+    env: envAt(table),
     commands: stringsAt(table, "run"),
   };
 }

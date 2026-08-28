@@ -238,6 +238,10 @@ export function describeSetup(result: SetupResult): string {
  * what did land before it raises what did not — the same shape `sync` uses, and
  * for the same reason: three files copied and then a failed install is two
  * facts, and swallowing the first one helps nobody debug the second.
+ *
+ * No hint. It used to name `grove setup <worktree>`, which is not a command
+ * this tool has, and advice that sends somebody to a help page is worse than
+ * none — what they need is on `details`, which is what the command itself said.
  */
 export function failureFor(result: SetupResult): GroveError | undefined {
   if (!result.failed) return undefined;
@@ -245,10 +249,7 @@ export function failureFor(result: SetupResult): GroveError | undefined {
   return new GroveError(
     "setup-failed",
     `${JSON.stringify(result.failed.command)} exited ${result.failed.code}`,
-    {
-      details: result.failed.details,
-      hint: `fix it and run \`grove setup ${result.dir}\` again`,
-    },
+    { details: result.failed.details },
   );
 }
 
@@ -318,7 +319,8 @@ async function takeOne(
  * Never throws for a command that failed — that is in the result, because the
  * files it copied first are worth reporting either way and because the two
  * callers want different things from it. `add` warns: it was asked for a
- * worktree and there is one. `grove setup` raises: it was asked for this.
+ * worktree and there is one. The screen's configure question raises: it was
+ * asked for this.
  */
 export async function runSetup(
   repo: RepoPaths,
@@ -432,16 +434,27 @@ export async function runSetup(
     );
   }
 
+  /**
+   * What the commands run with, over whatever grove itself was started in.
+   *
+   * `env` first and grove's own three last: `GROVE_WORKTREE` is this tool's
+   * answer to "where am I", and a file that could overwrite it would be able to
+   * lie to the script it is about to run.
+   *
+   * Not logged, and neither are the values anywhere else — the step line says
+   * the command and not its environment, because `env` is where a token ends up
+   * and a token belongs in no scrollback.
+   */
+  const commandEnv = {
+    ...Object.fromEntries(plan.env.map(({ name, value }) => [name, value])),
+    GROVE_ROOT: repo.root,
+    GROVE_WORKTREE: target.path,
+    GROVE_BRANCH: target.branch ?? "",
+  };
+
   for (const command of untrusted ? [] : plan.commands) {
     const step = reporter.step(`running ${command}`);
-    const result = await runShell(command, {
-      cwd: target.path,
-      env: {
-        GROVE_ROOT: repo.root,
-        GROVE_WORKTREE: target.path,
-        GROVE_BRANCH: target.branch ?? "",
-      },
-    });
+    const result = await runShell(command, { cwd: target.path, env: commandEnv });
 
     if (result.code !== 0) {
       step.fail(`${command} exited ${result.code}`);

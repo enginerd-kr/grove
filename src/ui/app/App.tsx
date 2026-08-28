@@ -18,7 +18,8 @@ import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
 import { rank } from "./filter.ts";
-import { type Message, messageFor } from "./message.ts";
+import { MessageView } from "./MessageView.tsx";
+import { type Message, messageFor, messageRows } from "./message.ts";
 import { bodyOf, modeOf, PROMPT_ROWS, Prompt, tokenize } from "./Prompt.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tree.ts";
@@ -1170,7 +1171,7 @@ export function App({
     (mode.kind === "add" ? 3 : 0) +
     (mode.kind === "pr" ? 3 + mode.context.length : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
-    (message === undefined || mode.kind === "busy" ? 0 : message.hint === undefined ? 1 : 2);
+    (message === undefined || mode.kind === "busy" ? 0 : messageRows(message));
 
   /**
    * How many rows the activity area may take, out of what is actually left.
@@ -1403,14 +1404,7 @@ export function App({
 
       {message !== undefined && mode.kind !== "busy" ? (
         <Box flexDirection="column">
-          <Text color={message.kind === "error" ? theme.danger : theme.accent} wrap="truncate">
-            {message.text}
-          </Text>
-          {message.hint === undefined ? null : (
-            <Text dimColor wrap="truncate">
-              {message.hint}
-            </Text>
-          )}
+          <MessageView message={message} />
         </Box>
       ) : null}
 
