@@ -17,7 +17,8 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "ci": "biome ci . && tsc --noEmit && bash scripts/test.sh",
-    "compile": "bash scripts/build-binaries.sh"
+    "compile": "bash scripts/build-binaries.sh",
+    "screenshots": "bun scripts/screens/shots.tsx"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
