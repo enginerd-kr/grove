@@ -36,6 +36,22 @@ export async function isDirectory(path: string): Promise<boolean> {
 }
 
 /**
+ * True for a directory itself, and false for a symlink pointing at one.
+ *
+ * The distinction is the whole safety of `setup`'s directory copy: it descends
+ * into a directory to fill in what is missing, and descending through a symlink
+ * would write into whatever the link points at — which, in a worktree that also
+ * has a `link` line, is the trunk's copy of that directory.
+ */
+export async function isDirectoryEntry(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * True when the path is absent or an empty directory.
  *
  * "Absent" counts as empty because the only caller asks whether it may create a

@@ -1,9 +1,9 @@
-import { cp, mkdir, symlink } from "node:fs/promises";
+import { cp, mkdir, readdir, symlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { Reporter } from "../report/reporter.ts";
 import { defaultBranch } from "./branches.ts";
 import { GroveError } from "./errors.ts";
-import { entryExists } from "./fs.ts";
+import { entryExists, isDirectoryEntry } from "./fs.ts";
 import { runGit, runShell } from "./git.ts";
 import { BARE_DIR, type RepoPaths } from "./layout.ts";
 import {
@@ -277,38 +277,83 @@ async function unignored(worktree: string, paths: readonly string[]): Promise<re
 type FileOutcome = "copied" | "linked" | "missing" | "kept";
 
 /**
+ * A copy that fills in what is missing and overwrites nothing.
+ *
+ * Never overwriting is the rule for both kinds: what is already in the worktree
+ * is what the branch checked out, and replacing it with another branch's copy is
+ * how a colleague's experimental `.env` becomes the one your tests run against.
+ * Refreshing one is a `cp`, and typing that is a smaller thing than a flag
+ * nobody would be sure of.
+ *
+ * A directory is where "already there" stops being one answer. `config/` is
+ * tracked and arrives with the checkout, while the `config/local.json` beside it
+ * is ignored and does not — so calling the directory present and moving on would
+ * mean `copy = ["config"]` did nothing for exactly the repository that wrote it.
+ * Two real directories are merged entry by entry instead, and each entry already
+ * at the destination is left alone: the same rule as for a single file, applied
+ * one level further down.
+ *
+ * Real directories, by `lstat`. A symlink at either end is copied as the link it
+ * is rather than descended into — descending through one at the destination
+ * would write into whatever it points at, which for a worktree that also has a
+ * `link` line is the trunk's copy.
+ */
+async function copyEntry(
+  from: string,
+  to: string,
+  /** The path as configured, and then as descended — collected in `written`. */
+  path: string,
+  /** Every path this actually put on disk, for the ignore check below. */
+  written: string[],
+): Promise<"copied" | "kept"> {
+  const present = await entryExists(to);
+
+  if (present) {
+    if (!((await isDirectoryEntry(from)) && (await isDirectoryEntry(to)))) return "kept";
+
+    const outcomes = [];
+    for (const name of await readdir(from)) {
+      outcomes.push(await copyEntry(join(from, name), join(to, name), `${path}/${name}`, written));
+    }
+
+    return outcomes.includes("copied") ? "copied" : "kept";
+  }
+
+  await mkdir(dirname(to), { recursive: true });
+  await cp(from, to, { recursive: true, verbatimSymlinks: true });
+  written.push(path);
+
+  return "copied";
+}
+
+/**
  * One path, taken — or left exactly as it was.
  *
- * A path already in the worktree is never overwritten and there is no flag that
- * would: it is what the branch checked out, and replacing it with another
- * branch's copy is how a colleague's experimental `.env` becomes the one your
- * tests run against. Refreshing one is a `cp`, and typing that is a smaller
- * thing than a flag nobody would be sure of.
+ * `copy` is `copyEntry` above, directories included. `link` is one symlink and
+ * has no equivalent of the merge: a link is the whole path or none of it, so a
+ * directory already in the worktree is kept and nothing is written beside it.
  */
 async function takeOne(
   kind: "copy" | "link",
   path: string,
   source: string,
   destination: string,
+  written: string[],
 ): Promise<FileOutcome> {
   const from = join(source, path);
   const to = join(destination, path);
 
   if (!(await entryExists(from))) return "missing";
+  if (kind === "copy") return copyEntry(from, to, path, written);
   if (await entryExists(to)) return "kept";
 
   await mkdir(dirname(to), { recursive: true });
-
-  if (kind === "copy") {
-    await cp(from, to, { recursive: true });
-
-    return "copied";
-  }
 
   // Relative, for the same reason `.git` holds `gitdir: ./.bare`: the repository
   // folder is one thing somebody may well move, and an absolute link would
   // survive that as a link into the place it used to be.
   await symlink(relative(dirname(to), from), to);
+  written.push(path);
 
   return "linked";
 }
@@ -334,6 +379,14 @@ export async function runSetup(
 
   const copied: string[] = [];
   const linked: string[] = [];
+  /**
+   * What landed, to the precision git needs to be asked about it.
+   *
+   * Not the same list as `copied`: a `copy` of a directory the branch already
+   * had writes the entries that were missing from it, and warning about the
+   * directory — tracked, and staying — would be a warning about the wrong path.
+   */
+  const written: string[] = [];
   const missing: string[] = [];
   const kept: string[] = [];
   const ran: string[] = [];
@@ -374,7 +427,7 @@ export async function runSetup(
       const step = reporter.step(`filling in ${dir}`);
       try {
         for (const { kind, path } of wanted) {
-          const outcome = await takeOne(kind, path, source.path, target.path);
+          const outcome = await takeOne(kind, path, source.path, target.path, written);
           buckets[outcome].push(path);
         }
       } catch (error) {
@@ -395,7 +448,7 @@ export async function runSetup(
         reporter.info(`already in ${dir}, left alone: ${kept.join(", ")}`);
       }
 
-      const exposed = await unignored(target.path, took);
+      const exposed = await unignored(target.path, written);
       if (exposed.length > 0) {
         const one = exposed.length === 1;
         reporter.warn(

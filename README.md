@@ -12,7 +12,7 @@ Runs on [Bun](https://bun.sh) with [Biome](https://biomejs.dev) for linting and 
 
 - **Bare Clone Backend**: Saves disk space and organizes all branches of a repository into clean, parallel directories.
 - **Interactive Terminal UI**: Manage worktrees with hotkeys—add, remove, sync, reset, filter, run Git commands, and create PRs.
-- **Auto-Workspace Setup**: Configure `.grove.toml` to copy files (e.g., `.env`), symlink folders (`node_modules`), and run setup commands (`bun install`) automatically on worktree creation.
+- **Auto-Workspace Setup**: Configure `.grove.toml` to copy files and folders (e.g., `.env`, `certs/`), symlink folders (`node_modules`), and run setup commands (`bun install`) automatically on worktree creation.
 - **Smart Syncing**: Automatically fetches and brings worktrees up to date using safe, rebase-based strategies.
 
 ---
@@ -60,7 +60,7 @@ Create a `.grove.toml` file in your repository's default branch to automate work
 
 ```toml
 [setup]
-copy = [".env"]                # Copy files from the default branch (main)
+copy = [".env", "certs"]       # Copy files or folders from the default branch (main)
 link = ["node_modules"]        # Symlink folders (e.g. to share dependencies)
 env  = { PORT = "3000" }       # Environment variables for run commands
 run  = ["bun install"]         # Commands to execute in the new worktree

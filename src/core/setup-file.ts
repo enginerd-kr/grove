@@ -15,7 +15,7 @@ import { BARE_DIR } from "./layout.ts";
  *
  * ```toml
  * [setup]
- * copy = [".env", "local.properties"]
+ * copy = [".env", "local.properties", "certs"]
  * link = ["node_modules"]
  * env  = { UV_INDEX_USERNAME = "PLACE_HOLDER" }
  * run  = ["uv sync"]
@@ -25,6 +25,10 @@ import { BARE_DIR } from "./layout.ts";
  * executes on your machine. So `copy` and `link` apply on sight — they move
  * files that are already on your disk, inside a directory you asked to be
  * created — and `run` does not, until `grove trust` says so. See `trust.ts`.
+ *
+ * `copy` takes a directory as readily as a file — `certs` above — and a
+ * directory the branch already checked out is filled in rather than replaced.
+ * See `takeOne` in `setup.ts` for why that is not the same rule as `link`'s.
  *
  * TOML because Bun parses it with no dependency, and because a file people are
  * expected to read and review deserves comments. It is read out of the trunk's
@@ -42,6 +46,7 @@ export type SetupEnv = {
 };
 
 export type SetupPlan = {
+  /** Paths taken from the trunk, each a file or a whole directory. */
   readonly copy: readonly string[];
   readonly link: readonly string[];
   /** Given to every command, over the environment grove was started in. */
@@ -281,6 +286,10 @@ export async function revokeTrust(bare: string): Promise<boolean> {
  * between every worktree, which is right for a dependency cache and wrong for
  * anything a build writes into — so the line is written, and uncommenting it is
  * where the decision goes.
+ *
+ * `copy` is the third answer and is described rather than written: it takes a
+ * directory too, but it already has a line of its own above, and a second one
+ * waiting to be uncommented would be a duplicate key the moment somebody did.
  */
 export function renderSetupFile(files: readonly string[], directories: readonly string[]): string {
   const list = (values: readonly string[]) =>
@@ -292,8 +301,9 @@ export function renderSetupFile(files: readonly string[], directories: readonly 
   if (directories.length > 0) {
     lines.push("");
     lines.push("# A directory is a decision. `link` shares one copy between every worktree,");
-    lines.push("# which suits a dependency cache and not a build output; a `run` command");
-    lines.push("# rebuilds it in each instead. Uncomment whichever is true here.");
+    lines.push("# which suits a dependency cache and not a build output; adding it to `copy`");
+    lines.push("# gives each worktree its own; a `run` command rebuilds it in each instead.");
+    lines.push("# Uncomment whichever is true here.");
     lines.push(`# link = ${list(directories)}`);
     lines.push(`# run = ["bun install"]`);
   }
