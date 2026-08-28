@@ -432,16 +432,27 @@ export async function runSetup(
     );
   }
 
+  /**
+   * What the commands run with, over whatever grove itself was started in.
+   *
+   * `env` first and grove's own three last: `GROVE_WORKTREE` is this tool's
+   * answer to "where am I", and a file that could overwrite it would be able to
+   * lie to the script it is about to run.
+   *
+   * Not logged, and neither are the values anywhere else — the step line says
+   * the command and not its environment, because `env` is where a token ends up
+   * and a token belongs in no scrollback.
+   */
+  const commandEnv = {
+    ...Object.fromEntries(plan.env.map(({ name, value }) => [name, value])),
+    GROVE_ROOT: repo.root,
+    GROVE_WORKTREE: target.path,
+    GROVE_BRANCH: target.branch ?? "",
+  };
+
   for (const command of untrusted ? [] : plan.commands) {
     const step = reporter.step(`running ${command}`);
-    const result = await runShell(command, {
-      cwd: target.path,
-      env: {
-        GROVE_ROOT: repo.root,
-        GROVE_WORKTREE: target.path,
-        GROVE_BRANCH: target.branch ?? "",
-      },
-    });
+    const result = await runShell(command, { cwd: target.path, env: commandEnv });
 
     if (result.code !== 0) {
       step.fail(`${command} exited ${result.code}`);

@@ -141,6 +141,7 @@ remove, so it is written down once, per repository, in a file the repository car
 [setup]
 copy = [".env", "local.properties"]   # take a copy from main's worktree
 link = ["node_modules"]               # symlink to main's, rather than copying
+env  = { UV_INDEX_USERNAME = "PLACE_HOLDER" }  # given to the commands below
 run  = ["bun install"]                # run this in the new worktree
 ```
 
@@ -151,8 +152,8 @@ reviewed in a pull request like anything else, and somebody who has just cloned 
 gets a working worktree before they have been told how.
 
 TOML because Bun parses it with nothing installed, and because a file people are expected to
-read deserves comments. All three keys are optional, and a single value need not be a list
-(`copy = ".env"`). A key that is not one of the three is an error rather than something
+read deserves comments. All four keys are optional, and a single value need not be a list
+(`copy = ".env"`). A key that is not one of the four is an error rather than something
 ignored: `cpoy = [".env"]` quietly doing nothing is exactly the failure this file exists to
 prevent.
 
@@ -164,6 +165,35 @@ own, so reading each worktree's copy would configure the repository for the work
 after Tuesday and not the ones made before. A link is relative — `../../main/node_modules` —
 for the same reason `.git` holds `gitdir: ./.bare`: the repository folder is a thing people
 move.
+
+**`env` is for the setting a command needs and the shell does not have.** It is given to every
+`run` command over the environment grove itself was started in — grove's own `GROVE_ROOT`, `GROVE_WORKTREE` and
+`GROVE_BRANCH` are set last, so the file cannot lie to the script about where it is. This
+exists because the environment is the thing that keeps not being there: a credential exported
+from `~/.zshrc` is missing from every non-interactive shell, from a login shell, and from
+anything a launcher started, and what you get instead is a 401 from inside the installer that
+says nothing at all about shells.
+
+Write it either way round — a table, which is what a set of named values is, or the
+`NAME=value` list the shell prints and people paste:
+
+```toml
+env = { UV_INDEX_USERNAME = "PLACE_HOLDER" }      # or its own section, [setup.env]
+env = ["UV_INDEX_USERNAME=PLACE_HOLDER"]          # the same thing
+```
+
+The table quotes its own values, so a password full of `#` or `=` survives; the list splits at
+the first `=`, so one holding more of them survives too. `PORT = 3000` is fine and arrives as
+`"3000"` — an environment holds strings — but a list or a nested table is refused rather than
+guessed at.
+
+The intended shape is a committed file full of placeholders, and the real values written into **the trunk worktree's copy, uncommitted**. That works
+because of the rule above — every worktree is set up from the default branch's copy of the
+file, so one local edit configures all of them, and `git status` in `main` keeps showing you
+that it is there. Be clear-eyed about how much secrecy that is, though: it is a tracked file,
+one `git add -A` away from being pushed, and changing it withdraws the trust it had, so the
+next `add` asks again. For a real secret, prefer whatever credential store the tool already
+reads — `~/.netrc`, a keyring — and keep `env` for the settings that merely have to *be there*.
 
 **There is no `grove setup` command, and that is deliberate.** A worktree is filled in when it
 is made, by the command that makes it — `grove add` reads the file, copies, links, and runs, in
