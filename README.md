@@ -16,11 +16,6 @@ A git worktree is like a tree, and a repository full of them is a **grove**.
   <img src="docs/screens/list.svg" alt="grove's screen: a repository's worktrees as a tree, with how far each has drifted from its remote and from the trunk, whether anything is uncommitted, and when it was last worked in" width="100%">
 </p>
 
-<p align="center">
-  <img src="docs/screens/add.svg" alt="a branch typed into grove's add prompt: the worktree appears, its .env is copied, node_modules is shared, and bun install has already run" width="49%">
-  <img src="docs/screens/prompt.svg" alt="git log, asked for from grove's prompt as !log --oneline -5 and answered in the lower half of the screen, without leaving the worktree the cursor is on" width="49%">
-</p>
-
 ## Why
 
 Git worktrees are the perfect solution when you need to work on or compare multiple branches at once. However, they are rarely used because managing them is a hassle:
