@@ -4,6 +4,10 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.5 — 2026-08-29
+
+- `.grove.toml`'s `copy` now fills in a directory the new worktree already has, so the ignored files inside a tracked folder — `config/local.json` and the like — arrive with it instead of being skipped as "already there"
+
 ## 0.3.4 — 2026-08-28
 
 - `.grove.toml`'s `[setup]` takes an `env` key, so a setup command gets the credential or setting the shell grove was launched from does not have
