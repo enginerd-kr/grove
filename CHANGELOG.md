@@ -4,6 +4,15 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.7 — 2026-08-29
+
+- The app's keys are back to the three things worktree management is made of: `a` adds, `r` removes — one worktree or a folder's worth — and `s`/`S` sync, with `R` and `q` beside them. The filter prompt and the raw git behind its `!`, `p`'s pull request and `x`'s discard are gone; `grove reset`, `grove path`, `grove cd` and `git` itself still do all of it a command away
+- The row under the cursor shows its uncommitted files beside the list — the paths alone, folded into the tree they sit in the same way the worktrees are, so "what have I got open over there" no longer needs a `git status` in another terminal. It takes only the width left past the last column, so a clean row costs the list nothing
+- The last five commits of the row under the cursor are drawn under the list — sha, age and subject in columns, with git's own colours on the refs — so `↑2` reads as the two commits it stands for. `L` puts the panel away when the rows are wanted for the list instead
+- `grove sync` gets past a force-pushed trunk: a commit the base has since withdrawn is dropped rather than replayed onto its own replacement, which used to hand you a conflict between a change and an edit of that same change that syncing again never cleared
+- Adding a worktree puts a whole `cd` line on the clipboard, quoted if the path needs it, and `enter` copies the bare path of any row — a worktree or a folder — for an editor's "open folder" box
+- A setup step that fails now says what the command said, instead of ending its warning with `undefined`
+
 ## 0.3.6 — 2026-08-29
 
 - `.grove.toml`'s `copy` now takes the trunk's version over what the worktree already holds — a stale `.env` is refreshed instead of kept, directories merge with the trunk winning, and what only the worktree has stays
