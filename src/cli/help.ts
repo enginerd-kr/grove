@@ -225,6 +225,27 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       },
     ],
   },
+  {
+    name: "doctor",
+    aliases: [],
+    args: "",
+    summary: "check the repository for the things that break a later command",
+    description: [
+      "Reads the repository, reports what is wrong with it, and prints the",
+      "command that clears each one. Nothing is written.",
+      "",
+      "It looks for the bare clone with no fetch refspec — the one that makes",
+      "origin/* never appear and every later command fail somewhere else —",
+      "worktrees git still lists but that are gone from disk, directories a",
+      "prune left behind pointing at a git dir that is not there, a repo root",
+      "whose .git file names the wrong place, and the symlinks .grove.toml's",
+      "`link` made, where what they point at has since gone.",
+      "",
+      "Exits 6 when it found a problem, and 0 for a warning — so a stale",
+      "directory does not fail a pipeline this is running in.",
+    ],
+    flags: [],
+  },
 ];
 
 export function findSubcommand(name: string): SubcommandSpec | undefined {

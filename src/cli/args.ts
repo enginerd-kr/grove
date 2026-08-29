@@ -47,6 +47,7 @@ export type GroveCommand =
       readonly trust: boolean;
     }
   | { readonly name: "list" }
+  | { readonly name: "doctor" }
   | { readonly name: "path"; readonly target?: string }
   | { readonly name: "shell-init"; readonly shell: string }
   | { readonly name: "install"; readonly shell?: Shell }
@@ -173,6 +174,8 @@ function buildCommand(
     }
     case "list":
       return { name: "list" };
+    case "doctor":
+      return { name: "doctor" };
     case "path":
       return { name: "path", target: first };
     case "shell-init": {

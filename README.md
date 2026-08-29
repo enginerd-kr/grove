@@ -57,6 +57,7 @@ grove reset <target>        # Discard all uncommitted changes in a worktree
 grove remove <target>       # Delete a worktree directory safely
 grove path [target]         # Print the absolute path of a selected worktree
 grove cd [target]           # Change directory to a worktree (requires shell integration)
+grove doctor                # Check the repository for the traps that break a later command
 ```
 
 Running `grove` without any arguments opens the interactive terminal UI:

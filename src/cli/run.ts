@@ -1,6 +1,11 @@
 import { relative } from "node:path";
 import { addWorktree } from "../core/commands/add.ts";
 import { cloneRepo } from "../core/commands/clone.ts";
+import {
+  diagnose,
+  failureFor as diagnosisFailure,
+  formatDiagnosis,
+} from "../core/commands/doctor.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
 import { worktreePath } from "../core/commands/path.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
@@ -132,6 +137,22 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       }
 
       reporter.out(formatWorktreeTable(summaries));
+      return;
+    }
+
+    case "doctor": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const diagnosis = await diagnose(repo);
+
+      if (global.json) reporter.out(JSON.stringify(diagnosis, null, 2));
+      else reporter.out(formatDiagnosis(diagnosis));
+
+      // Printed first, then thrown, for the same reason `sync` does it: the
+      // findings are what was asked for, and the exit code is for whatever is
+      // reading them.
+      const failure = diagnosisFailure(diagnosis);
+      if (failure) throw failure;
+
       return;
     }
 
