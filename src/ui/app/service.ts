@@ -5,6 +5,7 @@ import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
+import { GroveError } from "../../core/errors.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../core/setup.ts";
 import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
@@ -33,6 +34,16 @@ export type WorktreeService = {
    * they were, which is what the previous behaviour was anyway.
    */
   readonly fetch: () => Promise<boolean>;
+  /**
+   * Put a directory's absolute path on the clipboard, and say so.
+   *
+   * The one thing here that touches no worktree: `add` already ends by copying
+   * the path of the one it made, and this is that same handoff for one that
+   * already exists — the path is wanted in a terminal this screen is not in, so
+   * the clipboard is the only way to hand it over. Unlike `add`'s best-effort
+   * copy, a failure here is the whole outcome and is thrown.
+   */
+  readonly copyPath: (path: string) => Promise<string>;
   /**
    * Each action answers with the one line worth showing afterwards.
    *
@@ -134,6 +145,22 @@ export function createWorktreeService(
     list: () => listWorktreeSummaries(repo, cwd),
 
     fetch: () => fetchRemotes(repo.gitDir),
+
+    copyPath: async (path) => {
+      // Thrown rather than swallowed, unlike `add`'s copy: there the worktree
+      // was the outcome and the copy a courtesy, here the copy *is* what the
+      // key was pressed for, and pretending it happened would leave someone
+      // pasting whatever the clipboard held before.
+      if (!(await copyToClipboard(path))) {
+        throw new GroveError("refused", "nothing was copied — no clipboard tool answered", {
+          hint: "install wl-copy, xclip, or xsel",
+        });
+      }
+
+      // The full path, because that is what the clipboard now holds — the one
+      // line that lets the paste be trusted without being tried.
+      return `copied ${path}`;
+    },
 
     add: async (branch, from) => {
       // `setup: true` like the command line, because filling the worktree in is

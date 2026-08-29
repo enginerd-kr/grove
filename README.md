@@ -64,6 +64,7 @@ Running `grove` without any arguments opens the interactive terminal UI:
 - **Navigate**: Move up and down using `↑`/`↓` or `j`/`k`, and press `q` to exit.
 - **Expand/Collapse**: Fold or unfold nested branch directories using `←`/`→` or `h`/`l`.
 - **Quick Actions**: Press `a` to add a worktree, `r` to remove one — or every worktree under the selected folder — `s` to sync the selected worktree, and `S` to sync them all. `R` re-reads the list on demand. Removals always ask for confirmation first, and say what they would discard.
+- **Copy a Path**: Press `Enter` to put the selected worktree's absolute path on the clipboard — a folder answers too — ready to paste into another terminal tab or an editor's "open folder" box.
 
 The keys stay deliberately few: they are the three things worktree management is made of. Everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out on purpose.
 

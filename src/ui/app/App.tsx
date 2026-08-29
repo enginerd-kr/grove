@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { version } from "../../../package.json";
@@ -163,7 +164,19 @@ const GENERAL_TIPS: readonly Message[] = [
   { kind: "info", text: "tip: a starts the new branch from wherever the cursor is" },
   { kind: "info", text: "tip: r on a folder removes every worktree under it, after one question" },
   { kind: "info", text: "tip: s syncs the row under the cursor, S syncs every worktree" },
+  { kind: "info", text: "tip: enter copies the path under the cursor, for a paste elsewhere" },
 ];
+
+/**
+ * The directory a row stands for, as an absolute path.
+ *
+ * A folder is a real directory on disk, so it answers too. Group keys carry
+ * their trailing slash (it is how they are drawn); a path handed around as a
+ * location should not.
+ */
+function pathOf(row: TreeRow, repoRoot: string): string {
+  return row.kind === "group" ? join(repoRoot, row.key.replace(/\/+$/, "")) : row.summary.path;
+}
 
 /** A new set with `key` in it, and one without — `Set` is mutable and state is not. */
 function with_(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
@@ -785,6 +798,29 @@ export function App({
       return parent === undefined ? move(-1) : setCursorKey(parent.key);
     }
 
+    /**
+     * Enter hands the row's path to whatever is not this screen.
+     *
+     * The path is wanted somewhere `grove` is not — another terminal tab, an
+     * editor's "open folder" box — and the clipboard is the only way across.
+     * `a` already ends by copying the path of the worktree it made; this is
+     * the same handoff for one that already exists, on the key that reads as
+     * "take this one" rather than a letter to remember.
+     *
+     * A folder answers too: it is a real directory on disk, and a key that
+     * works on some rows and not others is one you have to look at the screen
+     * to use.
+     *
+     * Unlike add's best-effort copy, a failed copy here is the whole outcome,
+     * so it reports as a refusal with the tools to install rather than
+     * pretending the clipboard changed.
+     */
+    if (key.return && current !== undefined) {
+      return void perform(`copying the path of ${current.label}`, () =>
+        service.copyPath(pathOf(current, repoRoot)),
+      );
+    }
+
     // On a folder, `a` starts the name where the cursor already is: reaching for
     // it there is how you say "another one of these".
     //
@@ -849,6 +885,7 @@ export function App({
       return [
         { keys: "↑↓", action: "move" },
         { keys: "←→", action: current.collapsed ? "open" : "fold" },
+        { keys: "enter", action: "copy path" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
         { keys: "S", action: "sync all" },
@@ -859,6 +896,7 @@ export function App({
 
     return [
       { keys: "↑↓", action: "move" },
+      { keys: "enter", action: "copy path" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },
       { keys: "s", action: "sync" },
