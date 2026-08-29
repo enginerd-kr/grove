@@ -1,4 +1,5 @@
 import { classifyGitError, GroveError, stderrDetails } from "./errors.ts";
+import { isDirectory } from "./fs.ts";
 
 /**
  * The only place in this codebase that spawns a process.
@@ -153,16 +154,39 @@ async function spawnProcess(
   env: Readonly<Record<string, string | undefined>>,
   { cwd, onStderrLine }: Pick<GitOptions, "cwd" | "onStderrLine">,
 ): Promise<GitResult> {
-  const child = Bun.spawn([...argv], {
-    cwd,
-    env,
-    // Never inherited: a child that reads stdin would block on a terminal this
-    // tool does not require, and `GIT_TERMINAL_PROMPT` only covers git's own
-    // prompts, not a credential helper's.
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  let child: ReturnType<typeof Bun.spawn>;
+
+  try {
+    child = Bun.spawn([...argv], {
+      cwd,
+      env,
+      // Never inherited: a child that reads stdin would block on a terminal this
+      // tool does not require, and `GIT_TERMINAL_PROMPT` only covers git's own
+      // prompts, not a credential helper's.
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+  } catch (error) {
+    // A directory that is no longer there fails inside `Bun.spawn`, before the
+    // command runs at all — so a caller reading an exit code would instead take
+    // an ENOENT, which is how a worktree removed in another terminal reached the
+    // screen as a crash rather than as an empty panel. Answering the way the
+    // command itself would have keeps that knowledge here, in the one place that
+    // spawns anything.
+    //
+    // A missing *executable* still throws: `runTool` reads that as "not
+    // installed", which is an answer only it can give.
+    if (cwd !== undefined && !(await isDirectory(cwd))) {
+      return {
+        code: 128,
+        stdout: "",
+        stderr: `fatal: cannot change to '${cwd}': No such file or directory\n`,
+      };
+    }
+
+    throw error;
+  }
 
   running.add(child);
 
@@ -311,13 +335,19 @@ export async function gitSucceeds(
 /**
  * The percentage out of a git progress line, if it is one.
  *
- * git emits several phases in sequence ("Counting", "Compressing", "Receiving",
- * "Resolving"), each running 0–100, so a bar fed from this restarts a few times
- * during one clone. That is honest — the phases really are separate — and it
- * beats inventing a weighted total that would be wrong for shallow clones.
+ * git emits several phases in sequence ("Counting", "Compressing" and
+ * "Receiving" objects, then "Resolving" deltas), each running 0–100, so a bar
+ * fed from this restarts a few times during one clone. That is honest — the
+ * phases really are separate — and it beats inventing a weighted total that
+ * would be wrong for shallow clones.
+ *
+ * The last phase counts deltas rather than objects, and on a large clone it is
+ * the one the user waits through, so it is spelled out rather than folded in.
  */
 export function parseGitProgress(line: string): number | undefined {
-  const match = /(?:Counting|Compressing|Receiving|Resolving) objects:\s+(\d+)%/.exec(line);
+  const match = /(?:(?:Counting|Compressing|Receiving) objects|Resolving deltas):\s+(\d+)%/.exec(
+    line,
+  );
   if (!match) return undefined;
 
   const percent = Number(match[1]);

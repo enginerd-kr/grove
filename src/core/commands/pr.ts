@@ -156,6 +156,24 @@ async function runGh(argv: readonly string[], cwd: string): Promise<string> {
   return result.stdout;
 }
 
+/**
+ * gh's stdout, parsed — the same reasoning as `runGh`, one step further out.
+ *
+ * What gh prints is as much somebody else's output as the exit code it prints
+ * it with: a broken extension, a paginator, an auth notice on stdout. So an
+ * answer we cannot read is gh disappointing us rather than a bug in this tool,
+ * and it exits 10 with gh's own words instead of 1 with a `SyntaxError`.
+ */
+function parseGh(output: string, what: string): unknown {
+  try {
+    return JSON.parse(output);
+  } catch {
+    throw new GroveError("gh", `${what} answered with something that is not JSON`, {
+      details: stderrDetails(output),
+    });
+  }
+}
+
 /** gh's JSON, read defensively: a missing field is a shape we do not recognise. */
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -180,7 +198,7 @@ export async function listPullRequests(
     repo.root,
   );
 
-  const parsed: unknown = JSON.parse(output);
+  const parsed: unknown = parseGh(output, "gh pr list");
   if (!Array.isArray(parsed)) return [];
 
   return parsed.map((entry) => {
@@ -201,10 +219,12 @@ export async function listPullRequests(
 }
 
 async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
-  const row = record(JSON.parse(await runGh(["pr", "view", pr, "--json", PR_FIELDS], repo.root)));
+  const row = record(
+    parseGh(await runGh(["pr", "view", pr, "--json", PR_FIELDS], repo.root), "gh pr view"),
+  );
   const state = text(row.state);
 
-  return {
+  const detail: PrDetail = {
     number: typeof row.number === "number" ? row.number : 0,
     title: text(row.title),
     url: text(row.url),
@@ -217,6 +237,31 @@ async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
     headRepo: text(record(row.headRepository).name),
     author: text(record(row.author).login),
   };
+
+  // Refused here, before `configureRemote` writes anything. These four are the
+  // ones spelled into config rather than merely printed — the remote's name and
+  // URL and both of its refspecs — and a blank in any of them is written as a
+  // refspec git will not parse, after which every `git remote` and `git fetch`
+  // in the repository exits 128 and the sweep that would clean it up dies on
+  // the same read. An answer we cannot use is gh's to explain, like any other.
+  const missing = (
+    [
+      ["number", detail.number > 0],
+      ["headRefName", detail.headRefName !== ""],
+      ["headRepositoryOwner", detail.headOwner !== ""],
+      ["headRepository", detail.headRepo !== ""],
+    ] as const
+  )
+    .filter(([, present]) => !present)
+    .map(([field]) => field);
+
+  if (missing.length > 0) {
+    throw new GroveError("gh", `gh pr view answered without ${missing.join(", ")}`, {
+      hint: `see what it answers: gh pr view ${pr} --json ${PR_FIELDS}`,
+    });
+  }
+
+  return detail;
 }
 
 /**

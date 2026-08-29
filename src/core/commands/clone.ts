@@ -1,9 +1,15 @@
 import { mkdir, rm } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, localBranches, remoteBranchExists, updateRemoteHead } from "../branches.ts";
+import {
+  defaultBranch,
+  enableReflogs,
+  localBranches,
+  remoteBranchExists,
+  updateRemoteHead,
+} from "../branches.ts";
 import { GroveError } from "../errors.ts";
-import { isEmptyOrMissing, pathExists } from "../fs.ts";
+import { isDirectory, isEmptyOrMissing, pathExists } from "../fs.ts";
 import { gitOutput, parseGitProgress, runGit, runGitOrThrow } from "../git.ts";
 import {
   GIT_FILE_CONTENTS,
@@ -70,7 +76,12 @@ export async function cloneRepo(
   const paths = repoPaths(root);
 
   if (!(await isEmptyOrMissing(root))) {
-    throw new GroveError("state-conflict", `${root} already exists and is not empty`, {
+    // Two different things are in the way here and they read nothing alike:
+    // a directory with files in it is a place you might have meant, a file is
+    // not a place at all.
+    const obstacle = (await isDirectory(root)) ? "is not empty" : "is not a directory";
+
+    throw new GroveError("state-conflict", `${root} already exists and ${obstacle}`, {
       hint: "pass a different directory: grove clone <url> <dir>",
     });
   }
@@ -99,6 +110,9 @@ export async function cloneRepo(
       throw error;
     }
 
+    // Before the first fetch, so the refs it writes are recorded: a bare clone
+    // keeps no reflogs, and grove's worktrees need them — see `enableReflogs`.
+    await enableReflogs(paths.gitDir);
     await configureRemote(paths.gitDir, reporter);
 
     const trunk = await defaultBranch(paths.gitDir);

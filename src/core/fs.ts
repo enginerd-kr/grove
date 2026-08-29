@@ -56,12 +56,18 @@ export async function isDirectoryEntry(path: string): Promise<boolean> {
  *
  * "Absent" counts as empty because the only caller asks whether it may create a
  * repository here, and an absent directory is the ideal answer to that.
+ *
+ * A file is neither, and neither is a directory nothing may read. `readdir`
+ * reports all three by throwing, so only the one that says "nothing is there"
+ * — `ENOENT` — is an answer of yes: calling a file empty would send `clone`
+ * past the guard that exists to stop it, to fail inside git several steps later
+ * over a path it was already holding.
  */
 export async function isEmptyOrMissing(path: string): Promise<boolean> {
   try {
     return (await readdir(path)).length === 0;
-  } catch {
-    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
 }
 

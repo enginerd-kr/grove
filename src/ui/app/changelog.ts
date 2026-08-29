@@ -24,7 +24,10 @@ const BULLET = /^- (.+)$/;
 export function parseChangelog(text: string): ChangelogEntry[] {
   const entries: { version: string; bullets: string[] }[] = [];
 
-  for (const line of text.split("\n")) {
+  // Split on CRLF too: a checkout with `core.autocrlf` on ends every line with
+  // a `\r`, which `.` refuses to match — left on, it empties every entry's
+  // bullets and the banner silently shows nothing.
+  for (const line of text.split(/\r?\n/)) {
     const heading = HEADING.exec(line);
     if (heading?.[1] !== undefined) {
       entries.push({ version: heading[1], bullets: [] });

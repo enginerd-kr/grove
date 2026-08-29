@@ -50,14 +50,16 @@ if (command.kind === "app") {
   }
 
   try {
-    await runApp({
+    const outcome = await runApp({
       cwd: process.cwd(),
       repo: command.global.repo,
       onReporter: (reporter) => {
         if (command.global.verbose) traceGit((line) => reporter.info(line));
       },
     });
-    process.exit(ExitCode.ok);
+
+    // `^C` is an interrupt; `q` and `Esc` are a clean quit.
+    process.exit(outcome === "interrupted" ? ExitCode.interrupted : ExitCode.ok);
   } catch (error) {
     fail(error);
   }

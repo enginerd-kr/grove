@@ -922,6 +922,10 @@ export function App({
     setRefreshDelay(refreshMs);
 
     if (key.ctrl && input === "c") {
+      // `onCancel` is this key and nothing else, which is what lets `runApp`
+      // read it as the interrupt an exit code is owed for. The screen still
+      // comes down the ordinary way — alternate buffer released, cursor
+      // restored — because a code nobody can see yet is worth nothing.
       onCancel?.();
       exit();
 

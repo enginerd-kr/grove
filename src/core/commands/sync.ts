@@ -1,5 +1,5 @@
 import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, fetchRemotes } from "../branches.ts";
+import { defaultBranch, enableReflogs, fetchRemotes } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
@@ -60,6 +60,11 @@ export async function syncWorktrees(
 ): Promise<readonly SyncOutcome[]> {
   const worktrees = await listWorktrees(repo.gitDir);
   const targets = chooseTargets(worktrees, repo.root, cwd, options);
+
+  // Asserted here, before the fetch, and not only in `clone`: a repository
+  // cloned before grove started setting it has no reflogs, and the push at the
+  // end of this needs them. Idempotent, so every later sync is a no-op.
+  await enableReflogs(repo.gitDir);
 
   // One fetch for the whole run: the remote does not change between worktrees,
   // and `--all` over ten of them should not mean ten round trips.
@@ -238,10 +243,13 @@ type Published = { readonly pushed?: boolean; readonly pushRefusal?: string };
  * `--force-with-lease` and `--force-if-includes` together are what make it safe
  * to do without asking: the first refuses if the remote moved since we last
  * looked, the second refuses if what is being overwritten is not already in our
- * history. A refusal is therefore not a failure of this command but a report
- * that somebody else's work is in the way, so it is warned about rather than
- * thrown — the rebase itself succeeded, and with `--all` one contended branch
- * should not bury the news about the other nine.
+ * history. A refusal says somebody else's work is in the way — but it is still
+ * a failure of this command, because the branch is now rewritten locally and
+ * published nowhere, and a user who believes otherwise finds out the next time
+ * somebody asks them where their work is. So it is recorded on the outcome and
+ * turned into the exit code at the end rather than thrown here: the rebase did
+ * happen, and with `--all` one contended branch should not bury the news about
+ * the other nine.
  */
 async function publish(
   record: WorktreeRecord,
@@ -281,10 +289,11 @@ async function publish(
 
   if (result.code !== 0) {
     step.fail(`${name} was not pushed`);
-    const refusal = stderrTail(result.stderr);
-    reporter.warn(`${name} is rebased locally but ${upstream} refused the push: ${refusal}`);
 
-    return { pushed: false, pushRefusal: refusal };
+    // Said once, here, and carried on the outcome: `failureFor` prints it under
+    // the error, so warning about it as well would put the same refusal on
+    // stderr twice.
+    return { pushed: false, pushRefusal: `${upstream} refused it: ${stderrTail(result.stderr)}` };
   }
 
   step.succeed(`pushed ${name}`);
@@ -292,14 +301,26 @@ async function publish(
   return { pushed: true };
 }
 
-/** git says a lot when it refuses a push; the last line of it is the reason. */
+/**
+ * git says a lot when it refuses a push; this is the line that says why.
+ *
+ * Not simply the last one. git ends with `error: failed to push some refs`,
+ * which only repeats that the push failed — the reason is in the `! [rejected]`
+ * line above it, and for a hook it is the only place the hook's own words
+ * appear. Preferring that line is what turns "it did not work" into something
+ * a person can act on.
+ */
 function stderrTail(stderr: string): string {
   const lines = stderr
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("To "));
 
-  return lines.at(-1) ?? "no reason given";
+  // Both spellings: `! [rejected]` for a non-fast-forward, `! [remote rejected]`
+  // when the far end's own hook turned it down.
+  const rejected = lines.filter((line) => /\[(?:remote )?rejected\]/.test(line));
+
+  return rejected.at(-1) ?? lines.at(-1) ?? "no reason given";
 }
 
 /** Whether anything moved, which is the difference between the two good outcomes. */
@@ -334,9 +355,14 @@ async function conflictedPaths(path: string): Promise<readonly string[]> {
 /**
  * Turns outcomes into the one exit code the shell sees.
  *
- * A conflict outranks a skip: it is the result that needs a decision, and with
- * `--all` it would otherwise be hidden behind a worktree that merely had
- * uncommitted changes.
+ * A conflict outranks a refused push, which outranks a skip: each is a result
+ * that needs a decision, and with `--all` the sharper one would otherwise be
+ * hidden behind a worktree that merely had uncommitted changes.
+ *
+ * A push that was refused is a failure even though the rebase it followed
+ * worked. Exiting 0 there is what let `rebased` be printed over a branch the
+ * remote never received — the one outcome of this command nobody would think to
+ * check for.
  */
 export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undefined {
   const conflicted = outcomes.filter((outcome) => outcome.kind === "conflicted");
@@ -349,6 +375,14 @@ export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undef
         `${outcome.dir}: ${outcome.reason ?? ""}`,
         ...(outcome.conflicts ?? []).map((file) => `  ${file}`),
       ]),
+    });
+  }
+
+  const unpublished = outcomes.filter((outcome) => outcome.pushed === false);
+  if (unpublished.length > 0) {
+    return new GroveError("refused", describe(unpublished, "not pushed"), {
+      hint: "the rebase stands locally; look at what the remote gained, then sync again",
+      details: unpublished.map((outcome) => `${outcome.dir}: ${outcome.pushRefusal ?? ""}`),
     });
   }
 

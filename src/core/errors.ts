@@ -103,12 +103,18 @@ export function classifyGitError(stderr: string): GroveErrorCode {
  *
  * Trimmed to a handful of lines because git narrates at length and the useful
  * sentence is almost always the last one; progress lines are dropped since they
- * are noise once the command has already failed.
+ * are noise once the command has already failed — deltas as well as objects,
+ * since the phase that resolves them counts deltas and every clone emits it.
  */
 export function stderrDetails(stderr: string, max = 5): readonly string[] {
-  return stderr
+  const lines = stderr
     .split(/\r?\n|\r/)
     .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !/^(?:remote: )?\w+ objects:\s+\d+%/.test(line))
-    .slice(-max);
+    .filter(
+      (line) => line.length > 0 && !/^(?:remote: )?\w+ (?:objects|deltas):\s+\d+%/.test(line),
+    );
+
+  // `slice(-0)` is `slice(0)`, which is every line rather than none, so a cap
+  // of zero has to be answered before the tail is taken.
+  return max > 0 ? lines.slice(-max) : [];
 }

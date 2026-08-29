@@ -80,6 +80,8 @@ async function discover(cwd: string, repo?: string): Promise<RepoPaths | undefin
 
 type GroveProps = {
   readonly found: RepoPaths | undefined;
+  /** Ctrl-C, in whichever screen is up. Both mean the same thing to `runApp`. */
+  readonly onCancel: () => void;
   readonly folder: string;
   readonly inPlace: boolean;
   readonly cwd: string;
@@ -94,7 +96,7 @@ type GroveProps = {
  * before its screen is due: `createWorktreeService` needs the repository that
  * `Setup` is in the middle of making.
  */
-function Grove({ found, folder, inPlace, cwd, store, reporter }: GroveProps) {
+function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: GroveProps) {
   const [paths, setPaths] = useState(found);
 
   // Memoised, and not as a micro-optimisation: `App` starts a fetch when its
@@ -123,7 +125,7 @@ function Grove({ found, folder, inPlace, cwd, store, reporter }: GroveProps) {
         inPlace={inPlace}
         store={store}
         onReady={setPaths}
-        onCancel={killRunningGit}
+        onCancel={onCancel}
       />
     );
   }
@@ -133,7 +135,7 @@ function Grove({ found, folder, inPlace, cwd, store, reporter }: GroveProps) {
       service={worktrees}
       repoRoot={paths.root}
       store={store}
-      onCancel={killRunningGit}
+      onCancel={onCancel}
       checkUpdate={checkUpdate}
     />
   );
@@ -159,7 +161,17 @@ function Root({
   return <Grove {...groveProps} />;
 }
 
-export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<void> {
+/**
+ * How the screen came down, which is the one thing its caller has to know.
+ *
+ * An interrupt is not a quit and a script wrapping this should be able to tell
+ * them apart, so it leaves by the same door as everything else — a return
+ * value — rather than by writing an exit code somewhere for the entry point to
+ * find.
+ */
+export type AppOutcome = "quit" | "interrupted";
+
+export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<AppOutcome> {
   const found = await discover(cwd, repo);
   // Where discovery looked from, which is where a clone should land. With `-C`
   // that is the directory the user named, not the one they happen to be in.
@@ -187,8 +199,16 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
   });
   onReporter?.(reporter);
 
+  let interrupted = false;
+  const cancel = () => {
+    interrupted = true;
+    // Whatever git the screen started has to stop before the screen goes.
+    killRunningGit();
+  };
+
   const instance = render(
     <Root
+      onCancel={cancel}
       showShellSetup={showShellSetup}
       found={found}
       folder={folder}
@@ -209,4 +229,6 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
   );
 
   await instance.waitUntilExit();
+
+  return interrupted ? "interrupted" : "quit";
 }

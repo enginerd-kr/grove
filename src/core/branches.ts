@@ -1,16 +1,39 @@
 import { GroveError } from "./errors.ts";
 import { gitOutput, gitSucceeds, runGit } from "./git.ts";
 
-/** Questions about refs, asked of the bare repository — and the one call that refreshes them. */
+/** Questions about refs, asked of the bare repository — and the two calls that maintain them. */
 
 const REMOTE = "origin";
 
 /**
+ * Makes the bare repository keep reflogs, which `git clone --bare` does not.
+ *
+ * `core.logallrefupdates` defaults to off in a bare repository, on the
+ * reasoning that nobody moves branches around in a repository with no working
+ * tree. Here they do: every worktree hangs off this one, and its commits,
+ * rebases and pushes all write their refs through it.
+ *
+ * Two things depend on the history that leaves. `rebase --fork-point` uses the
+ * base's reflog to tell a withdrawn commit from one of the user's own, and
+ * `push --force-if-includes` uses the branch's to prove the remote's tip was
+ * already integrated locally — and without a reflog the latter does not degrade
+ * to a weaker check, it simply refuses every force-push with "remote ref
+ * updated since checkout".
+ *
+ * Idempotent, so it can be re-asserted on repositories cloned before grove set
+ * it. Answers rather than throws: a repository that will not take the setting is
+ * one where force-pushes get refused, not one where nothing else may happen.
+ */
+export function enableReflogs(bare: string): Promise<boolean> {
+  return gitSucceeds(["config", "core.logallrefupdates", "true"], { cwd: bare });
+}
+
+/**
  * Brings every remote-tracking ref up to date.
  *
- * The one write in this file, and it is here because everything else here reads
- * what it produces: `origin/main` is a local ref, so "2 behind" means two
- * commits behind whatever this last saw, not behind the remote as it is now.
+ * Here because everything else in this file reads what it produces: `origin/main`
+ * is a local ref, so "2 behind" means two commits behind whatever this last saw,
+ * not behind the remote as it is now.
  *
  * Answers rather than throws. Both callers want that — `sync` is about to do the
  * real work and would rather fail there with a better message, and the app polls
@@ -75,7 +98,7 @@ export type BranchState = {
   readonly upstream?: string;
   /** Configured to track something the remote no longer has. */
   readonly gone: boolean;
-  /** Every commit on this branch is already on the base. */
+  /** Every commit on this branch is already on the base — as itself, or as an equivalent patch. */
   readonly merged: boolean;
 };
 
@@ -121,23 +144,84 @@ async function upstreamStates(bare: string): Promise<Map<string, BranchState>> {
   return states;
 }
 
-/** The branches with nothing of their own left to say — every commit is on `base`. */
+function refNames(stdout: string): readonly string[] {
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+/**
+ * Whether every commit on `branch` already has an equivalent on `base`.
+ *
+ * `git cherry` compares patches rather than commits, which is the only way to
+ * answer this after a rewrite: it prefixes with `-` each commit whose change is
+ * already on `base` under a different sha, and with `+` each one that is not.
+ * All `-` is exactly the trace a squash or a rebase leaves — the work landed,
+ * and none of the commits carrying it survived to be reachable.
+ *
+ * An empty answer is *not* merged. A branch whose tip is unreachable from the
+ * base always has commits of its own, so empty means git declined to compare
+ * them rather than that there was nothing to compare: `git cherry` skips merge
+ * commits, so a branch that only merged something in reads empty while still
+ * holding a merge the trunk has not got. Reading "every line starts with `-`"
+ * off no lines would badge such a branch finished — and `prune` would then
+ * offer to delete its worktree — on the strength of no evidence at all.
+ */
+async function landedAsPatches(bare: string, base: string, branch: string): Promise<boolean> {
+  const result = await runGit(["cherry", base, branch], { cwd: bare });
+  if (result.code !== 0) return false;
+
+  const commits = refNames(result.stdout);
+
+  return commits.length > 0 && commits.every((line) => line.startsWith("-"));
+}
+
+/**
+ * The branches with nothing of their own left to say — every change is on `base`.
+ *
+ * Two questions, and the cheap one first. `--merged` is a single walk over the
+ * whole ref set and answers the ancestry half: the branch's tip is reachable
+ * from `base`, which is what a merge commit leaves behind. It cannot see the
+ * other half this module promises, because a squash or a rebase rewrites the
+ * commits — nothing of the branch is reachable from the trunk even though every
+ * change on it is there, which is the case the badge exists for.
+ *
+ * So the branches `--merged` rejects — asked for in the same walk, as
+ * `--no-merged` — are put to `git cherry`, which compares patches. That one is
+ * a process per branch and a patch-id for every commit on both sides since the
+ * merge base, so it is deliberately never asked about a branch the ancestry
+ * pass already accepted.
+ */
 async function mergedInto(bare: string, base: string): Promise<ReadonlySet<string>> {
-  const result = await runGit(
-    ["for-each-ref", "--format=%(refname:short)", "--merged", base, "refs/heads/"],
-    { cwd: bare },
-  );
+  const [reachable, rewritten] = await Promise.all([
+    runGit(["for-each-ref", "--format=%(refname:short)", "--merged", base, "refs/heads/"], {
+      cwd: bare,
+    }),
+    runGit(["for-each-ref", "--format=%(refname:short)", "--no-merged", base, "refs/heads/"], {
+      cwd: bare,
+    }),
+  ]);
   // A base that cannot be resolved — a repository with no remote-tracking trunk
   // yet — is "nothing is known to be merged", which leaves the badge off rather
   // than putting a wrong one on.
-  if (result.code !== 0) return new Set();
+  if (reachable.code !== 0) return new Set();
 
-  return new Set(
-    result.stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0),
-  );
+  const merged = new Set(refNames(reachable.stdout));
+  if (rewritten.code !== 0) return merged;
+
+  // The trunk is never asked. Measured against its own remote-tracking ref it is
+  // precisely the branch whose local commits somebody squashed upstream, and
+  // "the trunk is finished with" is the one answer nothing here may give.
+  const trunk = base.replace(new RegExp(`^${REMOTE}/`), "");
+  const candidates = refNames(rewritten.stdout).filter((branch) => branch !== trunk);
+  const landed = await Promise.all(candidates.map((branch) => landedAsPatches(bare, base, branch)));
+
+  for (const [index, branch] of candidates.entries()) {
+    if (landed[index]) merged.add(branch);
+  }
+
+  return merged;
 }
 
 /**

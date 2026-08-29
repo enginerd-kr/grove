@@ -1,8 +1,8 @@
-import { cp, mkdir, readdir, rm, symlink } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { cp, mkdir, readdir, readlink, realpath, rm, symlink } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Reporter } from "../report/reporter.ts";
 import { defaultBranch } from "./branches.ts";
-import { GroveError } from "./errors.ts";
+import { GroveError, isGroveError } from "./errors.ts";
 import { entryExists, isDirectoryEntry } from "./fs.ts";
 import { runGit, runShell } from "./git.ts";
 import { BARE_DIR, type RepoPaths } from "./layout.ts";
@@ -343,6 +343,81 @@ async function copyEntry(
   return "copied";
 }
 
+/** True when a resolved path is the root itself or something under it. */
+function within(root: string, path: string): boolean {
+  const rel = relative(root, path);
+
+  // `..` alone and `../x` climb out; `..env` is a file whose name begins that
+  // way, and a prefix test alone would refuse it.
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+/**
+ * Where a path leads, for a link that leads nowhere as well as one that does.
+ *
+ * `realpath` refuses the whole path when the last component points at something
+ * absent, which would leave a dangling link answered by an `ENOENT` nobody
+ * asked about. A link pointing at nothing still points somewhere, and where is
+ * the only question here — so the parent, which does exist, is resolved and the
+ * link read by hand.
+ */
+async function leadsTo(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    const parent = await realpath(dirname(path)).catch(() => resolve(dirname(path)));
+    const target = await readlink(path).catch(() => undefined);
+
+    return target === undefined ? join(parent, basename(path)) : resolve(parent, target);
+  }
+}
+
+/**
+ * A source path checked against the disk, not against its spelling.
+ *
+ * `checkedSetupPath` vets the string a config file wrote; this vets what it
+ * reaches. A repository can commit `certs -> /Users/you/.ssh` and then ask for
+ * `certs/id_rsa` in a value with no `..` anywhere in it — and `copy` and `link`
+ * apply on sight, without `--trust`, so a `git pull` would be the whole of it,
+ * with the key landing as an untracked change in a worktree somebody is about
+ * to commit from. Both halves are needed: the string check catches the value
+ * nobody meant, this one catches the value somebody meant.
+ *
+ * A real path is what an escape is, so a real path is what gets compared —
+ * which also settles a link partway along, and a `..` that only appears once
+ * the links on the path have been followed.
+ *
+ * A link staying inside the worktree is left alone: pointing `config/local.json`
+ * at `config/dev.json` is an ordinary thing for a repository to do, and the
+ * question here is where the target sits, not whether there is a link at all.
+ *
+ * A directory is asked about its contents too, because `cp` takes them without
+ * this seeing them — a link two levels down leads out just as surely as one at
+ * the top. Files are skipped: only a directory or a link has anywhere to lead.
+ */
+async function checkedSource(
+  kind: "copy" | "link",
+  path: string,
+  root: string,
+  from: string,
+): Promise<void> {
+  const target = await leadsTo(from);
+
+  if (!within(root, target)) {
+    throw new GroveError("usage", `${kind}: ${JSON.stringify(path)} leads out of the worktree`, {
+      hint: "a path that stays inside the worktree once the links on it are followed",
+      details: [`${path} → ${target}`],
+    });
+  }
+
+  if (!(await isDirectoryEntry(from))) return;
+
+  for (const entry of await readdir(from, { withFileTypes: true })) {
+    if (entry.isFile()) continue;
+    await checkedSource(kind, `${path}/${entry.name}`, root, join(from, entry.name));
+  }
+}
+
 /**
  * One path, taken — or, for `link`, left exactly as it was.
  *
@@ -364,6 +439,11 @@ async function takeOne(
   const to = join(destination, path);
 
   if (!(await entryExists(from))) return "missing";
+
+  // Before anything is read: `link` points at the source as much as `copy` reads
+  // it, so a source that leads out of the worktree is refused for both.
+  await checkedSource(kind, path, await realpath(source), from);
+
   if (kind === "copy") return copyEntry(from, to, path, written, overwritten);
   if (await entryExists(to)) return "kept";
 
@@ -459,6 +539,10 @@ export async function runSetup(
         }
       } catch (error) {
         step.fail(`could not fill in ${dir}`);
+        // A refusal already says which line was refused and what to do about
+        // it; wrapping it would bury both under "could not set up", one level
+        // down, and report a path this tool declined as a path it fumbled.
+        if (isGroveError(error)) throw error;
         throw new GroveError("setup-failed", `could not set up ${dir}`, {
           details: [error instanceof Error ? error.message : String(error)],
           cause: error,

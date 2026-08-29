@@ -62,6 +62,11 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   return false;
 }
 
+/** Bare on POSIX. No `\`: a shell reads it as an escape, or as a line continuation at the end. */
+const BARE_POSIX = /^[A-Za-z0-9_@%+=:,./-]+$/;
+/** Windows adds `\`, which is its path separator and not an escape to `cmd` or PowerShell. */
+const BARE_WIN32 = /^[A-Za-z0-9_@%+=:,.\\/-]+$/;
+
 /**
  * Bare when it can be, quoted when it has to be.
  *
@@ -71,7 +76,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
  * often as it is run.
  */
 function quoteFor(platform: NodeJS.Platform, path: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./\\-]+$/.test(path)) return path;
+  if ((platform === "win32" ? BARE_WIN32 : BARE_POSIX).test(path)) return path;
 
   // A double quote cannot appear in a Windows path — the filesystem refuses
   // the character — so there is nothing to escape, and both `cmd` and

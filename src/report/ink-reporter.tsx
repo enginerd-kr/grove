@@ -1,11 +1,11 @@
 import { Box, render, Static } from "ink";
-import { useSyncExternalStore } from "react";
+import { useRef, useSyncExternalStore } from "react";
 // Imported from the files rather than the barrel: `ui/index.ts` also exports the
 // interactive app, and a one-shot `grove list` should not load a screen it will
 // never render.
 import { StatusBar } from "../ui/components/StatusBar.tsx";
 import { StepRow } from "../ui/components/StepRow.tsx";
-import { createStoreReporter, isStep, LineStore } from "./lines.ts";
+import { createStoreReporter, isStep, type Line, LineStore } from "./lines.ts";
 import type { Reporter } from "./reporter.ts";
 
 /**
@@ -19,7 +19,18 @@ import type { Reporter } from "./reporter.ts";
 function Progress({ store }: { readonly store: LineStore }) {
   const lines = useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
 
-  const settled = lines.filter((line) => !isStep(line) || line.state !== "running");
+  // Kept in the order the lines settled, rather than filtered out of the list
+  // in the order they were added. `<Static>` prints whatever sits past the
+  // count it last saw, so the list it is given may only ever grow at the end: a
+  // step that settles after a note was printed has to land *after* that note,
+  // or Static prints the note a second time and the step's own row not at all.
+  const printed = useRef(new Map<number, Line>());
+  for (const line of lines) {
+    if (isStep(line) && line.state === "running") continue;
+    if (!printed.current.has(line.id)) printed.current.set(line.id, line);
+  }
+
+  const settled = [...printed.current.values()];
   const running = lines.filter((line) => isStep(line) && line.state === "running");
 
   return (
