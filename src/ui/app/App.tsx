@@ -1,6 +1,14 @@
 import { join } from "node:path";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { version } from "../../../package.json";
 import type { Drift } from "../../core/branches.ts";
 import {
@@ -8,6 +16,7 @@ import {
   describeRemote,
   describeTouched,
   describeTrunk,
+  noteParts,
   type WorktreeSummary,
 } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
@@ -223,6 +232,11 @@ const GENERAL_TIPS: readonly Message[] = [
   { kind: "info", text: "tip: s syncs the row under the cursor, S syncs every worktree" },
   { kind: "info", text: "tip: enter copies the path under the cursor, for a paste elsewhere" },
   { kind: "info", text: "tip: L puts the commits away when the list wants the rows" },
+  {
+    kind: "info",
+    text: "tip: a row reading merged or gone has nothing left in it — r clears one",
+    hint: "or `grove prune` clears every one of them at once",
+  },
 ];
 
 /**
@@ -344,14 +358,46 @@ function StateCell({
   readonly width: number;
   readonly selected: boolean;
 }) {
-  const notes = describeNotes(summary);
+  const parts = noteParts(summary);
+  const notes = parts.length === 0 ? "" : ` ${parts.join(", ")}`;
+  const room = Math.max(0, width - 1);
+
+  const dot = (
+    <Text color={summary.dirty ? theme.warn : undefined} dimColor={!summary.dirty}>
+      {summary.dirty ? "●" : "○"}
+    </Text>
+  );
+
+  // One padded run when it does not fit, so the ellipsis lands where `padTo`
+  // would have put it. A cell being truncated has bigger problems than colour.
+  if (notes.length > room) {
+    return (
+      <>
+        {dot}
+        <Text dimColor={!selected}>{padTo(notes, room)}</Text>
+      </>
+    );
+  }
 
   return (
     <>
-      <Text color={summary.dirty ? theme.warn : undefined} dimColor={!summary.dirty}>
-        {summary.dirty ? "●" : "○"}
-      </Text>
-      <Text dimColor={!selected}>{padTo(notes.length === 0 ? "" : ` ${notes}`, width - 1)}</Text>
+      {dot}
+      {parts.map((part, at) => (
+        <Fragment key={part}>
+          <Text dimColor={!selected}>{at === 0 ? " " : ", "}</Text>
+          {/* The one word in this column that is an invitation rather than a
+              warning: `merged` and `gone` both mean the work landed and the
+              directory is free to go, which is news of the same kind as a green
+              `↑`. Everything beside it stays the colour of an aside. */}
+          <Text
+            color={part === summary.finished ? theme.ok : undefined}
+            dimColor={part !== summary.finished && !selected}
+          >
+            {part}
+          </Text>
+        </Fragment>
+      ))}
+      <Text>{" ".repeat(room - notes.length)}</Text>
     </>
   );
 }

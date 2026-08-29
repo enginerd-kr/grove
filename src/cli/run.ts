@@ -8,6 +8,7 @@ import {
 } from "../core/commands/doctor.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
 import { worktreePath } from "../core/commands/path.ts";
+import { describePrune, formatPruneTable, pruneWorktrees } from "../core/commands/prune.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
 import { resetWorktree } from "../core/commands/reset.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
@@ -153,6 +154,32 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       const failure = diagnosisFailure(diagnosis);
       if (failure) throw failure;
 
+      return;
+    }
+
+    case "prune": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await pruneWorktrees(
+        repo,
+        cwd,
+        {
+          only: command.only,
+          dryRun: command.dryRun,
+          deleteBranch: command.deleteBranch,
+          fetch: command.fetch,
+        },
+        reporter,
+      );
+
+      if (global.json) {
+        reporter.out(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      // The counts on stderr and the rows on stdout: `grove prune -n | wc -l`
+      // should count worktrees, not read a sentence about them.
+      reporter.info(describePrune(result));
+      if (result.entries.length > 0) reporter.out(formatPruneTable(result));
       return;
     }
 

@@ -1,6 +1,14 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { commitTimes, type Drift, defaultBranch, driftFrom } from "../branches.ts";
+import {
+  type BranchState,
+  branchStates,
+  commitTimes,
+  type Drift,
+  defaultBranch,
+  driftFrom,
+  remoteRef,
+} from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
@@ -15,6 +23,45 @@ import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
  * copy of its file listing.
  */
 const FILE_SAMPLE = 200;
+
+/**
+ * Why a worktree looks finished with, when it does.
+ *
+ * The two traces a merge leaves, and the two spellings this reports back:
+ * `gone` is the remote's own answer — the branch was pushed and the remote no
+ * longer has it, which is what a merged pull request with the delete box ticked
+ * leaves behind. `merged` is git's — every commit on the branch is already on
+ * the trunk, which is what a squash or a rebase leaves behind instead.
+ *
+ * `gone` wins where both are true, because it is the stronger claim: somebody
+ * deliberately deleted that branch, while `merged` is a fact about commits that
+ * nobody had to decide.
+ */
+export type Finished = "gone" | "merged";
+
+/**
+ * Whether a branch has finished, and how — or nothing.
+ *
+ * Both answers need the branch to have had an upstream. Without one it has
+ * never left this machine, and "every commit is already on the trunk" is just
+ * as true of a branch cut ten seconds ago that nobody has committed to yet —
+ * which is precisely the worktree it would be worst to offer to clear away.
+ *
+ * The trunk is never finished with, whatever is true of it. It is the branch
+ * everything else is measured against, and measuring it against itself would
+ * badge the one worktree that must always be there.
+ */
+function finishedWith(
+  branch: string | undefined,
+  trunk: string,
+  state: BranchState | undefined,
+): Finished | undefined {
+  if (branch === undefined || branch === trunk) return undefined;
+  if (state?.upstream === undefined) return undefined;
+  if (state.gone) return "gone";
+
+  return state.merged ? "merged" : undefined;
+}
 
 export type WorktreeSummary = {
   readonly path: string;
@@ -79,6 +126,14 @@ export type WorktreeSummary = {
   readonly locked: boolean;
   /** A rebase is stopped part-way here and needs finishing or aborting. */
   readonly rebasing: boolean;
+  /**
+   * Why this worktree looks finished with, when it does — what `prune` acts on.
+   *
+   * Absent for every branch still being worked on, which is what makes the
+   * badge worth having: on most screens it is on none of the rows, and the two
+   * it is on are the two nobody has cleared away yet.
+   */
+  readonly finished?: Finished;
   /** True for the branch the repository treats as its trunk. */
   readonly isDefault: boolean;
   /** True for the worktree the command was run from. */
@@ -123,8 +178,11 @@ export async function listWorktreeSummaries(
     defaultBranch(repo.gitDir),
   ]);
   // After `trunk` is known, and once for every branch rather than per worktree.
-  const [drift, committed] = await Promise.all([
+  const [drift, states, committed] = await Promise.all([
     driftFrom(repo.gitDir, trunk),
+    // Against the remote's trunk rather than the local one, so a branch that
+    // landed upstream reads as landed before anybody has pulled it down here.
+    branchStates(repo.gitDir, remoteRef(trunk)),
     commitTimes(
       repo.gitDir,
       records.map((record) => record.head).filter((head): head is string => head !== undefined),
@@ -159,6 +217,11 @@ export async function listWorktreeSummaries(
         ),
         locked: record.locked !== undefined,
         rebasing: record.rebasing === true,
+        finished: finishedWith(
+          record.branch,
+          trunk,
+          record.branch === undefined ? undefined : states.get(record.branch),
+        ),
         isDefault: record.branch === trunk,
         current: contains(record.path, cwd),
       };
@@ -182,6 +245,7 @@ function localParts(summary: WorktreeSummary): string[] {
   if (summary.rebasing) parts.push("rebasing");
   else if (summary.detached) parts.push("detached");
   if (summary.dirty) parts.push("dirty");
+  if (summary.finished !== undefined) parts.push(summary.finished);
 
   return parts;
 }
@@ -210,16 +274,25 @@ export function describeState(summary: WorktreeSummary): string {
  * part-way, a detached HEAD, and a lock. All three are unusual, and all three
  * are things you would rather read than decode.
  */
-export function describeNotes(summary: WorktreeSummary): string {
+export function noteParts(summary: WorktreeSummary): readonly string[] {
   const parts: string[] = [];
 
   // Reported instead of "detached", which is technically true of a stopped
   // rebase and tells the user nothing about what to do next.
   if (summary.rebasing) parts.push("rebasing");
   else if (summary.detached) parts.push("detached");
+  // First of the ordinary states, and the only one that is an invitation
+  // rather than a warning: `merged` on a row is the tool saying there is
+  // nothing left to do here, which is what `r` — or `grove prune` for all of
+  // them at once — is for.
+  if (summary.finished !== undefined) parts.push(summary.finished);
   if (summary.locked) parts.push("locked");
 
-  return parts.join(", ");
+  return parts;
+}
+
+export function describeNotes(summary: WorktreeSummary): string {
+  return noteParts(summary).join(", ");
 }
 
 /**

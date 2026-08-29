@@ -48,6 +48,14 @@ export type GroveCommand =
     }
   | { readonly name: "list" }
   | { readonly name: "doctor" }
+  | {
+      readonly name: "prune";
+      /** `--gone`/`--merged`; absent means both. */
+      readonly only?: "gone" | "merged";
+      readonly dryRun: boolean;
+      readonly deleteBranch: boolean;
+      readonly fetch: boolean;
+    }
   | { readonly name: "path"; readonly target?: string }
   | { readonly name: "shell-init"; readonly shell: string }
   | { readonly name: "install"; readonly shell?: Shell }
@@ -176,6 +184,21 @@ function buildCommand(
       return { name: "list" };
     case "doctor":
       return { name: "doctor" };
+    case "prune": {
+      const gone = bool(values, "gone");
+      const merged = bool(values, "merged");
+
+      return {
+        name: "prune",
+        // Both, or neither, is the same request as the default: the two are
+        // halves of one question, and asking for both halves is asking the
+        // question.
+        only: gone === merged ? undefined : gone ? "gone" : "merged",
+        dryRun: bool(values, "dry-run"),
+        deleteBranch: bool(values, "delete-branch"),
+        fetch: !bool(values, "no-fetch"),
+      };
+    }
     case "path":
       return { name: "path", target: first };
     case "shell-init": {

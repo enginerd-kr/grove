@@ -53,6 +53,7 @@ grove clone <url> [dir]     # Clone a repository as a bare clone and set up its 
 grove add <branch>          # Create a new worktree for a branch, tracking its remote counterpart
 grove list                  # List all worktrees along with their git status and sync drift
 grove sync [target]         # Fetch and bring all worktrees up-to-date by rebasing them
+grove prune                 # Remove every worktree whose branch is merged or gone from the remote
 grove reset <target>        # Discard all uncommitted changes in a worktree
 grove remove <target>       # Delete a worktree directory safely
 grove path [target]         # Print the absolute path of a selected worktree
@@ -69,7 +70,24 @@ Running `grove` without any arguments opens the interactive terminal UI:
 - **Recent Commits**: The last few commits of the selected worktree are drawn under the list — the sha, how long ago, and where `HEAD` and `origin` point — so `↑2` is something you can read rather than a number to go and look up. `L` puts the panel away when the rows are wanted for the list instead.
 - **Uncommitted Files**: When the selected worktree has changes in it, the files are drawn beside the list as the tree they sit in — directories folded the same way the worktrees are, so a change confined to one directory reads as one heading — and nothing but the paths, so "what have I got open over there" is answered without a `git status` in another terminal. The panel takes only the space to the right of the columns, so it never costs the list a column, and a clean worktree shows nothing at all.
 
+- **Finished Branches**: A row whose branch the trunk already has, or whose branch the remote no longer has, reads `merged` or `gone` beside its state — so the worktrees with nothing left in them are visible without going and asking. `r` clears the one under the cursor; `grove prune` clears every one of them at once.
+
 The keys stay deliberately few: they are the three things worktree management is made of. Everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out on purpose.
+
+### Clearing away what is finished
+
+Making worktrees is the easy half. The half that piles up is that they never leave: a pull request is merged, the branch disappears from the forge, and the directory it was checked out into sits there for the rest of the year.
+
+`grove list` and the interactive screen badge those rows — `merged` when the trunk already has every commit on the branch, `gone` when the branch was pushed and the remote no longer has it. Both are looked for, because no workflow leaves both traces: merging a pull request with the delete box ticked leaves `gone`, and squashing or rebasing leaves `merged`.
+
+```bash
+grove prune --dry-run      # say what would go
+grove prune                # remove those directories, keeping the branches
+grove prune --gone         # only the ones the remote deleted
+grove prune --delete-branch
+```
+
+It fetches first, since a branch deleted on the forge only reads as gone once a fetch has pruned the ref that tracked it. Anything holding uncommitted work, stopped mid-rebase, locked, or containing the directory you are standing in is reported and left exactly where it is.
 
 ## Directory Layout
 

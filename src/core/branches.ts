@@ -60,6 +60,108 @@ export async function driftFrom(bare: string, base: string): Promise<Map<string,
 }
 
 /**
+ * What the remote and the trunk say about a branch that may be finished with.
+ *
+ * Two questions, because a merge leaves two different traces and no workflow
+ * leaves both. A pull request merged with the box ticked deletes the branch on
+ * the remote, and what stays behind here is a local branch whose upstream has
+ * been withdrawn — `gone`. A pull request squashed or rebased leaves the remote
+ * branch alone but puts every one of its commits on the trunk — `merged`.
+ * Looking for only one of them would leave half of everybody's worktrees piling
+ * up.
+ */
+export type BranchState = {
+  /** The branch it was configured to track, whether or not the remote still has it. */
+  readonly upstream?: string;
+  /** Configured to track something the remote no longer has. */
+  readonly gone: boolean;
+  /** Every commit on this branch is already on the base. */
+  readonly merged: boolean;
+};
+
+const NO_STATE: BranchState = { gone: false, merged: false };
+
+/**
+ * What each local branch's upstream is, and whether it is still there.
+ *
+ * `%(upstream:track)` is git's own answer to the second question — it reports
+ * `[gone]` for a branch configured to track a ref that no longer exists, which
+ * is exactly the state `fetch --prune` leaves behind when somebody deletes a
+ * merged branch on the forge. Reading it beats comparing two lists ourselves,
+ * because git already knows the difference between "never had an upstream" and
+ * "had one, and it went".
+ *
+ * Tab-separated because a ref name cannot contain a control character, so there
+ * is no branch this splits wrongly — unlike a space, which `%(upstream:track)`
+ * puts in the middle of its own answers.
+ */
+async function upstreamStates(bare: string): Promise<Map<string, BranchState>> {
+  const states = new Map<string, BranchState>();
+  const result = await runGit(
+    [
+      "for-each-ref",
+      "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)",
+      "refs/heads/",
+    ],
+    { cwd: bare },
+  );
+  if (result.code !== 0) return states;
+
+  for (const line of result.stdout.split("\n")) {
+    const [branch, upstream, track] = line.split("\t");
+    if (branch === undefined || branch.length === 0) continue;
+
+    states.set(branch, {
+      ...NO_STATE,
+      ...(upstream === undefined || upstream.length === 0 ? {} : { upstream }),
+      gone: track === "gone",
+    });
+  }
+
+  return states;
+}
+
+/** The branches with nothing of their own left to say — every commit is on `base`. */
+async function mergedInto(bare: string, base: string): Promise<ReadonlySet<string>> {
+  const result = await runGit(
+    ["for-each-ref", "--format=%(refname:short)", "--merged", base, "refs/heads/"],
+    { cwd: bare },
+  );
+  // A base that cannot be resolved — a repository with no remote-tracking trunk
+  // yet — is "nothing is known to be merged", which leaves the badge off rather
+  // than putting a wrong one on.
+  if (result.code !== 0) return new Set();
+
+  return new Set(
+    result.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0),
+  );
+}
+
+/**
+ * Both answers for every branch, in two calls rather than two per branch.
+ *
+ * `base` should be the *remote's* trunk, not the local one. The question being
+ * asked is "has this work landed", and it lands on the remote — a local `main`
+ * that has not been pulled since Tuesday would answer "not yet" for every
+ * branch merged since, which is the week in which somebody most wants to know.
+ */
+export async function branchStates(
+  bare: string,
+  base: string,
+): Promise<ReadonlyMap<string, BranchState>> {
+  const [states, merged] = await Promise.all([upstreamStates(bare), mergedInto(bare, base)]);
+
+  for (const [branch, state] of states) {
+    if (merged.has(branch)) states.set(branch, { ...state, merged: true });
+  }
+
+  return states;
+}
+
+/**
  * When each of these commits was made, in one call, as epoch milliseconds.
  *
  * One call rather than one per worktree, for the same reason as `driftFrom`:
@@ -126,6 +228,11 @@ export async function defaultBranch(bare: string): Promise<string> {
  */
 export async function updateRemoteHead(bare: string): Promise<boolean> {
   return (await runGit(["remote", "set-head", REMOTE, "--auto"], { cwd: bare })).code === 0;
+}
+
+/** The remote-tracking ref for a branch — what `branchStates` measures against. */
+export function remoteRef(branch: string): string {
+  return `${REMOTE}/${branch}`;
 }
 
 export async function localBranchExists(bare: string, branch: string): Promise<boolean> {
