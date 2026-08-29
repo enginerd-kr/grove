@@ -117,6 +117,46 @@ describe("grove remove", () => {
     });
   });
 
+  test("refuses a worktree stopped part-way through a rebase, --force included", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await managed(repo);
+      expect((await runCli(["add", "spike"], { cwd: root })).exitCode).toBe(0);
+
+      // Stopped on a failing `--exec` rather than on a conflict, because the
+      // clean case is the dangerous one: there is nothing in the tree for the
+      // uncommitted-changes refusal to catch, and `git worktree remove` would
+      // take the directory and the rebase inside it with exit 0.
+      const worktree = join(root, "spike");
+      await Bun.write(join(worktree, "spike.txt"), "spike\n");
+      await seedGit(worktree, ["add", "-A"]);
+      await seedGit(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "Spike edit"]);
+
+      const main = join(root, "main");
+      await Bun.write(join(main, "trunk.txt"), "trunk\n");
+      await seedGit(main, ["add", "-A"]);
+      await seedGit(main, ["-c", "commit.gpgsign=false", "commit", "-m", "Trunk edit"]);
+
+      expect((await probeGit(worktree, ["rebase", "--exec", "false", "main"])).code).not.toBe(0);
+      // The state the dirty guard cannot see: git reports nothing to commit.
+      expect((await probeGit(worktree, ["status", "--porcelain=v2"])).stdout).toBe("");
+
+      const refused = await runCli(["remove", "spike"], { cwd: root });
+      expect(refused.exitCode).toBe(REFUSED);
+      expect(refused.stderr).toContain("spike is in the middle of a rebase");
+      expect(refused.stderr).toContain("rebase --abort");
+      expect(await pathExists(worktree)).toBe(true);
+
+      // Not overridable, unlike the trunk and the dirty tree above: --force
+      // answers "discard my changes", and half-applied commits are not that.
+      const forced = await runCli(["remove", "spike", "--force"], { cwd: root });
+      expect(forced.exitCode).toBe(REFUSED);
+      expect(await pathExists(worktree)).toBe(true);
+
+      // Still stopped mid-rebase: the abort the hint names is still there to run.
+      expect((await probeGit(worktree, ["rebase", "--abort"])).code).toBe(0);
+    });
+  });
+
   test("--delete-branch takes the branch with the directory", async () => {
     await withTempRepo(async (repo) => {
       const root = await managed(repo);

@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runGit, runGitOrThrow } from "./git.ts";
@@ -83,6 +84,79 @@ async function seedOrigin(root: string, originPath: string): Promise<void> {
   await rm(seed, { recursive: true, force: true });
 }
 
+const TEMPLATE_PREFIX = "grove-template-";
+
+/**
+ * The fixture, built once per test process and copied per test.
+ *
+ * Seeding costs ~15 git processes; copying the result costs one `cp`. Bun shares
+ * module state across the test files in a run, so every test in the process gets
+ * its own writable copy of one template rather than its own fifteen processes.
+ *
+ * THE TEMPLATE MUST STAY PATH-INDEPENDENT. Nothing under it may record where it
+ * was built: `seedOrigin` deletes the seed clone precisely so the bare repo is
+ * left with no remote pointing at a directory that the copy does not have, and
+ * `originUrl` is recomputed from each copy's own root. A future fixture change
+ * that bakes an absolute path in — a remote, a worktree `gitdir` pointer, an
+ * `alternates` file, a symlink out of the tree — would not break one test loudly;
+ * it would break every test at once, and quietly, because each copy would still
+ * be a valid repository, just one that reaches back into the template. If you add
+ * to the seed, grep the built template for its own root and confirm no hit.
+ */
+let template: Promise<string> | undefined;
+
+function fixtureTemplate(): Promise<string> {
+  // Assigned before the first await, so concurrent first callers share the one
+  // build rather than racing to seed several.
+  template ??= (async () => {
+    await sweepAbandonedTemplates();
+
+    // The pid in the name is what makes that sweep safe; see below.
+    const root = await realpath(await mkdtemp(join(tmpdir(), `${TEMPLATE_PREFIX}${process.pid}-`)));
+
+    // `bun test` exits without running either `exit` or `beforeExit`, so this
+    // hook is the courtesy path for any other runtime and the sweep above is
+    // what actually reclaims the directory. Both are best effort: a killed
+    // process runs neither, which is why these live under the OS temp directory.
+    process.on("exit", () => {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {}
+    });
+
+    await seedOrigin(root, join(root, "origin.git"));
+    await mkdir(join(root, "work"), { recursive: true });
+    return root;
+  })();
+  return template;
+}
+
+/**
+ * Deletes templates whose builder is gone.
+ *
+ * Two test runs at once are ordinary — one in a terminal, one in an editor — and
+ * deleting a template out from under a live run would break every test in it, so
+ * a directory is only reclaimed once the pid in its name is no longer running.
+ */
+async function sweepAbandonedTemplates(): Promise<void> {
+  for (const name of await readdir(tmpdir()).catch(() => [])) {
+    if (!name.startsWith(TEMPLATE_PREFIX)) continue;
+    const pid = Number(name.slice(TEMPLATE_PREFIX.length).split("-")[0]);
+    if (!Number.isInteger(pid) || pid <= 0 || isRunning(pid)) continue;
+    await rm(join(tmpdir(), name), { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM is a process we are not allowed to signal — alive, and not ours.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /**
  * Builds the fixture, runs `body`, and deletes everything afterwards.
  *
@@ -106,8 +180,10 @@ export async function withTempRepo(body: (repo: TempRepo) => Promise<void>): Pro
     const originPath = join(root, "origin.git");
     const work = join(root, "work");
 
-    await seedOrigin(root, originPath);
-    await mkdir(work, { recursive: true });
+    // `cp` keeps file modes and copies symlinks as symlinks, which is what git
+    // needs from a copied repository; there is no index and no reflog under the
+    // template, so nothing here depends on timestamps either.
+    await cp(await fixtureTemplate(), root, { recursive: true });
 
     await body({ root, work, originPath, originUrl: `file://${originPath}` });
   } finally {

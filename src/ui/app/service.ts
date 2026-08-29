@@ -5,7 +5,11 @@ import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
-import { syncWorktrees } from "../../core/commands/sync.ts";
+import {
+  type SyncOutcome,
+  failureFor as syncFailureFor,
+  syncWorktrees,
+} from "../../core/commands/sync.ts";
 import { GroveError } from "../../core/errors.ts";
 import { type Commit, recentCommits } from "../../core/history.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
@@ -109,7 +113,15 @@ export type WorktreeService = {
    * one up, or found nothing to do at all.
    */
   readonly checkoutPr: (number: number) => Promise<string>;
-  /** `target` omitted means every worktree — the app's `S`. */
+  /**
+   * `target` omitted means every worktree — the app's `S`.
+   *
+   * Refuses the same outcomes `grove sync` exits non-zero for. The screen
+   * paints an answer in its accent colour and a refusal in its danger one, so
+   * a rebase that stopped on a conflict has to arrive as the second: returned,
+   * `feat/x conflicted` reads exactly like `feat/x rebased`, and the one thing
+   * the outcome was carrying is the one thing that would not reach the eye.
+   */
   readonly sync: (target?: string) => Promise<string>;
   /**
    * The commands a worktree was just denied, if any.
@@ -165,7 +177,7 @@ export function createSetupService(
 }
 
 /** How a finished sync reads: counts by outcome, worst first. */
-function describeSync(outcomes: readonly { kind: string; dir: string }[]): string {
+function describeSync(outcomes: readonly SyncOutcome[]): string {
   if (outcomes.length === 0) return "nothing to sync";
   if (outcomes.length === 1) {
     const only = outcomes[0];
@@ -348,6 +360,21 @@ export function createWorktreeService(
         { target, all: target === undefined, abortOnConflict: true, push: true },
         reporter,
       );
+
+      // Raised rather than returned, the way `trustAndRun` above raises
+      // setup's. `abortOnConflict` has already put the worktree back, so
+      // nothing here is half-done — but the screen draws what this returns in
+      // the same accent colour it draws `rebased` in, and a sync that stopped
+      // on a conflict is not a sync that worked. The command line has always
+      // exited 5 for this; the screen was the one surface calling it success.
+      //
+      // A skip is the exception, and stays a line rather than a refusal: `S`
+      // over a repository with one dirty worktree is an ordinary morning, and
+      // the screen reports outcomes and stays open. Dropping those from the
+      // input rather than reimplementing the test keeps `failureFor` the only
+      // place that decides a conflict outranks a refused push.
+      const failure = syncFailureFor(outcomes.filter((outcome) => outcome.kind !== "skipped"));
+      if (failure) throw failure;
 
       return describeSync(outcomes);
     },

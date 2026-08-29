@@ -187,6 +187,28 @@ describe("grove prune", () => {
     });
   });
 
+  test("--delete-branch takes a pull request's remote with its pr/<n> branch", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await managed(repo);
+      const bare = join(root, ".bare");
+
+      // The shape `grove pr` leaves: a `pr/<n>` branch and a `pr-<n>` remote
+      // that exists to serve it and nothing else.
+      const worktree = await proposed(root, "pr/7", "pr7.txt");
+      await seedGit(bare, ["remote", "add", "pr-7", repo.originPath]);
+      await landOnOrigin(repo, "pr/7", "merge");
+
+      const pruned = await runCli(["prune", "--delete-branch"], { cwd: root });
+      expect(pruned.exitCode).toBe(0);
+      expect(await pathExists(worktree)).toBe(false);
+      expect(await localBranches(root)).not.toContain("pr/7");
+
+      // The review is over, so nothing should still be fetching for it.
+      const remotes = await probeGit(bare, ["remote"]);
+      expect(remotes.stdout.split("\n")).not.toContain("pr-7");
+    });
+  });
+
   test("leaves anything dirty, mid-rebase, locked, or holding the cwd exactly where it is", async () => {
     await withTempRepo(async (repo) => {
       const root = await managed(repo);

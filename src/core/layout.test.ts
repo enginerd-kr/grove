@@ -10,6 +10,7 @@ import {
   repoNameFromUrl,
   repoPaths,
   slugifySegment,
+  worktreeBase,
   worktreePathFor,
   worktreeRelPath,
 } from "./layout.ts";
@@ -127,16 +128,12 @@ describe("repoPaths", () => {
     });
   });
 
-  test("a plain repository's git dir and git file are the same directory", () => {
-    const plain = plainRepoPaths("/repos/app");
-
-    expect(plain).toEqual({
+  test("a plain repository's .git is the git directory, and it has no pointer file", () => {
+    expect(plainRepoPaths("/repos/app")).toEqual({
       root: "/repos/app",
       gitDir: "/repos/app/.git",
-      gitFile: "/repos/app/.git",
       kind: "plain",
     });
-    expect(plain.gitDir).toBe(plain.gitFile);
   });
 
   test("only the managed layout separates the pointer from the clone", () => {
@@ -178,6 +175,18 @@ describe("worktreePathFor", () => {
     expect(usageErrorFrom(() => worktreePathFor(plainRepoPaths("/repos/app"), "..")).code).toBe(
       "usage",
     );
+  });
+
+  // The pair the two commands that clear empty folders depend on: every path
+  // this hands back is inside the base, one level down for a managed
+  // repository and beside the root for a plain one.
+  test("worktreeBase is the directory the paths above are built under", () => {
+    expect(worktreeBase(repoPaths("/repos/app"))).toBe("/repos/app");
+    expect(worktreeBase(plainRepoPaths("/repos/app"))).toBe("/repos");
+
+    for (const repo of [repoPaths("/repos/app"), plainRepoPaths("/repos/app")]) {
+      expect(contains(worktreeBase(repo), worktreePathFor(repo, "feat/login"))).toBe(true);
+    }
   });
 });
 

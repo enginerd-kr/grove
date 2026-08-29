@@ -18,7 +18,7 @@ import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
 import { installShellInit } from "./install.ts";
-import { type Shell, shellInit } from "./shell-init.ts";
+import { shellInit } from "./shell-init.ts";
 
 /**
  * Everything a command needs that it must not go looking for itself.
@@ -116,7 +116,7 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "shell-init": {
       // No repository involved: this runs from rc files, before any repo exists.
       // No `--json` either: the function body is the result, whatever was asked for.
-      reporter.out(shellInit(command.shell as Shell));
+      reporter.out(shellInit(command.shell));
       return;
     }
 
@@ -227,6 +227,16 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       if (failure) throw failure;
 
       return;
+    }
+
+    // Total by construction, the way `errorToExitCode` is: a new `GroveCommand`
+    // without a case above fails the typecheck here rather than being parsed,
+    // dispatched, and silently doing nothing. The assignment is what does it —
+    // this switch returns no value, and without one TypeScript has nothing to
+    // call missing.
+    default: {
+      const unhandled: never = command;
+      throw new Error(`unhandled command ${JSON.stringify(unhandled)} — a bug in this tool`);
     }
   }
 }

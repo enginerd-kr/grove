@@ -58,15 +58,31 @@ const PINNED_ENV: Readonly<Record<string, string>> = {
  *
  * A `git clone` killed halfway leaves a partial directory behind; the clone
  * command is what cleans that up. This set exists only to stop the work.
+ *
+ * `grouped` records that the child leads a process group of its own, because
+ * for one of the two spawners stopping the child is not the same as stopping
+ * the work; see `runShell`.
  */
-const running = new Set<{ kill: (signal?: number | NodeJS.Signals) => void }>();
+type RunningChild = {
+  readonly pid: number;
+  readonly grouped: boolean;
+  readonly kill: (signal?: number | NodeJS.Signals) => void;
+};
+
+const running = new Set<RunningChild>();
 
 export function killRunningGit(signal: NodeJS.Signals = "SIGTERM"): void {
   for (const child of running) {
     try {
-      child.kill(signal);
+      // A negative pid is the group, which for a grouped child is the whole
+      // tree it started rather than just the shell at the top of it.
+      if (child.grouped) process.kill(-child.pid, signal);
+      else child.kill(signal);
     } catch {
-      // Already exited between iteration and kill; nothing to stop.
+      // Already exited between iteration and kill; nothing to stop. The grouped
+      // form reaches here the same way, as ESRCH once the last member is gone —
+      // which is routine, since the callers below signal in a loop until the
+      // promise settles.
     }
   }
 }
@@ -160,6 +176,7 @@ async function spawnProcess(
   argv: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
   { cwd, onStderrLine }: Pick<GitOptions, "cwd" | "onStderrLine">,
+  detached = false,
 ): Promise<GitResult> {
   let child: ReturnType<typeof Bun.spawn>;
 
@@ -167,6 +184,7 @@ async function spawnProcess(
     child = Bun.spawn([...argv], {
       cwd,
       env,
+      detached,
       // Never inherited: a child that reads stdin would block on a terminal this
       // tool does not require, and `GIT_TERMINAL_PROMPT` only covers git's own
       // prompts, not a credential helper's.
@@ -195,7 +213,12 @@ async function spawnProcess(
     throw error;
   }
 
-  running.add(child);
+  const entry: RunningChild = {
+    pid: child.pid,
+    grouped: detached,
+    kill: (signal) => child.kill(signal),
+  };
+  running.add(entry);
 
   try {
     const [stdout, stderr, code] = await Promise.all([
@@ -206,7 +229,7 @@ async function spawnProcess(
 
     return { code, stdout, stderr };
   } finally {
-    running.delete(child);
+    running.delete(entry);
   }
 }
 
@@ -285,6 +308,32 @@ export async function runTool(
  * on purpose, once, by the person whose machine it runs on, and it is written
  * expecting `&&` and `$HOME` to mean what they mean everywhere else. Nothing
  * a keystroke reaches gets here.
+ *
+ * It is also the only spawner given a process group of its own, and the `&&` is
+ * the reason. `sh -c` *execs* a line holding a single command, so the child in
+ * the set above is the work itself and killing it is enough. Add a second
+ * command — which is what these lines look like in practice, `bun install &&
+ * bun run build` — and `sh` stays around as a parent, so the same signal stops
+ * the shell and orphans the install. `detached` makes the shell a group leader
+ * and `killRunningGit` signals `-pid`, which reaches every descendant however
+ * deep the line nests them.
+ *
+ * The cost is worth stating, because it is not free: `detached` is `setsid()`,
+ * so the child leaves this process's terminal behind and the tty's own Ctrl-C
+ * no longer reaches it. In the plain CLI that tty signal was a second route to
+ * the same end, and it is the one being given up — affordable only because
+ * `cli.tsx` installs a SIGINT handler that calls `killRunningGit`, so what
+ * remains is the route that now reaches the whole tree rather than the shell
+ * alone. Were that handler ever removed, this would be a regression there. In
+ * the interactive app there was no second route to lose: Ink's `useInput` puts
+ * the terminal in raw mode, so Ctrl-C arrives as a byte and this set is the
+ * only thing that ever hears it.
+ * Nothing else is given up — stdin is already `"ignore"` and both output
+ * streams are pipes, so no part of this was using that terminal anyway.
+ *
+ * `runGit` and `runTool` stay undetached. They exec a real program directly, so
+ * their child *is* the work, and they keep the tty relationship that lets a
+ * credential helper's prompt behave.
  */
 export async function runShell(
   command: string,
@@ -295,6 +344,7 @@ export async function runShell(
     ["sh", "-c", command],
     { ...process.env, ...SHELL_ENV, ...env },
     { cwd, onStderrLine },
+    true,
   );
 
   traceRun(`sh -c ${quote(command)}`, cwd, result, performance.now() - startedAt);

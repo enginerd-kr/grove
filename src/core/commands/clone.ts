@@ -20,8 +20,7 @@ import {
   repoPaths,
   worktreeRelPath,
 } from "../layout.ts";
-import { pendingCommands } from "../setup.ts";
-import { SETUP_FILE } from "../setup-file.ts";
+import { pendingCommands, SETUP_FILE } from "../setup.ts";
 
 /**
  * `grove clone` — turn a remote URL into a managed repository.

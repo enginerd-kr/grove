@@ -246,8 +246,12 @@ export function describeSetup(result: SetupResult): string {
  * No hint. It used to name `grove setup <worktree>`, which is not a command
  * this tool has, and advice that sends somebody to a help page is worse than
  * none — what they need is on `details`, which is what the command itself said.
+ *
+ * Takes the failure and not a whole `SetupResult`, so `TeardownResult` — which
+ * carries the same `failed` and nothing else this reads — gets the same
+ * sentence rather than a second copy of it in `remove`.
  */
-export function failureFor(result: SetupResult): GroveError | undefined {
+export function failureFor(result: { readonly failed?: SetupFailure }): GroveError | undefined {
   if (!result.failed) return undefined;
 
   return new GroveError(

@@ -354,9 +354,53 @@ describe("createWorktreeService", () => {
 
         // Worth pinning as it is: `grove sync` on the command line turns a skip
         // into exit 4 through `failureFor`, and the service deliberately does
-        // not — the screen reports outcomes and stays open.
+        // not — the screen reports outcomes and stays open. A conflict is the
+        // one the screen does raise, because `rebased` and `conflicted` in the
+        // same colour is the screen calling a failure a success; a skip already
+        // says what happened on the line it returns.
         expect(await service.sync("feat/login")).toBe("feat/login skipped");
         expect(await pathExists(join(root, "feat", "login", "later.txt"))).toBe(false);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "a rebase that conflicted is a refusal, and the worktree is left as it was",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        await service.add("feat/login");
+
+        // The same path written two different ways on the two branches, which
+        // is the one thing a rebase cannot decide for itself.
+        const worktree = join(root, "feat", "login");
+        await Bun.write(join(worktree, "clash.txt"), "mine\n");
+        await seedGit(worktree, ["add", "-A"]);
+        await seedGit(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "Add clash.txt"]);
+        await commitOnOrigin(repo, "main", "clash.txt");
+
+        // The defect this pins: the outcome used to come back as the line
+        // `feat/login conflicted`, drawn in the same accent colour as
+        // `feat/login rebased`, while `grove sync` exited 5 for the very same
+        // outcome. The whole point of the `SyncOutcome` union is the difference
+        // between those two words, and the screen was discarding it.
+        const refusal = await refusalFrom(service.sync("feat/login"));
+
+        expect(refusal.code).toBe("rebase-conflict");
+        expect(refusal.message).toBe("feat/login conflicted");
+        expect(refusal.hint).toBe("resolve them by hand, or sync after committing");
+        expect(refusal.details.join("\n")).toContain("rolled back");
+        expect(refusal.details.join("\n")).toContain("clash.txt");
+
+        // Rolled back rather than left mid-rebase: `abortOnConflict` is what
+        // makes the refusal safe to raise at all — there is nothing for the
+        // person reading it to finish or abandon.
+        const after = (await service.list()).find((summary) => summary.dir === "feat/login");
+        expect(after?.rebasing).toBe(false);
+        expect(await Bun.file(join(worktree, "clash.txt")).text()).toBe("mine\n");
       });
     },
     SLOW,

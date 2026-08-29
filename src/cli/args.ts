@@ -74,7 +74,7 @@ export type GroveCommand =
       readonly force: boolean;
     }
   | { readonly name: "path"; readonly target?: string }
-  | { readonly name: "shell-init"; readonly shell: string }
+  | { readonly name: "shell-init"; readonly shell: Shell }
   | { readonly name: "install"; readonly shell?: Shell }
   | {
       readonly name: "reset";

@@ -4,7 +4,7 @@ import { isGroveError } from "../errors.ts";
 import { runGit } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { type Finished, listWorktreeSummaries, type WorktreeSummary } from "./list.ts";
-import { removeWorktree } from "./remove.ts";
+import { dropPrRemote, removeWorktree } from "./remove.ts";
 import { describeDiscard } from "./reset.ts";
 
 /**
@@ -93,15 +93,23 @@ function skipReason(summary: WorktreeSummary): string | undefined {
  * does hold commits no other ref has, and forcing past that would throw away
  * the only copy. What it refuses is reported with the one command that would
  * do it anyway, so the decision stays with the person who can make it.
+ *
+ * A `pr/<n>` branch takes its `pr-<n>` remote with it, the same way `remove
+ * --delete-branch` does — the remote serves that branch and nothing else, and
+ * `fetchRemotes` is `fetch --all`, so one left behind is paid for on every
+ * sync, prune and refresh tick from here on.
  */
 async function deleteBranch(
   bare: string,
   branch: string,
+  reporter: Reporter,
 ): Promise<{ deleted: boolean; kept?: string }> {
   const result = await runGit(["branch", "-d", branch], { cwd: bare });
-  if (result.code === 0) return { deleted: true };
+  if (result.code !== 0) return { deleted: false, kept: `git -C ${bare} branch -D ${branch}` };
 
-  return { deleted: false, kept: `git -C ${bare} branch -D ${branch}` };
+  await dropPrRemote(bare, branch, reporter);
+
+  return { deleted: true };
 }
 
 export async function pruneWorktrees(
@@ -112,10 +120,13 @@ export async function pruneWorktrees(
 ): Promise<PruneResult> {
   if (options.fetch) {
     const step = reporter.step("fetching");
-    // Answered rather than thrown, like every other fetch in this tool: offline,
-    // the `merged` half of the question is still answerable from what is
-    // already here, and refusing to prune anything at all would be a worse
-    // trade than a `gone` badge that is a day stale.
+    // Answered rather than thrown, because this command has an answer without
+    // it: offline, the `merged` half of the question is still answerable from
+    // what is already here, and refusing to prune anything at all would be a
+    // worse trade than a `gone` badge that is a day stale. Not a rule the whole
+    // tool follows — `add` throws on a failed fetch, because its fetch is what
+    // decides whether the branch is an existing remote one or a new one, and
+    // there is no half-answer to that.
     if (await fetchRemotes(repo.gitDir)) step.succeed("fetched");
     else step.fail("could not fetch — working from what was last seen");
   }
@@ -181,7 +192,7 @@ export async function pruneWorktrees(
       continue;
     }
 
-    const outcome = await deleteBranch(repo.gitDir, base.branch);
+    const outcome = await deleteBranch(repo.gitDir, base.branch, reporter);
     entries.push({ ...base, branchDeleted: outcome.deleted, branchKept: outcome.kept });
   }
 

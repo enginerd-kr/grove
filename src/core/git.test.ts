@@ -590,6 +590,44 @@ describe("killRunningGit", () => {
     expect((await finished).code).not.toBe(0);
   });
 
+  test("a grandchild of a multi-command line is stopped too", async () => {
+    // `sh -c` only `exec`s when the line is a single command, so `sleep 37` on
+    // its own is the easy case the test above already covers. Add a second
+    // command and `sh` stays alive as a parent — which is the shape a
+    // `grove.setup` line almost always has (`bun install && bun run build`), and
+    // the shape where a signal aimed at `sh` alone leaves the real work running.
+    //
+    // `pgrep` rather than the returned exit code, because the code cannot tell
+    // the two apart: `sh` reports the same failure whether or not it took its
+    // child down with it.
+    const alive = (): string[] =>
+      Bun.spawnSync(["pgrep", "-f", "sleep 37"]).stdout.toString().split("\n").filter(Boolean);
+
+    const finished = runShell("sleep 37 && true");
+    try {
+      // Both processes have to be up before the signal, or this would pass by
+      // having killed nothing.
+      const startedBy = Date.now() + 2000;
+      while (alive().length < 2 && Date.now() < startedBy) await Bun.sleep(20);
+      expect(alive().length).toBe(2);
+
+      killRunningGit();
+
+      // Polled rather than awaited: an orphan inherits the pipes it was spawned
+      // with, so `finished` would not settle until the `sleep` did — 37 seconds
+      // of exactly the failure being tested.
+      const deadline = Date.now() + 1500;
+      while (alive().length > 0 && Date.now() < deadline) await Bun.sleep(20);
+
+      expect(alive()).toEqual([]);
+    } finally {
+      // Whichever assertion above gave way, nothing outlives this test — and
+      // once the last holder of those pipes is gone, `finished` can settle.
+      Bun.spawnSync(["pkill", "-f", "sleep 37"]);
+      await finished;
+    }
+  });
+
   test("killing does not disturb children that start afterwards", async () => {
     killRunningGit();
 

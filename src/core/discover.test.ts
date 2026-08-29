@@ -100,11 +100,11 @@ describe("a plain repository", () => {
       const nested = join(root, "src", "deep");
       await mkdir(nested, { recursive: true });
 
+      // No `gitFile`: a plain repo's `.git` *is* its git directory, so the
+      // pointer file a managed repo has is not one of its fields at all.
       const expected: RepoPaths = {
         root,
         gitDir: join(root, ".git"),
-        // A plain repo's pointer *is* its git directory, unlike a managed one.
-        gitFile: join(root, ".git"),
         kind: "plain",
       };
 

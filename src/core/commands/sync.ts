@@ -69,8 +69,13 @@ export async function syncWorktrees(
   // One fetch for the whole run: the remote does not change between worktrees,
   // and `--all` over ten of them should not mean ten round trips.
   const step = reporter.step("fetching");
-  await fetchRemotes(repo.gitDir);
-  step.succeed("fetched");
+  // Answered rather than thrown — see `fetchRemotes` — but never silently: the
+  // trunk this rebases onto is a local ref, so a fetch that did not happen
+  // means every worktree below is measured against whatever was last seen. A
+  // `✓ fetched` over that is the stale-trunk sync this command exists to
+  // prevent, reported as the success it was not.
+  if (await fetchRemotes(repo.gitDir)) step.succeed("fetched");
+  else step.fail("could not fetch — the trunk below is as it was last seen");
 
   const trunk = await defaultBranch(repo.gitDir);
   const outcomes: SyncOutcome[] = [];

@@ -5,8 +5,8 @@ import { defaultBranch } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
-import { contains, type RepoPaths } from "../layout.ts";
-import { runTeardown, type TeardownResult } from "../setup.ts";
+import { contains, type RepoPaths, worktreeBase } from "../layout.ts";
+import { failureFor, runTeardown, type TeardownResult } from "../setup.ts";
 import {
   listWorktrees,
   resolveTarget,
@@ -78,11 +78,13 @@ export async function removeWorktree(
       ? undefined
       : await runTeardown(repo, { path: target.path, branch: target.branch }, reporter);
 
-  if (teardown?.failed) {
-    reporter.warn(
-      `${JSON.stringify(teardown.failed.command)} exited ${teardown.failed.code}; removing ${dir} anyway`,
-    );
-    for (const detail of teardown.failed.details) reporter.info(`  ${detail}`);
+  // `failureFor` builds the sentence; the tail is this command's own, because
+  // a failed teardown is news here rather than a failure — see `runTeardown`,
+  // which never lets one stop the removal.
+  const failure = teardown && failureFor(teardown);
+  if (failure) {
+    reporter.warn(`${failure.message}; removing ${dir} anyway`);
+    for (const detail of failure.details) reporter.info(`  ${detail}`);
   }
 
   const step = reporter.step(`removing ${dir}`);
@@ -96,10 +98,9 @@ export async function removeWorktree(
     // Clears the administrative files git leaves behind, so a later `add` of the
     // same directory name is not refused by a record of the one just deleted.
     await runGitOrThrow(["worktree", "prune"], { cwd: repo.gitDir });
-    // The base a nested directory climbs back towards without passing it: a
-    // plain repository's worktrees sit beside the root, not under it, so
-    // pruning has to start one level out to reach them at all.
-    await pruneEmptyParents(repo.kind === "plain" ? dirname(repo.root) : repo.root, target.path);
+    // The base a nested directory climbs back towards without passing it —
+    // `worktreeBase`, so this is the same answer `add` placed the worktree by.
+    await pruneEmptyParents(worktreeBase(repo), target.path);
     step.succeed(`removed ${dir}`);
   } catch (error) {
     step.fail(`could not remove ${dir}`);
@@ -155,6 +156,20 @@ async function refuseUnsafe(
     throw new GroveError("refused", `${dir} is locked`, {
       hint: `unlock it first: git -C ${repo.gitDir} worktree unlock ${target.path}`,
       details: target.locked.length > 0 ? [target.locked] : [],
+    });
+  }
+
+  // Not overridable by --force, for the same reason `reset` will not be talked
+  // past it: a stopped rebase holds half-applied commits and whatever conflicts
+  // have been resolved so far, and all of that lives in the worktree's own git
+  // dir — which goes with the directory. It is not caught by the uncommitted
+  // changes refusal below either, because a rebase paused at an `edit` step has
+  // a perfectly clean tree, and `git worktree remove` would take it with exit
+  // 0. What --force answers is "discard my changes"; nobody has been asked
+  // about abandoning a rebase, so nobody is taken to have said yes.
+  if (target.rebasing === true) {
+    throw new GroveError("refused", `${dir} is in the middle of a rebase`, {
+      hint: `finish or abandon it first: git -C ${target.path} rebase --abort`,
     });
   }
 
@@ -244,8 +259,17 @@ async function deleteBranch(
  * tick fetches forever on behalf of a review that finished. Only ever removed
  * alongside the branch, never alongside the worktree: a worktree can be removed
  * and the branch kept, and the branch is what the remote is for.
+ *
+ * Exported for `prune`, which deletes branches itself rather than through the
+ * removal above — and a merged pull request whose fork branch is gone is
+ * exactly what `prune --delete-branch` reaps, so it is the command that would
+ * leak the most of these.
  */
-async function dropPrRemote(bare: string, branch: string, reporter: Reporter): Promise<void> {
+export async function dropPrRemote(
+  bare: string,
+  branch: string,
+  reporter: Reporter,
+): Promise<void> {
   const match = /^pr\/(\d+)$/.exec(branch);
   if (match === null) return;
 

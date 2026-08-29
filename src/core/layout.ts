@@ -20,25 +20,40 @@ export const BARE_DIR = ".bare";
  */
 export type RepoKind = "managed" | "plain";
 
-export type RepoPaths = {
-  /** The directory every worktree is found relative to. For `plain`, also a worktree itself. */
+export type ManagedPaths = {
+  /** The directory every worktree is found relative to. */
   readonly root: string;
-  /** The git common dir — `<root>/.bare` or `<root>/.git` — cwd for repo-level git calls. */
+  /** The git common dir — `<root>/.bare` — cwd for repo-level git calls. */
   readonly gitDir: string;
-  /** `<root>/.git`: a pointer file in `managed`, the same directory as `gitDir` in `plain`. */
+  /** `<root>/.git`: the one-line pointer file that makes git work from the root. */
   readonly gitFile: string;
-  readonly kind: RepoKind;
+  readonly kind: "managed";
 };
 
-export function repoPaths(root: string): RepoPaths {
+/**
+ * No `gitFile`, deliberately: in a plain repository `<root>/.git` *is* the git
+ * directory, so the field could only ever hold `gitDir` under a name promising
+ * a pointer file — a value the type would permit and no caller may act on.
+ * Leaving it off makes `repo.gitFile` a type error until `kind` is narrowed,
+ * which is the check every reader of it already performs by hand.
+ */
+export type PlainPaths = {
+  /** The directory every worktree is found relative to. Also a worktree itself. */
+  readonly root: string;
+  /** The git common dir — `<root>/.git` — cwd for repo-level git calls. */
+  readonly gitDir: string;
+  readonly kind: "plain";
+};
+
+export type RepoPaths = ManagedPaths | PlainPaths;
+
+export function repoPaths(root: string): ManagedPaths {
   return { root, gitDir: join(root, BARE_DIR), gitFile: join(root, ".git"), kind: "managed" };
 }
 
 /** A repository this tool did not create — an ordinary `.git`-based clone or checkout. */
-export function plainRepoPaths(root: string): RepoPaths {
-  const gitDir = join(root, ".git");
-
-  return { root, gitDir, gitFile: gitDir, kind: "plain" };
+export function plainRepoPaths(root: string): PlainPaths {
+  return { root, gitDir: join(root, ".git"), kind: "plain" };
 }
 
 /** The contents of `<root>/.git`. Relative so the repo folder can be moved. */
@@ -124,10 +139,23 @@ export function worktreePathFor(repo: RepoPaths, branch: string): string {
   const rel = worktreeRelPath(branch);
 
   if (repo.kind === "plain") {
-    return join(dirname(repo.root), `${basename(repo.root)}-${rel.replaceAll("/", "-")}`);
+    return join(worktreeBase(repo), `${basename(repo.root)}-${rel.replaceAll("/", "-")}`);
   }
 
   return join(repo.root, rel);
+}
+
+/**
+ * The directory every one of this repository's worktrees sits under.
+ *
+ * The other half of the rule above, and here rather than inline at each caller
+ * because the two must agree: `remove` and `rename` both climb back up from a
+ * worktree clearing the empty folders it leaves behind, and a base that
+ * disagreed with `worktreePathFor` would either stop one level short of them or
+ * walk out past the repository into somebody else's directories.
+ */
+export function worktreeBase(repo: RepoPaths): string {
+  return repo.kind === "plain" ? dirname(repo.root) : repo.root;
 }
 
 /**

@@ -12,7 +12,6 @@ import {
 import { version } from "../../../package.json";
 import type { Drift } from "../../core/branches.ts";
 import {
-  describeNotes,
   describeRemote,
   describeTouched,
   describeTrunk,
@@ -23,18 +22,19 @@ import type { PullRequest } from "../../core/commands/pr.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import type { Commit } from "../../core/history.ts";
 import type { LineStore } from "../../report/lines.ts";
-import { type Hint, StatusBar, statusBarRows } from "../components/StatusBar.tsx";
+import { StatusBar } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
-import { Banner, bannerRows } from "./Banner.tsx";
+import { Banner } from "./Banner.tsx";
 import { clip, Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
+import { columnWidths, GAP, hintsFor, LOG_ROWS, regionsFor, type Widths } from "./layout.ts";
 import { MessageView } from "./MessageView.tsx";
-import { type Message, messageFor, messageRows } from "./message.ts";
-import { PullRequests, pullRequestRows } from "./PullRequests.tsx";
+import { type Message, messageFor } from "./message.ts";
+import { PullRequests } from "./PullRequests.tsx";
 import type { WorktreeService } from "./service.ts";
-import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tree.ts";
+import { buildTree, firstChildOf, parentOf, type TreeRow } from "./tree.ts";
 
 /**
  * `grove` with nothing to do: the worktrees, and making, syncing and removing
@@ -131,50 +131,6 @@ type Props = {
 };
 
 /**
- * The most progress worth keeping on screen; older lines scroll out of it.
- *
- * Six is right for what a command reports about itself — a spinner, a clone
- * percentage, a line per step — where the last thing said is the interesting
- * one and the rest is history.
- */
-const ACTIVITY_ROWS = 6;
-
-/**
- * How many commits the panel under the list shows, and asks git for.
- *
- * One number for both, so the read is exactly as big as the drawing: asking
- * for more would be a `git log` walking history nobody can see, and asking for
- * fewer would leave blank rows on a screen with the space for them.
- *
- * Five is what "what have I been doing here" takes to answer. Past that it is a
- * history to page through, and paging through it is what `git log` in the
- * worktree is for — the panel exists so that the usual question does not need
- * another terminal, not so that this one grows a pager.
- */
-const LOG_ROWS = 5;
-
-/**
- * Below this many commits the panel is not drawn at all.
- *
- * A heading and a single subject is a rule with a commit stuck to it: it costs
- * two of the few rows a short terminal has and answers nothing the list did not
- * already say. Handing them back keeps the list readable, and `L` is not what
- * anyone should have to press to get out of that.
- */
-const LOG_MIN_ROWS = 2;
-
-/**
- * The most pull requests the popup draws at once.
- *
- * Eight is where a list stops being something you glance down and starts being
- * something you page through, and the popup takes its rows out of the list
- * underneath it. A repository with more open than that is one where the number
- * is worth typing: `grove pr <n>` takes it directly, and the window scrolls
- * either way.
- */
-const PR_ROWS = 8;
-
-/**
  * The narrowest and widest the uncommitted-files panel is allowed to be.
  *
  * The panel is drawn in the slack to the right of the list and nowhere else —
@@ -191,15 +147,6 @@ const PR_ROWS = 8;
  */
 const MIN_FILES_COLS = 26;
 const MAX_FILES_COLS = 48;
-
-/**
- * The rows the list keeps whatever else wants them.
- *
- * The list is the thing being worked in. A screen that answers "what did that
- * command say" by hiding "which worktree am I on" has moved the problem rather
- * than solved it.
- */
-const MIN_LIST_ROWS = 3;
 
 /**
  * How often the screen brings itself up to date, in the absence of any reason
@@ -260,25 +207,6 @@ const GENERAL_TIPS: readonly Message[] = [
   },
 ];
 
-// The keys each popup answers to. A mode that takes the keyboard says so here
-// rather than in the memo below, where only the list's own hints are decided.
-const MODE_HINTS: Partial<Record<Mode["kind"], readonly Hint[]>> = {
-  busy: [{ keys: "ctrl+c", action: "cancel" }],
-  add: [
-    { keys: "enter", action: "add" },
-    { keys: "esc", action: "cancel" },
-  ],
-  confirm: [
-    { keys: "y", action: "remove" },
-    { keys: "n", action: "keep" },
-  ],
-  pick: [
-    { keys: "↑↓", action: "move" },
-    { keys: "enter", action: "check out" },
-    { keys: "esc", action: "cancel" },
-  ],
-};
-
 /**
  * The directory a row stands for, as an absolute path.
  *
@@ -303,25 +231,10 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-/**
- * The space between the list's columns, one constant so the header and every
- * row agree on it — a gap that drifted between them would shear the columns.
- */
-const GAP = "    ";
-
 /** Pads or truncates to exactly `width`, so columns stay columns. */
 function padTo(text: string, width: number): string {
   return clip(text, width).padEnd(width);
 }
-
-type Widths = {
-  readonly tree: number;
-  readonly remote: number;
-  readonly trunk: number;
-  readonly touched: number;
-  readonly state: number;
-  readonly slack: number;
-};
 
 /**
  * One drift column, with the two directions coloured apart.
@@ -482,10 +395,17 @@ function Row({
   row,
   selected,
   widths,
+  now,
 }: {
   readonly row: TreeRow;
   readonly selected: boolean;
   readonly widths: Widths;
+  /**
+   * The moment the ages are measured from — the same one `columnWidths` sized
+   * the column with, handed down rather than read again here. A second
+   * `Date.now()` is how the label and the column it sits in came to disagree.
+   */
+  readonly now: number;
 }) {
   const indent = "  ".repeat(row.depth);
 
@@ -547,7 +467,7 @@ function Row({
         <>
           {GAP}
           <Text dimColor={!selected}>
-            {padTo(describeTouched(row.summary, Date.now()), widths.touched)}
+            {padTo(describeTouched(row.summary, now), widths.touched)}
           </Text>
         </>
       ) : null}
@@ -1150,204 +1070,46 @@ export function App({
   // things people call it.
   const trunkName = rows.find((summary) => summary.isDefault)?.branch ?? "trunk";
 
-  const hints = useMemo((): readonly Hint[] => {
-    const popup = MODE_HINTS[mode.kind];
-    if (popup !== undefined) return popup;
+  const hints = useMemo(() => hintsFor(mode.kind, current, logOn), [mode.kind, current, logOn]);
 
-    // A folder offers what a folder can do. Leaving `s` on it to mean what it
-    // means on a worktree would be a menu that lies. An empty tree has no row
-    // under the cursor at all, and takes the worktree list.
-    const group = current?.kind === "group" ? current : undefined;
-
-    return [
-      { keys: "↑↓", action: "move" },
-      ...(group !== undefined ? [{ keys: "←→", action: group.collapsed ? "open" : "fold" }] : []),
-      { keys: "enter", action: "copy path" },
-      { keys: "a", action: group !== undefined ? `add under ${group.label}` : "add" },
-      { keys: "r", action: group !== undefined ? `remove all ${under.length}` : "remove" },
-      { keys: "p", action: "review" },
-      ...(group === undefined ? [{ keys: "s", action: "sync" }] : []),
-      { keys: "S", action: "sync all" },
-      { keys: "R", action: "refresh" },
-      { keys: "L", action: logOn ? "hide log" : "show log" },
-      { keys: "q", action: "quit" },
-    ];
-  }, [mode, current, under.length, logOn]);
-
-  // Every section's height, decided here rather than left to the renderer: the
-  // list can only be sliced to fit if something knows what "fit" is.
   const labelled = rows.length > 0;
-  // The banner shrinks to one line on a small terminal, so its height is asked
-  // for rather than assumed — getting it wrong is a row of the list drawn off
-  // the bottom of the screen.
-  const banner = bannerRows(columns, terminalRows);
-  // A blank row above the banner and one between it and the column headings:
-  // the places the screen would otherwise run hard against the terminal's
-  // output or its own furniture.
-  const headerRows = banner + 1 + (labelled ? 2 : 1) + 1;
-  // The rule over the keys, the bar itself, and the position row. The bar is
-  // one row until the terminal is too narrow to hold the keys on one, which
-  // the folder hints (`a add under feat/`) reach first. Asked for rather than
-  // assumed, for the same reason as the banner.
-  const footerRows = 1 + statusBarRows(hints, columns) + 1;
-  /**
-   * How many pull requests the popup may draw, out of what is actually free.
-   *
-   * Budgeted like the log panel rather than like the `add` box: `add` reserves
-   * a flat three rows however long the branch name is, while this is as tall as
-   * the forge says — so it is capped at `PR_ROWS` and then capped again by the
-   * rows left once the header, the key bar and `MIN_LIST_ROWS` have taken
-   * theirs. At least one row either way: a popup you cannot see the cursor in
-   * is worse than a short one.
-   */
-  const prBody = Math.max(
-    1,
-    Math.min(PR_ROWS, terminalRows - headerRows - footerRows - 3 - MIN_LIST_ROWS),
-  );
-
-  const detailRows =
-    (mode.kind === "add" ? 3 : 0) +
-    (mode.kind === "pick" ? pullRequestRows(mode.prs.length, prBody) : 0) +
-    (mode.kind === "confirm" ? 1 : 0) +
-    (message === undefined || mode.kind === "busy" ? 0 : messageRows(message));
+  // Every section's height, worked out in `layout.ts` — see `regionsFor`, which
+  // is where the arithmetic and the reasons for it now live.
+  const { prBody, clipped, activity, logBody, logHeight, listHeight, visible } = regionsFor({
+    terminalRows,
+    columns,
+    hints,
+    mode,
+    message,
+    lines,
+    logOn,
+    tree,
+    index,
+    labelled,
+  });
 
   /**
-   * How many rows the activity area may take, out of what is actually left.
+   * The moment every age on the screen is measured from, read once for the
+   * whole render and handed to both the columns and the rows.
    *
-   * Asked of the leftovers rather than of the terminal, because a fixed number
-   * is one that can exceed the space there is: six rows of progress with
-   * `Math.max(1, …)` holding the list open underneath adds up to more rows than
-   * a short terminal has, and Ink draws the overflow on top of the banner.
-   *
-   * The list keeps a floor either way. It is the thing being worked in, and a
-   * screen that answers one question by hiding the other is not an improvement.
+   * Read here rather than inside the widths below and again inside each row,
+   * which is what it used to be: the memo held whichever `Date.now()` it last
+   * ran with — a cursor move does not rebuild `tree`, so a minute later the
+   * rows drew `1m ago` into a column still sized for `now`, and the label came
+   * out as `1m…` until the next refresh happened to agree with it. One moment
+   * per render is what makes the column and the label the same measurement.
    */
-  const spare = terminalRows - headerRows - detailRows - footerRows - MIN_LIST_ROWS - 1;
-  const room = Math.max(0, Math.min(ACTIVITY_ROWS, spare));
+  const now = Date.now();
 
-  // What did not fit is said rather than silently dropped — the whole reason
-  // this exists is that a line went missing off the top without saying so.
-  const clipped = Math.max(0, lines.length - room);
-  // `room - 1` can reach zero, and `slice(-0)` is the whole array — which on a
-  // cramped screen is every line drawn over whatever sat below the activity.
-  const activity = clipped > 0 ? (room > 1 ? lines.slice(-(room - 1)) : []) : lines;
-  const activityRows = activity.length > 0 ? activity.length + (clipped > 0 ? 1 : 0) + 1 : 0;
-
-  /**
-   * The commit panel's height, out of what is left once everything else has
-   * taken its own.
-   *
-   * Budgeted after the activity rather than beside it, which is the precedence
-   * on purpose: while a command is running, what it is doing now beats what was
-   * committed yesterday, and on a terminal too short for both the panel is the
-   * one that gives way. The list keeps `MIN_LIST_ROWS` underneath either way,
-   * and the panel takes nothing at all rather than a row too few to read — one
-   * commit under a heading is a heading with a commit stuck to it.
-   */
-  const logSpare =
-    terminalRows - headerRows - activityRows - detailRows - footerRows - MIN_LIST_ROWS - 1;
-  const logBody = logOn && logSpare >= LOG_MIN_ROWS ? Math.min(LOG_ROWS, logSpare) : 0;
-  // The heading is a row of the panel: it is the rule the commits hang from,
-  // and it says which row they belong to.
-  const logHeight = logBody > 0 ? logBody + 1 : 0;
-
-  const listHeight = Math.max(
-    1,
-    terminalRows - headerRows - activityRows - logHeight - detailRows - footerRows,
+  // Recomputed on every render, because `now` moves on every render and a
+  // column sized from a stale one is the truncation above. It is a few dozen
+  // string lengths over the rows already in memory, and renders here are
+  // keystrokes and a once-a-minute refresh — the memo is kept for the shape of
+  // the thing, not for a saving it can still make.
+  const widths = useMemo(
+    () => columnWidths(tree, columns, trunkName, now),
+    [tree, columns, trunkName, now],
   );
-
-  // A window onto the tree that keeps the cursor roughly centred, and stops
-  // scrolling once the end is on screen. Measured in drawn rows, which include
-  // the folder headings the cursor itself skips over.
-  const start = Math.min(
-    Math.max(0, index - Math.floor(listHeight / 2)),
-    Math.max(0, tree.length - listHeight),
-  );
-  const visible = tree.slice(start, start + listHeight);
-
-  const widths = useMemo((): Widths => {
-    const width = (row: TreeRow) => row.depth * 2 + row.label.length;
-    const treeColumn = Math.min(
-      Math.max(8, ...tree.map(width)),
-      Math.max(8, Math.floor(columns * 0.45)),
-    );
-    // The heading is content too: a column sized only to its rows truncates its
-    // own label the moment the rows are shorter than it (`↑0 ↓0` under `remo…`).
-    const LABELS = { remote: 6, state: 5 };
-
-    const leaves = leavesOf(tree);
-
-    // Each sized to its contents and its own heading — `no upstream` for one,
-    // the trunk's name for the other, which is however long someone called it.
-    const remoteWidth = Math.max(
-      LABELS.remote,
-      ...leaves.map((leaf) => describeRemote(leaf.summary).length),
-    );
-    const trunkWidth = Math.max(
-      trunkName.length,
-      ...leaves.map((leaf) => describeTrunk(leaf.summary).length),
-    );
-
-    // Only when something has a time to show. No heading and no minimum,
-    // because it trails the row rather than heading a column — its width is
-    // just the longest thing it will say.
-    const now = Date.now();
-    const touchedWidth = Math.max(
-      0,
-      ...leaves.map((leaf) => describeTouched(leaf.summary, now).length),
-    );
-
-    // The state column stopped being the row's flexible remainder when the
-    // touched aside moved in behind it: sized to what it actually says — the
-    // dot, plus the unusual states written out — the time sits beside the
-    // state rather than at the far edge of the screen.
-    const stateWidth = Math.max(
-      LABELS.state,
-      ...leaves.map((leaf) => {
-        const notes = describeNotes(leaf.summary);
-
-        return notes.length === 0 ? 1 : notes.length + 2;
-      }),
-    );
-
-    // Dropped when what is left cannot hold the state column's own heading.
-    // `touched` goes first, then `trunk`: "is there anything uncommitted here"
-    // and "is there anything to push" are the two a narrow terminal should keep.
-    // The constant 4 is the marker prefix (`▸ * `); each column then costs its
-    // width plus one `GAP` in front of it.
-    const gaps = 4 + GAP.length;
-    const spare = (...widths: number[]) =>
-      columns - treeColumn - gaps - widths.reduce((a, b) => a + b + GAP.length, 0);
-    const fits = (...widths: number[]) => spare(...widths) >= LABELS.state;
-
-    const remote = fits(remoteWidth) ? remoteWidth : 0;
-    const trunk = remote > 0 && fits(remoteWidth, trunkWidth) ? trunkWidth : 0;
-    // The aside must leave the state column whole, not just its heading.
-    const touched =
-      touchedWidth > 0 && trunk > 0 && spare(remoteWidth, trunkWidth, touchedWidth) >= stateWidth
-        ? touchedWidth
-        : 0;
-
-    const taken = [remote, trunk, touched].filter((width) => width > 0);
-    const state = Math.max(0, Math.min(stateWidth, spare(...taken)));
-
-    return {
-      tree: treeColumn,
-      remote,
-      trunk,
-      touched,
-      state,
-      /**
-       * What is left of the row once the list has had its columns, gaps and
-       * marker.
-       *
-       * Taken out of the same budget the columns were sized from, rather than
-       * counted back off the marker and each column that survived — so the two
-       * cannot disagree about where the list ends and the empty screen begins.
-       */
-      slack: spare(...taken) - state,
-    };
-  }, [tree, columns, trunkName]);
 
   /**
    * The uncommitted-files panel's width, out of the screen the list is not on.
@@ -1423,7 +1185,7 @@ export function App({
             <Text dimColor>no worktrees here yet — press a to add one</Text>
           ) : (
             visible.map((row) => (
-              <Row key={row.key} row={row} selected={row === current} widths={widths} />
+              <Row key={row.key} row={row} selected={row === current} widths={widths} now={now} />
             ))
           )}
         </Box>

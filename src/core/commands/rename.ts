@@ -5,7 +5,7 @@ import { defaultBranch, localBranchExists, pushUpstream } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
-import { contains, type RepoPaths, worktreePathFor } from "../layout.ts";
+import { contains, type RepoPaths, worktreeBase, worktreePathFor } from "../layout.ts";
 import { listWorktrees, resolveTarget, worktreeDir } from "../worktrees.ts";
 import { pruneEmptyParents } from "./remove.ts";
 
@@ -156,7 +156,7 @@ async function moveWorktree(
 
   // The old name may have been the last thing under `feat/`, and an empty
   // `feat/` left behind is the clutter the nesting was there to organise away.
-  await pruneEmptyParents(repo.kind === "plain" ? dirname(repo.root) : repo.root, fromPath);
+  await pruneEmptyParents(worktreeBase(repo), fromPath);
   step.succeed(`moved to ${worktreeDir(repo.root, toPath)}`);
 }
 

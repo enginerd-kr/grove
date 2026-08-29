@@ -222,6 +222,22 @@ describe("grove sync", () => {
     });
   });
 
+  test("says the fetch failed instead of reporting a stale answer as up to date", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await managed(repo);
+
+      // The origin goes away entirely, which is what being offline looks like
+      // to a `file://` remote. The whole point of this command is that the
+      // trunk it rebases onto is current, so a fetch that did not happen is
+      // news — "up to date with what was last seen" is a different claim.
+      await rm(repo.originPath, { recursive: true, force: true });
+
+      const synced = await runCli(["sync", "main"], { cwd: root });
+      expect(synced.stderr).not.toContain("✓ fetched");
+      expect(synced.stderr).toContain("could not fetch");
+    });
+  });
+
   test("aborts a conflicting rebase and exits 5, and --no-abort leaves it stopped part-way", async () => {
     await withTempRepo(async (repo) => {
       const root = await managed(repo);
