@@ -9,4 +9,4 @@
 # with a lockfile, `bun install` in a fresh worktree is seconds. `dist` is a
 # build output, which is never a thing to share.
 [setup]
-run = ["bun install", "open \"Visual Studio Code\" ."]
+run = ["bun install", "open -a \"Visual Studio Code\" ."]
