@@ -58,6 +58,14 @@ export type GroveCommand =
       readonly deleteBranch: boolean;
       readonly fetch: boolean;
     }
+  | {
+      readonly name: "rename";
+      readonly target: string;
+      /** The branch's new name. Spelled `to` because `name` is the discriminant. */
+      readonly to: string;
+      readonly push: boolean;
+      readonly force: boolean;
+    }
   | { readonly name: "path"; readonly target?: string }
   | { readonly name: "shell-init"; readonly shell: string }
   | { readonly name: "install"; readonly shell?: Shell }
@@ -202,6 +210,18 @@ function buildCommand(
         dryRun: bool(values, "dry-run"),
         deleteBranch: bool(values, "delete-branch"),
         fetch: !bool(values, "no-fetch"),
+      };
+    }
+    case "rename": {
+      if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to rename`);
+      if (second === undefined) return usageError(spec, `${spec.name} needs a new branch name`);
+
+      return {
+        name: "rename",
+        target: first,
+        to: second,
+        push: bool(values, "push"),
+        force: bool(values, "force"),
       };
     }
     case "path":

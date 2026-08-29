@@ -1,4 +1,4 @@
-import { basename, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { GroveError } from "./errors.ts";
 
 /**
@@ -101,6 +101,33 @@ export function worktreeRelPath(branch: string): string {
   }
 
   return segments.join("/");
+}
+
+/**
+ * Where a branch's worktree goes: inside the root for a managed repository,
+ * beside it for a plain one.
+ *
+ * A plain repository's root is itself the main checkout, so there is no spare
+ * folder to nest a worktree inside — `git worktree add ../thing` is the
+ * convention its users already have, and this follows it. Its name is prefixed
+ * with the repository's own (`myapp-feat-login` beside `myapp`) so a shared
+ * parent directory does not fill with bare branch names that collide with
+ * whatever else lives there.
+ *
+ * One function rather than one per command, because `add` and `rename` have to
+ * agree about it exactly: the whole of `rename` is moving a directory from the
+ * name one branch would have been given to the name another one would, and two
+ * spellings of that rule would be a rename that lands somewhere `add` would
+ * never have put it.
+ */
+export function worktreePathFor(repo: RepoPaths, branch: string): string {
+  const rel = worktreeRelPath(branch);
+
+  if (repo.kind === "plain") {
+    return join(dirname(repo.root), `${basename(repo.root)}-${rel.replaceAll("/", "-")}`);
+  }
+
+  return join(repo.root, rel);
 }
 
 /**

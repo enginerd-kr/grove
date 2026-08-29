@@ -54,6 +54,7 @@ grove add <branch>          # Create a new worktree for a branch, tracking its r
 grove list                  # List all worktrees along with their git status and sync drift
 grove sync [target]         # Fetch and bring all worktrees up-to-date by rebasing them
 grove prune                 # Remove every worktree whose branch is merged or gone from the remote
+grove rename <target> <new> # Rename a branch and move its worktree directory to match
 grove reset <target>        # Discard all uncommitted changes in a worktree
 grove remove <target>       # Delete a worktree directory safely
 grove path [target]         # Print the absolute path of a selected worktree

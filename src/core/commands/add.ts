@@ -1,11 +1,10 @@
-import { basename, dirname, join } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranchExists, remoteBranchExists } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
-import { contains, worktreeRelPath } from "../layout.ts";
+import { contains, worktreePathFor } from "../layout.ts";
 import {
   failureFor,
   repoSetupPlan,
@@ -77,7 +76,7 @@ export async function addWorktree(
   options: AddOptions,
   reporter: Reporter,
 ): Promise<AddResult> {
-  const path = join(worktreeBase(repo), worktreeRelSegment(repo, options));
+  const path = worktreePathFor(repo, options.branch);
   const dir = worktreeDir(repo.root, path);
   const worktrees = await listWorktrees(repo.gitDir);
 
@@ -93,7 +92,7 @@ export async function addWorktree(
     // not happened yet, and it is the half that was the point.
     if (source === undefined || source === path) return existing;
 
-    return { ...existing, took: await take(source, path, dir, reporter) };
+    return { ...existing, took: await takeChanges(source, path, reporter) };
   }
 
   refuseNameCollision(repo.root, path, worktrees);
@@ -152,6 +151,14 @@ export async function addWorktree(
 }
 
 /**
+ * The worktree `--take` empties, which is the one the shell is standing in.
+ *
+ * Never guessed at. "The worktree you were last in", or the trunk, or the only
+ * dirty one would each be a rule somebody has to learn before they dare use
+ * the flag — and the cost of learning it wrong is a directory emptied that
+ * nobody meant. Standing somewhere is the one answer that needs no rule.
+ */
+/**
  * The move, with the one fact its own error cannot know added to it.
  *
  * A take that fails still leaves a worktree behind, because the worktree was
@@ -181,14 +188,6 @@ async function take(
   }
 }
 
-/**
- * The worktree `--take` empties, which is the one the shell is standing in.
- *
- * Never guessed at. "The worktree you were last in", or the trunk, or the only
- * dirty one would each be a rule somebody has to learn before they dare use
- * the flag — and the cost of learning it wrong is a directory emptied that
- * nobody meant. Standing somewhere is the one answer that needs no rule.
- */
 function takeSource(cwd: string, worktrees: readonly WorktreeRecord[]): string {
   const here = worktrees.find((record) => contains(record.path, cwd));
 
@@ -199,35 +198,6 @@ function takeSource(cwd: string, worktrees: readonly WorktreeRecord[]): string {
   }
 
   return here.path;
-}
-
-/**
- * Where new worktrees go: inside the root for a managed repository, beside it
- * for a plain one.
- *
- * A plain repository's root is itself the main checkout, so there is no
- * spare folder to nest a worktree inside — `git worktree add ../thing` is the
- * convention its users already have, and this follows it.
- */
-function worktreeBase(repo: RepoPaths): string {
-  return repo.kind === "plain" ? dirname(repo.root) : repo.root;
-}
-
-/**
- * The new worktree's path, relative to `worktreeBase`.
- *
- * Always derived from the branch — the directory *is* the branch's name, which
- * is what lets the list say one thing instead of two. A plain repository gets
- * a name prefixed with the repository's own — `myapp-feat-login` beside
- * `myapp` — so a shared parent directory does not fill with bare branch names
- * that collide with whatever else lives there.
- */
-function worktreeRelSegment(repo: RepoPaths, options: AddOptions): string {
-  if (repo.kind === "plain") {
-    return `${basename(repo.root)}-${worktreeRelPath(options.branch).replaceAll("/", "-")}`;
-  }
-
-  return worktreeRelPath(options.branch);
 }
 
 /**

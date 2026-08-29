@@ -193,8 +193,11 @@ async function refuseUnsafe(
  *
  * Walks up to, but never including, the repo root, and stops the moment a
  * directory is not empty: anything in there is someone's, not ours.
+ *
+ * Exported for `rename`, which leaves the same emptiness behind for the same
+ * reason — a worktree that moves out of `feat/` is a worktree that left it.
  */
-async function pruneEmptyParents(root: string, removed: string): Promise<void> {
+export async function pruneEmptyParents(root: string, removed: string): Promise<void> {
   let current = dirname(removed);
 
   while (current !== root && contains(root, current)) {

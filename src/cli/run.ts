@@ -10,6 +10,7 @@ import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/lis
 import { worktreePath } from "../core/commands/path.ts";
 import { describePrune, formatPruneTable, pruneWorktrees } from "../core/commands/prune.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
+import { renameWorktree } from "../core/commands/rename.ts";
 import { resetWorktree } from "../core/commands/reset.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
@@ -189,6 +190,32 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       // should count worktrees, not read a sentence about them.
       reporter.info(describePrune(result));
       if (result.entries.length > 0) reporter.out(formatPruneTable(result));
+      return;
+    }
+
+    case "rename": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await renameWorktree(
+        repo,
+        cwd,
+        {
+          target: command.target,
+          to: command.to,
+          push: command.push,
+          force: command.force,
+        },
+        reporter,
+      );
+
+      if (result.upstreamNote) reporter.info(result.upstreamNote);
+      if (result.standingNote) reporter.info(result.standingNote);
+
+      if (global.json) {
+        reporter.out(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      reporter.out(`${display(cwd, result.path)}\t${result.to}`);
       return;
     }
 

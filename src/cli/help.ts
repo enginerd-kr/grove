@@ -234,6 +234,26 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     ],
   },
   {
+    name: "rename",
+    aliases: ["mv"],
+    args: "<target> <name>",
+    summary: "rename a branch, and move its worktree to match",
+    description: [
+      "The directory is the branch's name here, so renaming one without the",
+      "other would leave a `feat/logn` directory holding `feat/login` — which is",
+      "the bookkeeping this tool exists to remove. Both move together, and the",
+      "directories the old name left empty are cleared up behind it.",
+      "",
+      "The branch keeps tracking whatever it tracked. Renaming here says nothing",
+      "about the remote, which still has the old name until something pushes the",
+      "new one — `--push` is that something.",
+    ],
+    flags: [
+      { name: "push", type: "boolean", summary: "push the new name and set it as the upstream" },
+      { name: "force", type: "boolean", summary: "rename the branch everything else syncs onto" },
+    ],
+  },
+  {
     name: "reset",
     aliases: [],
     args: "<target>",
