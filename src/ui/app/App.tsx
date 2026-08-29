@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { version } from "../../../package.json";
@@ -17,21 +16,21 @@ import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
-import { rank } from "./filter.ts";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor, messageRows } from "./message.ts";
-import { bodyOf, modeOf, PROMPT_ROWS, Prompt, tokenize } from "./Prompt.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tree.ts";
 
 /**
- * `grove` with nothing to do: the worktrees, and the five commands as keystrokes.
+ * `grove` with nothing to do: the worktrees, and making, syncing and removing
+ * them as keystrokes.
  *
  * The screen owns no git knowledge — it asks a `WorktreeService` — and it runs
  * exactly the commands the command line does, with the destructive spellings
  * (`--force`, `--delete-branch`) left off. Anything this refuses is still
- * reachable by typing it out, which is the point: a keystroke should not be able
- * to do something you would have had to be explicit about.
+ * reachable by typing it out on the command line, which is the point: a
+ * keystroke should not be able to do something you would have had to be
+ * explicit about.
  *
  * It fills the terminal. The layout is a column pinned top and bottom — header,
  * list, activity, keys — with the list taking whatever is left, so the keys are
@@ -39,11 +38,11 @@ import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tre
  */
 
 /**
- * What a key is about to do that cannot be undone, held until it is confirmed.
+ * What `r` is about to do that cannot be undone, held until it is confirmed.
  *
- * Everything in here goes through the same `y`/`n`, because the question is
- * always the same one — is this the row you meant — and the answer should not
- * depend on remembering which destructive key you pressed.
+ * One worktree or a folder's worth of them, asked the same `y`/`n` either way:
+ * the question is the same one — is this the row you meant — and the answer
+ * should not depend on how many rows are behind it.
  */
 type Pending =
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
@@ -53,8 +52,7 @@ type Pending =
       readonly paths: readonly string[];
       /** How many of `paths` are dirty — what makes this question a red one. */
       readonly dirty: number;
-    }
-  | { readonly kind: "reset"; readonly summary: WorktreeSummary };
+    };
 
 type Mode =
   | { readonly kind: "list" }
@@ -66,24 +64,6 @@ type Mode =
    * prompt said.
    */
   | { readonly kind: "add"; readonly value: string; readonly from?: string }
-  /**
-   * The popup that ends in something leaving the machine: a PR title, typed
-   * over the commits it would propose. It carries the context that was true
-   * when it opened — the body, the subjects — for the same reason `add`
-   * carries `from`: the list refreshes itself, and a popup that re-read the
-   * world at enter-time could propose something other than what it showed.
-   */
-  | {
-      readonly kind: "pr";
-      readonly value: string;
-      readonly target: { readonly path: string; readonly dir: string };
-      readonly branch: string;
-      readonly base: string;
-      readonly body: string;
-      readonly context: readonly string[];
-    }
-  /** The open-ended line: `!` runs git, anything else narrows the list. */
-  | { readonly kind: "prompt"; readonly value: string }
   | { readonly kind: "confirm"; readonly target: Pending }
   | { readonly kind: "busy"; readonly label: string };
 
@@ -95,15 +75,6 @@ type Props = {
   readonly store: LineStore;
   /** Ctrl-C while busy: stop the git child before the screen goes away. */
   readonly onCancel?: () => void;
-  /**
-   * Where enter takes the shell, when there is a shell function to catch it.
-   *
-   * Present only when the app was started through the wrapper `shell-init`
-   * installs — it hands over a path, the wrapper cds to it after the screen
-   * closes. Absent, enter stays inert and its hint never appears: a key that
-   * quit the app to accomplish nothing would be a trap, not a shortcut.
-   */
-  readonly onCd?: (path: string) => Promise<void> | void;
   /** How often to refresh, in ms. Defaults to `REFRESH_MS`; tests drive it faster. */
   readonly refreshMs?: number;
   /** How often the message slot turns to its next tip, in ms. Defaults to `TIP_ROTATE_MS`; tests drive it faster. */
@@ -132,17 +103,6 @@ type Props = {
  * one and the rest is history.
  */
 const ACTIVITY_ROWS = 6;
-
-/**
- * The share of the screen a `!` command's output may take instead.
- *
- * Six rows is wrong for that. `git status` is seven lines before it has said
- * anything unusual, so it lost `On branch …` off the top — the one line that
- * says which worktree you are even looking at. Output you asked for by typing a
- * command is the thing on the screen at that moment, not a footnote under the
- * list, so it gets half the terminal and the list keeps the rest.
- */
-const OUTPUT_SHARE = 0.5;
 
 /**
  * The rows the list keeps whatever else wants them.
@@ -199,11 +159,10 @@ const MAX_REFRESH_FACTOR = 5;
 // whatever the session earned (a release, a missing shell function) so the
 // slot always has more than one thing to say and rotation is never a no-op.
 const GENERAL_TIPS: readonly Message[] = [
-  { kind: "info", text: "tip: ? opens one prompt for both filtering and raw git" },
   { kind: "info", text: "tip: h and l don't stop at the first fold — they keep going" },
   { kind: "info", text: "tip: a starts the new branch from wherever the cursor is" },
-  { kind: "info", text: "tip: p shows the commits before it asks for a title" },
-  { kind: "info", text: "tip: y copies the path under the cursor, for a paste elsewhere" },
+  { kind: "info", text: "tip: r on a folder removes every worktree under it, after one question" },
+  { kind: "info", text: "tip: s syncs the row under the cursor, S syncs every worktree" },
 ];
 
 /** A new set with `key` in it, and one without — `Set` is mutable and state is not. */
@@ -215,36 +174,9 @@ function without(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
   return new Set([...set].filter((each) => each !== key));
 }
 
-/**
- * At most this much context under a popup's input; the rest becomes a count.
- *
- * A worktree with forty changed files does not need forty rows to say "this
- * commits a lot" — and the list underneath is what says where you are.
- */
-const CONTEXT_ROWS = 8;
-
-function capped(lines: readonly string[]): readonly string[] {
-  if (lines.length <= CONTEXT_ROWS) return lines;
-
-  const rest = lines.length - (CONTEXT_ROWS - 1);
-
-  return [...lines.slice(0, CONTEXT_ROWS - 1), `# … ${rest} more`];
-}
-
 /** `1 command`, `2 commands` — the label a confirmed action is given. */
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
-/**
- * The directory a row stands for, as an absolute path.
- *
- * A folder is a real directory on disk, so it answers too. Group keys carry
- * their trailing slash (it is how they are drawn); a path handed around as a
- * location should not.
- */
-function pathOf(row: TreeRow, repoRoot: string): string {
-  return row.kind === "group" ? join(repoRoot, row.key.replace(/\/+$/, "")) : row.summary.path;
 }
 
 /**
@@ -354,11 +286,11 @@ function StateCell({
 }
 
 /**
- * The question a destructive key asks, and what it costs to answer `y`.
+ * The question `r` asks, and what it costs to answer `y`.
  *
  * Each one says what survives, since that is what the person is actually
- * weighing — and for the reset the honest answer is nothing, so it says that
- * rather than something softer.
+ * weighing: the directory goes, the branch stays, and any uncommitted changes
+ * go with the directory.
  */
 function describePending(target: Pending): string {
   // A dirty worktree is not refused any more — it is asked about instead, and
@@ -373,28 +305,18 @@ function describePending(target: Pending): string {
     return `remove ${dir}? the directory goes, the branch stays`;
   }
 
-  if (target.kind === "many") {
-    const all = `remove all ${target.paths.length} under ${target.label}?`;
-    if (target.dirty > 0) {
-      return `${all} ${target.dirty} ${target.dirty === 1 ? "has" : "have"} uncommitted changes, which go too — the branches stay`;
-    }
-
-    return `${all} the directories go, the branches stay`;
+  const all = `remove all ${target.paths.length} under ${target.label}?`;
+  if (target.dirty > 0) {
+    return `${all} ${target.dirty} ${target.dirty === 1 ? "has" : "have"} uncommitted changes, which go too — the branches stay`;
   }
 
-  // Both kinds, counted apart. `x` deletes untracked files too, and one of
-  // those may be work git has never seen a copy of — folding it into "3
-  // changes" would be the sentence someone regrets having skimmed.
-  const { changed, untracked, dir } = target.summary;
-
-  return `discard ${describeDiscard(changed - untracked, untracked)} in ${dir}? there is no undo`;
+  return `${all} the directories go, the branches stay`;
 }
 
-/** How loudly to ask, which is not the same for all three questions. */
+/** How loudly to ask, which is not the same for both questions. */
 function colourFor(target: Pending): string | undefined {
-  // Discarding changes for good is a risk of a different kind from a removal —
-  // and a removal that discards them is the same risk wearing another key.
-  if (target.kind === "reset") return theme.danger;
+  // A removal that discards uncommitted changes is a risk of a different kind
+  // from one that only takes a directory back.
   if (target.kind === "one" && target.summary.dirty) return theme.danger;
   if (target.kind === "many" && target.dirty > 0) return theme.danger;
 
@@ -483,7 +405,6 @@ export function App({
   repoRoot,
   store,
   onCancel,
-  onCd,
   refreshMs = REFRESH_MS,
   tipRotateMs = TIP_ROTATE_MS,
   checkUpdate,
@@ -497,14 +418,6 @@ export function App({
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
   const [cursorKey, setCursorKey] = useState<string | undefined>(undefined);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  // Kept outside the prompt, because it outlives it: you narrow the list in
-  // order to work in what is left, and closing the box should not undo that.
-  const [filter, setFilter] = useState("");
-  /** Whether what the activity area is holding is command output rather than progress. */
-  const [roomy, setRoomy] = useState(false);
-  // What is on the prompt line right now, as opposed to at the last render. See
-  // the `prompt` branch of `useInput` for why the difference matters.
-  const typed = useRef("");
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
   const [message, setMessage] = useState<Message | undefined>(undefined);
   // Every tip that earned the slot on this open: whichever of the release
@@ -520,14 +433,7 @@ export function App({
   // Folded folders are held by key rather than by row, so a fold survives the
   // list re-reading itself — which it does every two seconds, and which would
   // otherwise flick every folder back open while you were looking at it.
-  // Two shapes, and which one is on screen is decided by whether anything has
-  // been typed. Folders group the whole set, which is what you are reading with
-  // no filter; a ranked list answers a name, which is what you are reading with
-  // one. Trying to be both would bury the best match under a heading.
-  const tree = useMemo(
-    () => (filter.length === 0 ? buildTree(rows, collapsed) : rank(rows, filter)),
-    [rows, collapsed, filter],
-  );
+  const tree = useMemo(() => buildTree(rows, collapsed), [rows, collapsed]);
 
   /**
    * Where the cursor is, remembered as the row rather than as its position.
@@ -587,13 +493,9 @@ export function App({
    * then say what happened whether it worked or not.
    */
   const perform = useCallback(
-    async (label: string, action: () => Promise<string>, isOutput = false) => {
+    async (label: string, action: () => Promise<string>) => {
       store.clear();
       setMessage(undefined);
-      // Held as a flag rather than a row count, so a terminal resized while the
-      // output is on screen re-divides what it has instead of keeping a number
-      // that was right for the old height.
-      setRoomy(isOutput);
       setMode({ kind: "busy", label });
 
       try {
@@ -643,50 +545,6 @@ export function App({
     [service, perform],
   );
 
-  /**
-   * `p`, up to the point of asking.
-   *
-   * Reads before it draws — the popup promises what would be proposed, and a
-   * promise built from a row that might be a minute stale is one the enter key
-   * could break. The read is quick and the busy state keeps the refresh tick
-   * out of the way while it happens.
-   */
-  const openPr = useCallback(
-    async (target: { readonly path: string; readonly dir: string }) => {
-      store.clear();
-      setMessage(undefined);
-      setRoomy(false);
-      setMode({ kind: "busy", label: `reading ${target.dir}` });
-
-      try {
-        const preview = await service.prPreview(target.path);
-        const plural = preview.commits === 1 ? "" : "s";
-        // The commits being proposed, whatever shape the body takes — with the
-        // title asked for rather than guessed, this block is how you know what
-        // you are naming.
-        const context = [
-          `# ${preview.commits} commit${plural} onto ${preview.base}`,
-          ...preview.subjects.map((subject) => `- ${subject}`),
-        ];
-
-        return setMode({
-          kind: "pr",
-          value: "",
-          target,
-          branch: preview.branch,
-          base: preview.base,
-          body: preview.body,
-          context: capped(context),
-        });
-      } catch (error) {
-        setMessage(messageFor(error));
-
-        return setMode({ kind: "list" });
-      }
-    },
-    [service, store],
-  );
-
   // The first read is not an action: it reports no outcome, and going through
   // `perform` would open the screen with an empty message line.
   useEffect(() => {
@@ -727,19 +585,6 @@ export function App({
           hint: "upgrade: brew upgrade grove",
         });
       }
-      // With no shell function listening, half of what this screen does is
-      // quietly unavailable — q cannot land the shell where enter walked —
-      // and nothing on screen would ever say so. A rule that hides is a rule
-      // nobody can learn, so the one line that installs it opens the
-      // session, in the message slot the first action reclaims.
-      if (onCd === undefined) {
-        tips.push({
-          kind: "info",
-          text: "tip: the shell function is not installed, so q cannot land your shell where you stood",
-          hint: `install once: eval "$(grove shell-init zsh)" in your shell's rc file — or bash, fish`,
-        });
-      }
-
       tips.push(...GENERAL_TIPS);
 
       setTipPool(tips);
@@ -749,7 +594,7 @@ export function App({
     return () => {
       live = false;
     };
-  }, [service, onCd, checkUpdate]);
+  }, [service, checkUpdate]);
 
   // Jumps the slot to a random tip in the pool, never the one just shown —
   // unless something else has claimed the slot since, in which case there is
@@ -770,11 +615,6 @@ export function App({
     },
     tipPool.length > 1 ? tipRotateMs : null,
   );
-
-  // Where the shell really is: the standpoint at launch, for `q` to compare
-  // against before deciding the shell needs moving at all.
-  const startedAt = useRef<string | undefined>(undefined);
-  if (startedAt.current === undefined) startedAt.current = service.standpoint();
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -864,19 +704,13 @@ export function App({
 
     if (mode.kind === "busy") return;
 
-    if (mode.kind === "add" || mode.kind === "pr") {
+    if (mode.kind === "add") {
       if (key.escape) return setMode({ kind: "list" });
       if (key.return) {
         const value = mode.value.trim();
         // Enter on nothing is a cancel, not an error: the empty popup is what
         // "never mind" looks like from inside one.
         if (value.length === 0) return setMode({ kind: "list" });
-
-        if (mode.kind === "pr") {
-          return void perform(`opening a PR for ${mode.branch}`, () =>
-            service.createPr(mode.target.path, value, mode.body),
-          );
-        }
 
         // The file's commands run after, not instead: `perform` has drawn what
         // the worktree got, and this runs the half it did not.
@@ -896,86 +730,9 @@ export function App({
       return;
     }
 
-    if (mode.kind === "prompt") {
-      // The list is still the thing being looked at, so the keys that move
-      // around it still move around it. Only the real arrows — `j` and `k` are
-      // letters here, and typing `jk` into a filter should type `jk`.
-      if (key.upArrow) return move(-1);
-      if (key.downArrow) return move(1);
-
-      // Escape takes one layer at a time: the line first, and the box only once
-      // there is no line left to clear. Closing on the first press would mean a
-      // typo costs you the box as well as the word.
-      if (key.escape) {
-        const cleared = typed.current.length > 0;
-        typed.current = "";
-        setFilter("");
-
-        return setMode(cleared ? { kind: "prompt", value: "" } : { kind: "list" });
-      }
-
-      // A paste arrives as one event and carries its own newline, so the text
-      // and the `enter` after it are the same keystroke as far as this is
-      // concerned. Splitting on the newline is what makes pasting a command and
-      // running it one motion rather than a line that silently vanishes.
-      const arrived = input.split(/[\r\n]/);
-      const submitted = key.return || arrived.length > 1;
-      // Printable only: an arrow key arrives as a control sequence that would
-      // otherwise type itself into the middle of the line.
-      const text = key.ctrl || key.meta ? "" : (arrived[0] ?? "").replace(/[^\x20-\x7e]/g, "");
-
-      // Read from a ref rather than from `mode`, because keys arrive faster than
-      // React commits: a paste followed by `enter` in the same frame would have
-      // `enter` acting on the line as it was *before* the paste, which is empty.
-      let next = typed.current;
-      if (key.backspace || key.delete) next = next.slice(0, -1);
-      else if (text.length > 0) next = next + text;
-
-      if (next !== typed.current) {
-        typed.current = next;
-        // Live, rather than on `enter`: narrowing a list you cannot see the
-        // effect of is guessing, and the whole value of it is watching rows go.
-        setFilter(modeOf(next) === "filter" ? bodyOf(next) : "");
-        setMode({ kind: "prompt", value: next });
-      }
-
-      if (!submitted) return;
-
-      typed.current = "";
-
-      if (modeOf(next) === "git") {
-        const args = tokenize(bodyOf(next));
-        if (args.length === 0) return setMode({ kind: "list" });
-
-        // Where the cursor is, or the repository itself when it is on a folder —
-        // which is also where a `git worktree`-ish command wants to be run from.
-        const at = selected?.path ?? repoRoot;
-
-        // The one action whose output *is* the result, rather than a note about
-        // how the result was reached — so it gets the room to be read in.
-        return void perform(`git ${args[0]}`, () => service.git(args, at), true);
-      }
-
-      // The row survives, the narrowing does not. Filtering is how you found
-      // the worktree; what you wanted was the worktree. Pinned explicitly rather
-      // than left to the cursor's own anchoring, which only knows where you are
-      // if you moved — and typing one name until one row is left is not moving.
-      //
-      if (current !== undefined) setCursorKey(current.key);
-      setFilter("");
-
-      return setMode({ kind: "list" });
-    }
-
     if (mode.kind === "confirm") {
       const target = mode.target;
       if (input === "y" || input === "Y") {
-        if (target.kind === "reset") {
-          return void perform(`resetting ${target.summary.dir}`, () =>
-            service.reset(target.summary.path),
-          );
-        }
-
         // `discardDirty` carries the answer just given: the question counted
         // the uncommitted changes, so the removal may now discard them.
         return void (target.kind === "one"
@@ -1058,82 +815,12 @@ export function App({
         },
       });
     }
-    // Only where there is something to throw away. A confirmation for a reset
-    // that would do nothing is a prompt that teaches people to answer `y`
-    // without reading, which is the last habit this key should be building.
-    if (input === "x" && selected?.dirty === true) {
-      return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
-    }
-    /**
-     * Enter moves *you*, inside the app: the standpoint walks to the row the
-     * cursor is on, the app stays open, and everything that depends on where
-     * you stand follows — the `*` marker, and above all the refusal to remove
-     * the worktree you are standing in, which stops applying the moment you
-     * step out of it. That is the whole reason this key exists: "cd somewhere
-     * else first" is now one keystroke that never leaves the screen.
-     *
-     * The real shell has not moved — it cannot be moved from here — so `q` is
-     * where the two meet: with the shell function listening, quitting hands it
-     * the standpoint and the shell lands where you stood. Without it the shell
-     * stays put, and `remove` keeps measuring against where it really is.
-     *
-     * A folder is a real directory on disk, so it is a destination too.
-     */
-    if (key.return && current !== undefined) {
-      const destination = pathOf(current, repoRoot);
-
-      return void perform(`moving to ${current.label ?? destination}`, () =>
-        service.moveTo(destination),
-      );
-    }
-
-    /**
-     * `y` yanks the row's path onto the clipboard — the vim spelling, on a
-     * screen that already moves with `j` and `k`.
-     *
-     * Enter moves this app's standpoint, but the path is just as often wanted
-     * somewhere this app is not: another terminal tab, an editor's "open
-     * folder" box. `a` already ends by copying the path of the worktree it
-     * made; this is the same handoff for one that already exists.
-     */
-    if (input === "y" && current !== undefined) {
-      return void perform(`copying the path of ${current.label}`, () =>
-        service.copyPath(pathOf(current, repoRoot)),
-      );
-    }
-
-    /**
-     * `p` proposes, behind a popup that says what it would do before anybody
-     * has typed a word. It sits on any branch that is not the trunk: whether
-     * there is anything to propose is part of what its popup answers.
-     */
-    if (input === "p" && selected && !selected.isDefault && !selected.detached) {
-      return void openPr({ path: selected.path, dir: selected.dir });
-    }
     if (input === "s" && selected) {
       return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
     }
     if (input === "S") return void perform("syncing every worktree", () => service.sync());
     if (input === "R") return void perform("reading worktrees", async () => "refreshed");
-    if (input === "?") {
-      typed.current = filter;
-
-      return setMode({ kind: "prompt", value: filter });
-    }
-    if (input === "q" || key.escape) {
-      // The handoff: the shell function reads this file after the app closes.
-      // Only worth writing when the standpoint actually moved — an empty file
-      // is the wrapper's cue to leave the shell where it already is.
-      const standpoint = service.standpoint();
-      if (onCd !== undefined && standpoint !== startedAt.current) {
-        return void (async () => {
-          await onCd(standpoint);
-          exit();
-        })();
-      }
-
-      return exit();
-    }
+    if (input === "q" || key.escape) return exit();
   });
 
   // The heading of the trunk column, and the branch it compares against. Read
@@ -1143,40 +830,25 @@ export function App({
 
   const hints = useMemo(() => {
     if (mode.kind === "busy") return [{ keys: "ctrl+c", action: "cancel" }];
-    if (mode.kind === "prompt") {
-      const leave = { keys: "esc", action: mode.value.length > 0 ? "clear" : "close" };
-
-      return modeOf(mode.value) === "git"
-        ? [{ keys: "↑↓", action: "move" }, { keys: "enter", action: "run" }, leave]
-        : [
-            { keys: "↑↓", action: "move" },
-            { keys: "enter", action: "select" },
-            leave,
-            { keys: "!", action: "run git" },
-          ];
-    }
-    if (mode.kind === "add" || mode.kind === "pr") {
+    if (mode.kind === "add") {
       return [
-        { keys: "enter", action: mode.kind === "add" ? "add" : "open PR" },
+        { keys: "enter", action: "add" },
         { keys: "esc", action: "cancel" },
       ];
     }
     if (mode.kind === "confirm") {
       return [
-        { keys: "y", action: mode.target.kind === "reset" ? "discard" : "remove" },
+        { keys: "y", action: "remove" },
         { keys: "n", action: "keep" },
       ];
     }
 
-    // A folder offers what a folder can do. Leaving `s` and `r` on it to mean
-    // what they mean on a worktree would be a menu that lies.
+    // A folder offers what a folder can do. Leaving `s` on it to mean what it
+    // means on a worktree would be a menu that lies.
     if (current?.kind === "group") {
       return [
         { keys: "↑↓", action: "move" },
         { keys: "←→", action: current.collapsed ? "open" : "fold" },
-        { keys: "enter", action: "go" },
-        { keys: "y", action: "copy path" },
-        { keys: "?", action: "filter · !git" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
         { keys: "S", action: "sync all" },
@@ -1185,25 +857,16 @@ export function App({
       ];
     }
 
-    // `x` only where it would do something. Offering it on a clean worktree
-    // would be a menu entry whose whole effect is to say "nothing to discard".
     return [
       { keys: "↑↓", action: "move" },
-      { keys: "enter", action: "go" },
-      { keys: "y", action: "copy path" },
-      { keys: "?", action: "filter · !git" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },
-      ...(selected?.dirty === true ? [{ keys: "x", action: "discard" }] : []),
-      ...(selected !== undefined && !selected.isDefault && !selected.detached
-        ? [{ keys: "p", action: "PR" }]
-        : []),
       { keys: "s", action: "sync" },
       { keys: "S", action: "sync all" },
       { keys: "R", action: "refresh" },
       { keys: "q", action: "quit" },
     ];
-  }, [mode, current, under.length, selected]);
+  }, [mode, current, under.length]);
 
   // Every section's height, decided here rather than left to the renderer: the
   // list can only be sliced to fit if something knows what "fit" is.
@@ -1222,26 +885,23 @@ export function App({
   // assumed, for the same reason as the banner.
   const footerRows = 1 + statusBarRows(hints, columns) + 1;
   const detailRows =
-    (mode.kind === "prompt" ? PROMPT_ROWS : 0) +
     (mode.kind === "add" ? 3 : 0) +
-    (mode.kind === "pr" ? 3 + mode.context.length : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     (message === undefined || mode.kind === "busy" ? 0 : messageRows(message));
 
   /**
    * How many rows the activity area may take, out of what is actually left.
    *
-   * Asked of the leftovers rather than of the terminal, because a share of the
-   * whole is a number that can exceed the space there is: 200 lines of `git log`
-   * with `Math.max(1, …)` holding the list open underneath adds up to more rows
-   * than the terminal has, and Ink draws the overflow on top of the banner.
+   * Asked of the leftovers rather than of the terminal, because a fixed number
+   * is one that can exceed the space there is: six rows of progress with
+   * `Math.max(1, …)` holding the list open underneath adds up to more rows than
+   * a short terminal has, and Ink draws the overflow on top of the banner.
    *
    * The list keeps a floor either way. It is the thing being worked in, and a
    * screen that answers one question by hiding the other is not an improvement.
    */
   const spare = terminalRows - headerRows - detailRows - footerRows - MIN_LIST_ROWS - 1;
-  const wanted = roomy ? Math.floor(terminalRows * OUTPUT_SHARE) : ACTIVITY_ROWS;
-  const room = Math.max(0, Math.min(wanted, spare));
+  const room = Math.max(0, Math.min(ACTIVITY_ROWS, spare));
 
   // What did not fit is said rather than silently dropped — the whole reason
   // this exists is that a line went missing off the top without saying so.
@@ -1401,15 +1061,6 @@ export function App({
         </>
       ) : null}
 
-      {mode.kind === "prompt" ? (
-        <Prompt
-          value={mode.value}
-          mode={modeOf(mode.value)}
-          columns={columns}
-          where={selected?.dir ?? "the repository"}
-        />
-      ) : null}
-
       {mode.kind === "add" ? (
         // The base is on the label rather than left to be inferred: `a` on one
         // row and `a` on another now start the branch in different places, and
@@ -1425,35 +1076,11 @@ export function App({
         </Box>
       ) : null}
 
-      {mode.kind === "pr" ? (
-        // The title being typed, and under it the commits the decision rests
-        // on. Dimmed because it is context, not content: what is typed is the
-        // only part that leaves the popup.
-        <Box borderStyle="round" borderColor={theme.accent} paddingX={1} flexDirection="column">
-          <Text wrap="truncate">
-            <Text dimColor>{`PR ${mode.branch} → ${mode.base}   `}</Text>
-            <Text color={theme.accent}>{mode.value}</Text>
-            <Text inverse> </Text>
-          </Text>
-          {mode.context.map((line, index) => (
-            // Index keys, because two files can produce the same line and the
-            // block never reorders while it is up.
-            // biome-ignore lint/suspicious/noArrayIndexKey: static block
-            <Text key={index} dimColor wrap="truncate">
-              {line}
-            </Text>
-          ))}
-        </Box>
-      ) : null}
-
       {mode.kind === "confirm" ? (
-        // Red for anything that discards changes — the reset, and a removal
-        // whose worktree is dirty — amber for a clean removal, because they are
-        // not the same risk: a removed clean worktree leaves its branch and its
-        // commits behind and `grove add` brings it back, while discarded
-        // changes leave nothing at all.
-        // The configure question is neither — nothing it writes destroys
-        // anything — so it is asked in the colour of an ordinary line.
+        // Red for a removal that discards uncommitted changes, amber for a
+        // clean one, because they are not the same risk: a removed clean
+        // worktree leaves its branch and its commits behind and `grove add`
+        // brings it back, while discarded changes leave nothing at all.
         <Text color={colourFor(mode.target)} wrap="truncate">
           {describePending(mode.target)}
         </Text>

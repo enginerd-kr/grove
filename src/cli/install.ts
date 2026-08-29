@@ -117,7 +117,7 @@ export async function installShellInit(
 
   const line = evalLine(resolved);
   const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-  const block = `${separator}\n# grove: 'grove cd' and enter-to-go in the app\n${line}\n`;
+  const block = `${separator}\n# grove: the shell function behind 'grove cd'\n${line}\n`;
 
   await mkdir(dirname(rcFile), { recursive: true });
   await appendFile(rcFile, block);

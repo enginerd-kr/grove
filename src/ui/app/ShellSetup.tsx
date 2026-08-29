@@ -113,10 +113,10 @@ export function ShellSetup({ folder, onDone, home }: Props) {
       {terminalRows >= ROOMY_ROWS ? (
         <Box flexDirection="column" marginTop={1}>
           <Text dimColor wrap="truncate">
-            A child process cannot move the shell that started it, so `grove cd` and
+            A child process cannot move the shell that started it, so `grove cd`
           </Text>
           <Text dimColor wrap="truncate">
-            enter-to-go need one line in your shell's rc file to work at all.
+            needs one line in your shell's rc file to work at all.
           </Text>
         </Box>
       ) : null}

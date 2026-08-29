@@ -5,7 +5,7 @@ instead of the DOM. `Box` is flexbox (via Yoga), `Text` is the only leaf that ma
 strings.
 
 Two things live here. `app/` is the interactive screen a bare `grove` opens — the worktrees, with
-the five commands bound to keys. `components/` is the parts list, shared with
+making, syncing and removing them bound to keys. `components/` is the parts list, shared with
 `src/report/ink-reporter.tsx`, which draws progress for a one-shot command and nothing else.
 
 ```
@@ -18,7 +18,7 @@ app/Banner.tsx    the welcome: name, version, folder — and how many rows it to
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths as the tree they are on disk
-app/service.ts    what the screens are allowed to do, as six functions
+app/service.ts    what the screens are allowed to do: add, sync, remove
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
 e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
@@ -127,44 +127,23 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   so two presses in one frame both read the same rendered index and the second goes nowhere —
   which is exactly what holding an arrow key does. The clamp lives in the updater too, so a list
   that shrank under the cursor cannot leave it past the end.
-- **The screen holds no git knowledge.** `App` takes a `WorktreeService` — four functions, each
-  answering with the line to show afterwards. That is what lets `App.test.tsx` drive every key
+- **The screen holds no git knowledge.** `App` takes a `WorktreeService` — add, sync, remove and
+  the reads behind them, each answering with the line to show afterwards. It is deliberately
+  narrow: a stash, a bisect, a force-push or a PR stays on the command line, where it has to be
+  typed out on purpose rather than reached with one finger. That is what lets `App.test.tsx` drive every key
   with a stub and no repository, and it is why a keystroke cannot grow a capability the command
   line does not have.
-- **Every destructive key goes through the same `confirm`.** `Pending` covers a removal, a
-  folder's worth of removals, and a reset; the question is always "is this the row you meant",
-  and the answer should not depend on remembering which key you pressed. `x` is also hidden and
-  inert on a clean worktree — a confirmation whose only possible outcome is "nothing to discard"
-  is training people to answer `y` without reading.
-- **The prompt reads its line from a ref, not from `mode`.** Keys arrive faster than React
-  commits, and a paste is a whole line and an `enter` inside one frame — reading `mode.value`
-  there acts on the line as it was *before* the paste, which is empty. The same branch splits a
-  pasted newline into "text, then submit", because the printable-only filter would otherwise
-  drop the entire paste for containing a `\r`. Both are pinned by a test that pastes.
-- **The prompt does not take the list's keys away.** The arrows still move the cursor while it is
-  open — the list is what is being looked at, and narrowing then picking should be one motion.
-  Only the real arrows, since `j`/`k` are letters in a text line. `esc` peels one layer: the line,
-  then the box. `enter` pins the selected row and clears the filter, so the filter only ever
-  exists while the box is open — it pins the row explicitly rather than trusting the cursor's
-  anchor, because typing a name until one row is left never moved the cursor, and it resolves
-  past a folder heading, which is where that leaves it.
-- **Filtering swaps the shape of the list, not just its contents** (`filter.ts`). With no filter
-  it is `buildTree`; with one it is `rank` — flat, whole paths, best first. A tree cannot be
-  ranked, and the two jobs are different: folders group the whole set for reading, a ranked list
-  answers a name. `rank` returns `TreeLeaf[]` rather than `TreeRow[]`, which is what lets the
-  screen keep drawing rows without caring which shape produced them.
-- **The activity area is budgeted out of the leftovers, not out of the terminal.** A `!`
-  command's output asks for half the screen and progress asks for six rows, but both are then
-  capped by what is actually free once the banner, prompt, message and key bar have taken theirs,
-  with `MIN_LIST_ROWS` held back for the list. A share of the *whole* is a number that can exceed
-  the space there is — 200 lines of `git log` against a `Math.max(1, …)` floor under the list adds
-  up to more rows than exist, and Ink draws the overflow on top of the banner. Anything clipped is
-  counted on a leading row rather than dropped, since a line going missing off the top without the
-  screen admitting it is what started this.
-- **The prompt's modes are its first character** (`Prompt.tsx`: `modeOf`, `bodyOf`). No mode
-  state to get out of step with what is on screen, and no chrome to switch between them.
-  `tokenize` is quotes-only on purpose: the result goes straight to `git` as an argument list,
-  so there is no shell for a `;` or a `|` to mean anything to.
+- **`r` goes through a `confirm` whichever row it is on.** `Pending` covers a removal and a
+  folder's worth of removals; the question is always "is this the row you meant", and the answer
+  should not depend on how many rows are behind it. What `y` costs is spelled out before it is
+  pressed — the directory goes, the branch stays, and uncommitted changes are counted by kind.
+- **The activity area is budgeted out of the leftovers, not out of the terminal.** Progress asks
+  for six rows, and that is then capped by what is actually free once the banner, message and key
+  bar have taken theirs, with `MIN_LIST_ROWS` held back for the list. A fixed number is one that
+  can exceed the space there is — six rows against a `Math.max(1, …)` floor under the list adds up
+  to more rows than a short terminal has, and Ink draws the overflow on top of the banner.
+  Anything clipped is counted on a leading row rather than dropped, since a line going missing off
+  the top without the screen admitting it is what started this.
 - **One `useInput`, one `mode`.** Every key goes through a single handler that switches on
   `list | add | confirm | busy`, rather than each component claiming its own input. The failure
   that prevents: `a` opening the branch prompt and the next keypress being read as a command.

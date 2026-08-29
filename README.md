@@ -26,7 +26,7 @@ Git worktrees are the perfect solution when you need to work on or compare multi
 
 `grove` solves these issues by enforcing a consistent, automatic layout. One bare clone holds all your git history; every branch gets its own directory based on its branch name (e.g., `feat/login` goes to `feat/login/`); and a simple `.grove.toml` configuration automates the setup for every new worktree.
 
-The result is an interactive terminal dashboard that displays all your worktrees in one view. You can instantly see which branches have drifted from remote, which folders have uncommitted changes, and when you last worked in them. All common actions are bound to simple, single-key shortcuts.
+The result is an interactive terminal dashboard that displays all your worktrees in one view. You can instantly see which branches have drifted from remote, which folders have uncommitted changes, and when you last worked in them. Creating, syncing, and removing worktrees are bound to single-key shortcuts.
 
 ## Installation
 
@@ -61,10 +61,11 @@ grove cd [target]           # Change directory to a worktree (requires shell int
 
 Running `grove` without any arguments opens the interactive terminal UI:
 
-- **Navigate**: Move up and down using `↑`/`↓` or `j`/`k`. Pressing `Enter` inspects a worktree, and pressing `q` exits the UI and changes your shell's current directory to that worktree.
+- **Navigate**: Move up and down using `↑`/`↓` or `j`/`k`, and press `q` to exit.
 - **Expand/Collapse**: Fold or unfold nested branch directories using `←`/`→` or `h`/`l`.
-- **Quick Actions**: Press `a` to add a new worktree, `r` to remove, `x` to discard uncommitted changes, `s` to sync, `p` to open a pull request, and `y` to copy the selected path to the clipboard. Destructive actions will always ask for confirmation first.
-- **Search & Run**: Press `?` to search and filter the list in real-time. Or, start typing with `!` (e.g., `!git status` or `!log -3`) to run raw Git commands directly inside the selected worktree.
+- **Quick Actions**: Press `a` to add a worktree, `r` to remove one — or every worktree under the selected folder — `s` to sync the selected worktree, and `S` to sync them all. `R` re-reads the list on demand. Removals always ask for confirmation first, and say what they would discard.
+
+The keys stay deliberately few: they are the three things worktree management is made of. Everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out on purpose.
 
 ## Directory Layout
 

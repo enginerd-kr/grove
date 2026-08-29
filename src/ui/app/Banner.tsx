@@ -116,7 +116,7 @@ function tipFor(worktrees?: number): string {
   if (worktrees === undefined) return `run ${BIN_NAME} clone <url> to plant a repository here`;
   if (worktrees === 0) return "press a to plant your first worktree";
 
-  return "press a to add, enter to go, ? to filter";
+  return "press a to add, s to sync, r to remove";
 }
 
 type Props = {

@@ -1,51 +1,29 @@
-import { relative } from "node:path";
 import { fetchRemotes } from "../../core/branches.ts";
 import { copyToClipboard } from "../../core/clipboard.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
-import { createPr, type PrPreview, prPreview } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
-import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
-import { GroveError } from "../../core/errors.ts";
-import { runGit } from "../../core/git.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../core/setup.ts";
 import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
 import type { Reporter } from "../../report/reporter.ts";
 
 /**
- * What the screen is allowed to do, as four functions.
+ * What the screen is allowed to do: make a worktree, sync one, remove one.
  *
  * The app talks to this rather than to `core/commands` directly, for the same
  * reason the components take props rather than reading state: a test can hand
  * over a stub and drive the whole interface without a git repository, and the
  * screen cannot quietly grow a capability the command line does not have.
+ *
+ * Deliberately narrow. Everything else git can do — a stash, a bisect, a
+ * force-push, a PR — stays on the command line, where it has to be typed out
+ * on purpose rather than reached with one finger.
  */
 export type WorktreeService = {
   readonly list: () => Promise<readonly WorktreeSummary[]>;
-  /**
-   * Move where the service stands, without moving any process at all.
-   *
-   * "Where you are" decides real things — which worktree `*` marks, and above
-   * all which worktree `remove` refuses to delete out from under you. The app
-   * is a resident process, so its standpoint is just state: enter changes it,
-   * every later command reads it, and quitting hands it to the shell function
-   * if one is listening. The OS cwd never moves; nothing here uses it.
-   */
-  readonly moveTo: (path: string) => Promise<string>;
-  /** Where the service currently stands. What `q` hands the shell. */
-  readonly standpoint: () => string;
-  /**
-   * Put a directory's path on the clipboard, and say so.
-   *
-   * The same copy `add` does for the worktree it just made, offered for the
-   * ones that already exist — the path is for a terminal this screen is not
-   * in, so the clipboard is the only way to hand it over. Unlike `add`'s
-   * best-effort copy, a failure here is the whole outcome and is thrown.
-   */
-  readonly copyPath: (path: string) => Promise<string>;
   /**
    * Refresh the remote-tracking refs, so `↑2 ↓1` means what it says.
    *
@@ -77,24 +55,6 @@ export type WorktreeService = {
    * refuses does not stop the rest; the answer says how many did what.
    */
   readonly removeMany: (targets: readonly string[], discardDirty?: boolean) => Promise<string>;
-  /**
-   * Everything one worktree has changed, thrown away: `git reset --hard` and
-   * `git clean -fd`.
-   *
-   * Both halves, because "discard" that leaves files behind is a label that
-   * lies — and a worktree still marked dirty after you discarded its changes is
-   * exactly the confusion the dot was added to prevent. The confirmation is
-   * where the care goes: it counts the two kinds separately, so what is about to
-   * disappear is on screen before anyone answers.
-   *
-   * `.gitignore` still protects what it protects — `clean -fd` does not touch
-   * ignored files, only ones git was never told about.
-   *
-   * `--to` is the spelling that stays on the command line. Discarding changes is
-   * one thing; discarding commits is another, and only one of them belongs on a
-   * key.
-   */
-  readonly reset: (target: string) => Promise<string>;
   /** `target` omitted means every worktree — the app's `S`. */
   readonly sync: (target?: string) => Promise<string>;
   /**
@@ -114,25 +74,6 @@ export type WorktreeService = {
    * here rather than skipping it silently.
    */
   readonly trustAndRun: (branch: string) => Promise<string>;
-  /** Title and body a PR would open with — `gh --fill`'s guesses, shown first. */
-  readonly prPreview: (target: string) => Promise<PrPreview>;
-  /** Push if needed, then `gh pr create`. Answers with the URL. */
-  readonly createPr: (target: string, title: string, body: string) => Promise<string>;
-  /**
-   * Any git command at all, in one worktree.
-   *
-   * The deliberate hole in everything above. The rest of this interface is four
-   * commands with their destructive spellings filed off, which is right for a
-   * keystroke and wrong as the whole story — `git stash`, `git bisect`, and
-   * `git push --force-with-lease` are not things this tool is going to grow
-   * keys for, and being unable to reach them from the screen would just mean
-   * quitting it to type them.
-   *
-   * So: typed out in full, on purpose, prefixed with a `!` that nothing else
-   * uses. `args` is an argument list handed straight to `git` with no shell in
-   * between, so a `;` in there is an argument and not a second command.
-   */
-  readonly git: (args: readonly string[], cwd: string) => Promise<string>;
 };
 
 /**
@@ -169,14 +110,6 @@ export function createSetupService(
   };
 }
 
-/**
- * How much of a `!` command's output reaches the screen.
- *
- * The activity area holds six rows, and a `git log` is thousands — so the
- * cut-off is stated rather than left to look like the whole answer.
- */
-const GIT_OUTPUT_LINES = 40;
-
 /** How a finished sync reads: counts by outcome, worst first. */
 function describeSync(outcomes: readonly { kind: string; dir: string }[]): string {
   if (outcomes.length === 0) return "nothing to sync";
@@ -194,52 +127,11 @@ function describeSync(outcomes: readonly { kind: string; dir: string }[]): strin
 
 export function createWorktreeService(
   repo: RepoPaths,
-  initialCwd: string,
+  cwd: string,
   reporter: Reporter,
-  options: { readonly shellFollows?: boolean } = {},
 ): WorktreeService {
-  // The standpoint. `let`, because moving it is the point: every closure below
-  // reads this variable, so one assignment moves the whole service.
-  let cwd = initialCwd;
-
-  /**
-   * What the removal safety check measures against.
-   *
-   * The check exists to protect a shell from being stranded in a deleted
-   * directory. With the shell function listening, quitting relocates the shell
-   * to the standpoint, so the standpoint is the truth. Without it the real
-   * shell never moves however far enter wanders, so the launch directory stays
-   * the one that must not be deleted.
-   */
-  const shellCwd = () => (options.shellFollows === true ? cwd : initialCwd);
-
   return {
     list: () => listWorktreeSummaries(repo, cwd),
-
-    moveTo: async (path) => {
-      cwd = path;
-      const dir = relative(repo.root, path) || ".";
-
-      return `now in ${dir === "." ? "the repo root" : dir}`;
-    },
-
-    standpoint: () => cwd,
-
-    copyPath: async (path) => {
-      // Thrown rather than swallowed, unlike `add`'s copy: there the worktree
-      // was the outcome and the copy a courtesy, here the copy *is* what the
-      // key was pressed for, and pretending it happened would leave someone
-      // pasting whatever the clipboard held before.
-      if (!(await copyToClipboard(path))) {
-        throw new GroveError("refused", "nothing was copied — no clipboard tool answered", {
-          hint: "install wl-copy, xclip, or xsel",
-        });
-      }
-
-      // The full path, because that is what the clipboard now holds — the one
-      // line that lets the paste be trusted without being tried.
-      return `copied ${path}`;
-    },
 
     fetch: () => fetchRemotes(repo.gitDir),
 
@@ -277,7 +169,7 @@ export function createWorktreeService(
       // that — the confirmation counted them before `y` was pressed.
       const result = await removeWorktree(
         repo,
-        shellCwd(),
+        cwd,
         { target, force: false, deleteBranch: false, discardDirty },
         reporter,
       );
@@ -299,7 +191,7 @@ export function createWorktreeService(
         try {
           await removeWorktree(
             repo,
-            shellCwd(),
+            cwd,
             { target, force: false, deleteBranch: false, discardDirty },
             reporter,
           );
@@ -318,46 +210,6 @@ export function createWorktreeService(
       if (refusals.length === 0) return `removed ${removed} worktree${plural}`;
 
       return `removed ${removed} worktree${plural}, ${refusals.length} refused`;
-    },
-
-    reset: async (target) => {
-      const result = await resetWorktree(repo, cwd, { target, clean: true }, reporter);
-
-      if (result.changed === 0) return `${result.dir} had nothing to discard`;
-
-      const tracked = result.changed - result.untracked;
-
-      return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
-    },
-
-    prPreview: (target) => prPreview(repo, cwd, target),
-
-    createPr: async (target, title, body) => {
-      const result = await createPr(repo, cwd, { target, title, body }, reporter);
-
-      return result.url;
-    },
-
-    git: async (args, at) => {
-      const result = await runGit(args, { cwd: at });
-
-      // Reported whichever stream it came on and whatever the exit code: git
-      // says useful things on stderr when it succeeds, and the exit code is
-      // information rather than a reason to hide the output.
-      const output = [result.stdout, result.stderr]
-        .join("\n")
-        .split("\n")
-        .map((line) => line.trimEnd())
-        .filter((line) => line.length > 0);
-
-      for (const line of output.slice(0, GIT_OUTPUT_LINES)) reporter.info(line);
-
-      const trimmed = output.length - GIT_OUTPUT_LINES;
-      if (trimmed > 0) reporter.info(`… ${trimmed} more line(s)`);
-
-      if (result.code !== 0) return `git ${args.join(" ")} exited ${result.code}`;
-
-      return output.length === 0 ? `git ${args.join(" ")} — no output` : `git ${args[0] ?? ""} ok`;
     },
 
     pendingCommands: () => pendingCommands(repo),

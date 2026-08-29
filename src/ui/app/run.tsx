@@ -85,7 +85,6 @@ type GroveProps = {
   readonly cwd: string;
   readonly store: LineStore;
   readonly reporter: Reporter;
-  readonly onCd?: (path: string) => Promise<void>;
 };
 
 /**
@@ -95,7 +94,7 @@ type GroveProps = {
  * before its screen is due: `createWorktreeService` needs the repository that
  * `Setup` is in the middle of making.
  */
-function Grove({ found, folder, inPlace, cwd, store, reporter, onCd }: GroveProps) {
+function Grove({ found, folder, inPlace, cwd, store, reporter }: GroveProps) {
   const [paths, setPaths] = useState(found);
 
   // Memoised, and not as a micro-optimisation: `App` starts a fetch when its
@@ -106,15 +105,8 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCd }: GroveProp
     [folder, inPlace, reporter],
   );
   const worktrees = useMemo(
-    () =>
-      paths === undefined
-        ? undefined
-        : // `shellFollows`: with the wrapper listening, quitting relocates the
-          // shell to wherever enter walked, so the removal safety check may
-          // measure against the standpoint. Without it the real shell never
-          // moves, and the launch directory stays the one that must survive.
-          createWorktreeService(paths, cwd, reporter, { shellFollows: onCd !== undefined }),
-    [paths, cwd, reporter, onCd],
+    () => (paths === undefined ? undefined : createWorktreeService(paths, cwd, reporter)),
+    [paths, cwd, reporter],
   );
   // Memoised like the services and for the same reason: `App`'s startup effect
   // depends on it, so a new function every render would be a check every render.
@@ -142,7 +134,6 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCd }: GroveProp
       repoRoot={paths.root}
       store={store}
       onCancel={killRunningGit}
-      onCd={onCd}
       checkUpdate={checkUpdate}
     />
   );
@@ -177,24 +168,16 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
 
   const store = new LineStore();
 
-  // The wrapper `shell-init` installs points this at a temp file it will read
-  // after the app exits — how "enter means cd" crosses the process boundary a
-  // child cannot cross itself. A newline goes with the path so `cat` in the
-  // wrapper reads a whole line, and unset means no wrapper: enter stays inert.
-  const cdFile = process.env.GROVE_CD_FILE;
-  const onCd =
-    cdFile === undefined || cdFile.length === 0
-      ? undefined
-      : async (path: string) => {
-          await Bun.write(cdFile, `${path}\n`);
-        };
+  // Whether the wrapper `shell-init` installs is what started this. It hands
+  // every run a temp file through `GROVE_CD_FILE` — nothing here writes to it
+  // any more, but its presence is still the only signal that says the function
+  // is in this shell's rc file, which is what decides whether `grove cd` works.
+  const shellWrapped = (process.env.GROVE_CD_FILE ?? "").length > 0;
 
-  // Without the wrapper, `onCd` is undefined regardless of whether it was ever
-  // installed — so this is the one place able to tell "never asked" apart from
-  // "asked, and this shell just isn't listening right now". Stamped before the
-  // screen is even rendered, the same way `installShellInit` stamps a decline:
-  // a launch that opens the screen has been offered it, whatever happens next.
-  const showShellSetup = shellSetupEnabled() && onCd === undefined && !(await hasSeenShellSetup());
+  // Stamped before the screen is even rendered, the same way `installShellInit`
+  // stamps a decline: a launch that opens the screen has been offered it,
+  // whatever happens next.
+  const showShellSetup = shellSetupEnabled() && !shellWrapped && !(await hasSeenShellSetup());
   if (showShellSetup) await markShellSetupSeen();
 
   // Results have nowhere else to go in an app: there is no pipeline waiting on
@@ -213,7 +196,6 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<voi
       cwd={cwd}
       store={store}
       reporter={reporter}
-      onCd={onCd}
     />,
     {
       // A screen, not a scroll: the app takes the alternate buffer, so quitting

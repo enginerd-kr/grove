@@ -211,54 +211,12 @@ const SHELL_ENV: Readonly<Record<string, string>> = {
 };
 
 /**
- * Runs another tool by name — today that is `gh`, and only for PRs.
- *
- * `null` means the tool is not installed, which is an answer and not an error:
- * everything else in grove works without it, so the caller gets to say
- * "install gh" next to the one feature that wants it rather than this throwing
- * something generic. Environment prompting is disabled the same way it is for
- * git — a tool that stops to ask a question nobody is watching has hung.
- */
-export async function runTool(
-  argv: readonly [string, ...string[]],
-  { cwd, env }: GitOptions = {},
-): Promise<GitResult | null> {
-  const startedAt = performance.now();
-
-  let result: GitResult;
-  try {
-    result = await spawnProcess(
-      argv,
-      { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1", ...env },
-      { cwd },
-    );
-  } catch (error) {
-    // Bun.spawn throws when the executable does not exist on PATH.
-    if (error instanceof Error && /[Ee]xecutable not found|ENOENT/.test(error.message)) {
-      trace?.(`${argv.join(" ")} → not installed`);
-
-      return null;
-    }
-    throw error;
-  }
-
-  trace?.(
-    `${argv.map(quote).join(" ")}${cwd === undefined ? "" : ` in ${quote(cwd)}`} → ${
-      result.code === 0 ? "ok" : `exit ${result.code}`
-    }, ${Math.round(performance.now() - startedAt)}ms`,
-  );
-
-  return result;
-}
-
-/**
  * Runs one configured command line, through `sh`, in a worktree.
  *
- * This *is* a shell, unlike the app's `!` — and the difference is who is
- * speaking. `!` is a keystroke away from a running screen, so `!log; rm -rf ~`
- * had better be one argument list; `grove.setup` was typed into `git config`
+ * This *is* a shell, deliberately: `grove.setup` was typed into `git config`
  * on purpose, once, by the person whose machine it runs on, and it is written
- * expecting `&&` and `$HOME` to mean what they mean everywhere else.
+ * expecting `&&` and `$HOME` to mean what they mean everywhere else. Nothing
+ * a keystroke reaches gets here.
  */
 export async function runShell(
   command: string,

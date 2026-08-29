@@ -56,11 +56,6 @@ async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
       rows={shot.rows}
       refreshMs={NO_REFRESH}
       tipRotateMs={NO_REFRESH}
-      // The shell function, listening. `grove install` is the second line of
-      // the README's install block, so the pictures show the screen as the
-      // people reading them will have it — and not its "you have not run that
-      // yet" tip, which is advice about the install rather than about grove.
-      onCd={async () => {}}
     />,
     shot.columns,
     shot.rows,
@@ -91,25 +86,10 @@ const list: Shot = {
   rows: 28,
   title: "grove — every worktree, and what has moved under it",
   async drive(session) {
-    // Onto `feat/login`: the row with commits of its own, so the key bar is the
-    // full one — `p` for the PR it could open, and `s` for the trunk it is behind.
+    // Onto `feat/login`: the row that has drifted from the trunk, so `s` on the
+    // key bar has something to do.
     for (let step = 0; step < 4; step++) await session.press(keys.down);
     await session.settle(200);
-  },
-};
-
-/** One prompt, two jobs: narrowing the list, and running git in the row it lands on. */
-const prompt: Shot = {
-  name: "prompt",
-  columns: 112,
-  rows: 32,
-  title: "grove — ! runs git in the worktree the cursor is on",
-  async drive(session) {
-    await session.press("?");
-    await session.type("!log --oneline -5");
-    await session.press(keys.enter);
-    await session.until("Start ");
-    await session.settle(300);
   },
 };
 
@@ -133,7 +113,7 @@ const add: Shot = {
 process.stdout.write("shooting the README:\n");
 const fixture = await buildFixture();
 try {
-  for (const shot of [list, prompt, add]) await shoot(fixture, shot);
+  for (const shot of [list, add]) await shoot(fixture, shot);
 } finally {
   await fixture.dispose();
 }

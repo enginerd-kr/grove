@@ -11,10 +11,11 @@
  * - `grove cd [target]` — `cd` to what `grove path …` answers, spelled the
  *   short way. No target is the repository root, the one directory that is
  *   never a worktree: the place to stand while removing anything.
- * - enter, in the app — the wrapper hands every run a temp file via
- *   `GROVE_CD_FILE`; the app writes the selected worktree there on enter, and
- *   the wrapper cds after the screen closes. Without the wrapper the file is
- *   never offered and enter explains itself instead.
+ *
+ * Every other run is passed straight through inside a `GROVE_CD_FILE` the
+ * wrapper offers and nothing currently writes to. It is kept because it is the
+ * one signal that tells a running `grove` the function is installed at all,
+ * which is what the first-run offer to install it is gated on.
  *
  * The function calls back into grove **by the spelling that just printed
  * it** — the running runtime and entry script, absolute paths and all — not a
