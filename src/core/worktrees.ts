@@ -37,53 +37,32 @@ export function parseWorktreeList(porcelain: string): readonly WorktreeRecord[] 
   const records: WorktreeRecord[] = [];
 
   for (const block of porcelain.split(/\n\s*\n/)) {
-    let path: string | undefined;
-    let head: string | undefined;
-    let branch: string | undefined;
-    let detached = false;
-    let bare = false;
-    let locked: string | undefined;
-    let prunable: string | undefined;
+    const attrs = new Map<string, string>();
 
     for (const line of block.split("\n")) {
       if (line.length === 0) continue;
 
       const space = line.indexOf(" ");
-      const key = space === -1 ? line : line.slice(0, space);
-      const value = space === -1 ? "" : line.slice(space + 1);
-
-      switch (key) {
-        case "worktree":
-          path = value;
-          break;
-        case "HEAD":
-          head = value;
-          break;
-        case "branch":
-          branch = value.replace(/^refs\/heads\//, "");
-          break;
-        case "detached":
-          detached = true;
-          break;
-        case "bare":
-          bare = true;
-          break;
-        // Both can appear with or without a reason, so the empty string is a
-        // meaningful value here and `undefined` is what means "not locked".
-        case "locked":
-          locked = value;
-          break;
-        case "prunable":
-          prunable = value;
-          break;
-        default:
-          break;
-      }
+      attrs.set(
+        space === -1 ? line : line.slice(0, space),
+        space === -1 ? "" : line.slice(space + 1),
+      );
     }
 
-    if (path !== undefined) {
-      records.push({ path, head, branch, detached, bare, locked, prunable });
-    }
+    const path = attrs.get("worktree");
+    if (path === undefined) continue;
+
+    records.push({
+      path,
+      head: attrs.get("HEAD"),
+      branch: attrs.get("branch")?.replace(/^refs\/heads\//, ""),
+      detached: attrs.has("detached"),
+      bare: attrs.has("bare"),
+      // Both can appear with or without a reason, so the empty string is a
+      // meaningful value here and `undefined` is what means "not locked".
+      locked: attrs.get("locked"),
+      prunable: attrs.get("prunable"),
+    });
   }
 
   return records;

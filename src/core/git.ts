@@ -109,9 +109,16 @@ function traceCommand(
   ms: number,
 ): void {
   const where = cwd === undefined ? [] : ["-C", quote(cwd)];
+
+  traceRun(`git ${[...where, ...args.map(quote)].join(" ")}`, undefined, result, ms);
+}
+
+/** The tail every finished-command line shares: where it ran, how it went, how long it took. */
+function traceRun(what: string, cwd: string | undefined, result: GitResult, ms: number): void {
+  const where = cwd === undefined ? "" : ` in ${quote(cwd)}`;
   const outcome = result.code === 0 ? "ok" : `exit ${result.code}`;
 
-  trace?.(`git ${[...where, ...args.map(quote)].join(" ")} → ${outcome}, ${Math.round(ms)}ms`);
+  trace?.(`${what}${where} → ${outcome}, ${Math.round(ms)}ms`);
 }
 
 async function drain(
@@ -245,7 +252,7 @@ const SHELL_ENV: Readonly<Record<string, string>> = {
  */
 export async function runTool(
   argv: readonly [string, ...string[]],
-  { cwd, env }: GitOptions = {},
+  { cwd, env }: Pick<GitOptions, "cwd" | "env"> = {},
 ): Promise<GitResult | null> {
   const startedAt = performance.now();
 
@@ -266,11 +273,7 @@ export async function runTool(
     throw error;
   }
 
-  trace?.(
-    `${argv.map(quote).join(" ")}${cwd === undefined ? "" : ` in ${quote(cwd)}`} → ${
-      result.code === 0 ? "ok" : `exit ${result.code}`
-    }, ${Math.round(performance.now() - startedAt)}ms`,
-  );
+  traceRun(argv.map(quote).join(" "), cwd, result, performance.now() - startedAt);
 
   return result;
 }
@@ -294,11 +297,7 @@ export async function runShell(
     { cwd, onStderrLine },
   );
 
-  trace?.(
-    `sh -c ${quote(command)}${cwd === undefined ? "" : ` in ${quote(cwd)}`} → ${
-      result.code === 0 ? "ok" : `exit ${result.code}`
-    }, ${Math.round(performance.now() - startedAt)}ms`,
-  );
+  traceRun(`sh -c ${quote(command)}`, cwd, result, performance.now() - startedAt);
 
   return result;
 }

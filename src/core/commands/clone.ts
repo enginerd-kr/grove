@@ -4,13 +4,14 @@ import type { Reporter } from "../../report/reporter.ts";
 import {
   defaultBranch,
   enableReflogs,
+  localBranchExists,
   localBranches,
   remoteBranchExists,
   updateRemoteHead,
 } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { isDirectory, isEmptyOrMissing, pathExists } from "../fs.ts";
-import { gitOutput, parseGitProgress, runGit, runGitOrThrow } from "../git.ts";
+import { gitOutput, parseGitProgress, runGitOrThrow } from "../git.ts";
 import {
   GIT_FILE_CONTENTS,
   looksLikeRepoUrl,
@@ -186,11 +187,7 @@ async function configureRemote(bare: string, reporter: Reporter): Promise<void> 
 }
 
 async function createFirstWorktree(bare: string, branch: string, path: string): Promise<void> {
-  const exists = await runGit(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], {
-    cwd: bare,
-  });
-
-  if (exists.code !== 0) {
+  if (!(await localBranchExists(bare, branch))) {
     throw new GroveError("usage", `the remote has no branch named ${JSON.stringify(branch)}`, {
       hint: "omit --branch to use the remote's default",
     });

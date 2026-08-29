@@ -12,6 +12,7 @@ import {
   plannedCount,
   readSetupFile,
   SETUP_FILE,
+  type SetupEnv,
   type SetupPlan,
   trust,
 } from "./setup-file.ts";
@@ -495,27 +496,12 @@ export async function runSetup(
   const overwritten: string[] = [];
   const missing: string[] = [];
   const kept: string[] = [];
-  const ran: string[] = [];
-  let failed: SetupFailure | undefined;
 
-  // No file is the common case, and it costs one `stat` and not one line of
-  // output. A tool that announced "nothing to set up" after every `add` would
-  // have made the screen worse for everybody who never asked for this.
-  if (planned === 0) {
-    return {
-      path: target.path,
-      dir,
-      planned,
-      copied,
-      linked,
-      ran,
-      missing,
-      kept,
-      overwritten,
-      untrusted: false,
-    };
-  }
-
+  // An empty plan falls straight through: nothing to take, no trust to ask
+  // about, no commands to run. No file is the common case, and it costs one
+  // `stat` and not one line of output — a tool that announced "nothing to set
+  // up" after every `add` would have made the screen worse for everybody who
+  // never asked for this.
   const wanted = [
     ...plan.copy.map((path) => ({ kind: "copy" as const, path })),
     ...plan.link.map((path) => ({ kind: "link" as const, path })),
@@ -574,17 +560,58 @@ export async function runSetup(
     }
   }
 
-  /**
-   * The commands wait on somebody having read the file.
-   *
-   * This is the whole price of a configuration that travels with the project:
-   * `copy` and `link` move files already on your disk, and `run` is a command
-   * that arrived over the network. So the files land either way and the
-   * commands do not, until `grove trust` records these exact contents — and
-   * they stop again the moment a pull changes them.
-   */
+  const { ran, failed, untrusted } = await runCommandSection(
+    repo,
+    target,
+    plan,
+    plan,
+    { noun: "command", tail: "read it, then add with --trust" },
+    reporter,
+  );
+
+  return {
+    path: target.path,
+    dir,
+    planned,
+    copied,
+    linked,
+    ran,
+    missing,
+    kept,
+    overwritten,
+    failed,
+    untrusted,
+  };
+}
+
+/**
+ * The commands one section asks for, run once somebody has read the file.
+ *
+ * `[setup]` and `[teardown]` differ in which commands they hold and in what the
+ * warning says; everything else about running them is the same, and being the
+ * same is the point — one `--trust` covers both sections and one edit withdraws
+ * both, which only stays true while one piece of code decides it.
+ *
+ * This is the whole price of a configuration that travels with the project:
+ * `copy` and `link` move files already on your disk, and `run` is a command
+ * that arrived over the network. So the files land either way and the commands
+ * do not, until `--trust` records these exact contents — and they stop again
+ * the moment a pull changes them.
+ */
+async function runCommandSection(
+  repo: RepoPaths,
+  target: SetupTarget,
+  /** The whole file, for the fingerprint that trust is keyed on and the path to name. */
+  plan: SetupPlan,
+  section: { readonly commands: readonly string[]; readonly env: readonly SetupEnv[] },
+  /** How the refusal reads: `2 teardown commands in … — the worktree still goes`. */
+  warning: { readonly noun: string; readonly tail: string },
+  reporter: Reporter,
+): Promise<{ ran: readonly string[]; failed?: SetupFailure; untrusted: boolean }> {
+  const { commands, env } = section;
+
   const untrusted =
-    plan.commands.length > 0 &&
+    commands.length > 0 &&
     plan.fingerprint !== undefined &&
     !(await isTrusted(repo.gitDir, plan.fingerprint));
 
@@ -595,10 +622,12 @@ export async function runSetup(
     const where = plan.path === undefined ? SETUP_FILE : relative(repo.root, plan.path);
 
     reporter.warn(
-      `${plural(plan.commands.length, "command")} in ${where} ${
-        plan.commands.length === 1 ? "has" : "have"
-      } not been trusted here — read it, then add with --trust`,
+      `${plural(commands.length, warning.noun)} in ${where} ${
+        commands.length === 1 ? "has" : "have"
+      } not been trusted here — ${warning.tail}`,
     );
+
+    return { ran: [], untrusted };
   }
 
   /**
@@ -613,13 +642,16 @@ export async function runSetup(
    * and a token belongs in no scrollback.
    */
   const commandEnv = {
-    ...Object.fromEntries(plan.env.map(({ name, value }) => [name, value])),
+    ...Object.fromEntries(env.map(({ name, value }) => [name, value])),
     GROVE_ROOT: repo.root,
     GROVE_WORKTREE: target.path,
     GROVE_BRANCH: target.branch ?? "",
   };
 
-  for (const command of untrusted ? [] : plan.commands) {
+  const ran: string[] = [];
+  let failed: SetupFailure | undefined;
+
+  for (const command of commands) {
     const step = reporter.step(`running ${command}`);
     const result = await runShell(command, { cwd: target.path, env: commandEnv });
 
@@ -636,19 +668,7 @@ export async function runSetup(
     ran.push(command);
   }
 
-  return {
-    path: target.path,
-    dir,
-    planned,
-    copied,
-    linked,
-    ran,
-    missing,
-    kept,
-    overwritten,
-    failed,
-    untrusted,
-  };
+  return { ran, failed, untrusted };
 }
 
 export type TeardownResult = {
@@ -683,52 +703,19 @@ export async function runTeardown(
 ): Promise<TeardownResult> {
   const dir = worktreeDir(repo.root, target.path);
   const plan = await repoSetupPlan(repo, target.path);
-  const { commands, env } = plan.teardown;
+  const { commands } = plan.teardown;
 
-  if (commands.length === 0) {
-    return { dir, planned: 0, ran: [], untrusted: false };
-  }
-
-  const untrusted =
-    plan.fingerprint !== undefined && !(await isTrusted(repo.gitDir, plan.fingerprint));
-
-  if (untrusted) {
-    const where = plan.path === undefined ? SETUP_FILE : relative(repo.root, plan.path);
-    reporter.warn(
-      `${plural(commands.length, "teardown command")} in ${where} ${
-        commands.length === 1 ? "has" : "have"
-      } not been trusted here — the worktree still goes, but nothing was run in it`,
-    );
-
-    return { dir, planned: commands.length, ran: [], untrusted };
-  }
-
-  const commandEnv = {
-    ...Object.fromEntries(env.map(({ name, value }) => [name, value])),
-    GROVE_ROOT: repo.root,
-    GROVE_WORKTREE: target.path,
-    GROVE_BRANCH: target.branch ?? "",
-  };
-
-  const ran: string[] = [];
-  let failed: SetupFailure | undefined;
-
-  for (const command of commands) {
-    const step = reporter.step(`running ${command}`);
-    const result = await runShell(command, { cwd: target.path, env: commandEnv });
-
-    if (result.code !== 0) {
-      step.fail(`${command} exited ${result.code}`);
-      // The rest do not run, for the same reason `[setup]`'s do not: they were
-      // written as a sequence, and the second half of a teardown usually
-      // assumes the first half happened.
-      failed = { command, code: result.code, details: tail(result.stderr, result.stdout) };
-      break;
-    }
-
-    step.succeed(`ran ${command}`);
-    ran.push(command);
-  }
+  const { ran, failed, untrusted } = await runCommandSection(
+    repo,
+    target,
+    plan,
+    plan.teardown,
+    {
+      noun: "teardown command",
+      tail: "the worktree still goes, but nothing was run in it",
+    },
+    reporter,
+  );
 
   return { dir, planned: commands.length, ran, failed, untrusted };
 }

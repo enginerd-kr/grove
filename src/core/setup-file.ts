@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { GroveError } from "./errors.ts";
-import { gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
-import { BARE_DIR } from "./layout.ts";
+import { runGit, runGitOrThrow } from "./git.ts";
 
 /**
  * `.grove.toml` — how a repository says what its worktrees need.
@@ -341,50 +340,4 @@ export async function isTrusted(bare: string, fingerprint: string): Promise<bool
 /** Records these contents as read and agreed to. Replaces any earlier answer. */
 export async function trust(bare: string, fingerprint: string): Promise<void> {
   await runGitOrThrow(["config", "--replace-all", TRUST_KEY, fingerprint], { cwd: bare });
-}
-
-/** Forgets every answer, so the next run asks again. */
-export async function revokeTrust(bare: string): Promise<boolean> {
-  return gitSucceeds(["config", "--unset-all", TRUST_KEY], { cwd: bare });
-}
-
-/**
- * The file `--detect` proposes, as text somebody can read before it exists.
- *
- * Directories arrive commented out rather than left out. `link` shares one copy
- * between every worktree, which is right for a dependency cache and wrong for
- * anything a build writes into — so the line is written, and uncommenting it is
- * where the decision goes.
- *
- * `copy` is the third answer and is described rather than written: it takes a
- * directory too, but it already has a line of its own above, and a second one
- * waiting to be uncommented would be a duplicate key the moment somebody did.
- */
-export function renderSetupFile(files: readonly string[], directories: readonly string[]): string {
-  const list = (values: readonly string[]) =>
-    `[${values.map((value) => JSON.stringify(value)).join(", ")}]`;
-
-  const lines = ["[setup]"];
-
-  if (files.length > 0) lines.push(`copy = ${list(files)}`);
-  if (directories.length > 0) {
-    lines.push("");
-    lines.push("# A directory is a decision. `link` shares one copy between every worktree,");
-    lines.push("# which suits a dependency cache and not a build output; adding it to `copy`");
-    lines.push("# gives each worktree its own; a `run` command rebuilds it in each instead.");
-    lines.push("# Uncomment whichever is true here.");
-    lines.push(`# link = ${list(directories)}`);
-    lines.push(`# run = ["bun install"]`);
-  }
-
-  return `${lines.join("\n")}\n`;
-}
-
-/** Where the file goes, and the `.bare` guard nothing else would catch. */
-export function setupFilePath(worktree: string): string {
-  if (worktree.endsWith(BARE_DIR)) {
-    throw new GroveError("usage", `${SETUP_FILE} belongs in a worktree, not in ${BARE_DIR}`);
-  }
-
-  return join(worktree, SETUP_FILE);
 }

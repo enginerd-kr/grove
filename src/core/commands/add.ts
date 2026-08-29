@@ -1,8 +1,8 @@
 import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, localBranchExists, remoteBranchExists } from "../branches.ts";
+import { defaultBranch, localBranchExists, pushUpstream, remoteBranchExists } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
-import { runGit, runGitOrThrow } from "../git.ts";
+import { gitSucceeds, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { contains, worktreePathFor } from "../layout.ts";
 import {
@@ -127,7 +127,8 @@ export async function addWorktree(
     throw error;
   }
 
-  if (options.push) await pushBranch(path, options.branch, reporter);
+  const pushFailure = `created the worktree, but pushing ${options.branch} failed`;
+  if (options.push) await pushUpstream(path, options.branch, reporter, pushFailure);
 
   // Before setup, not after. Setup copies files in and runs commands over what
   // it finds, and `git stash apply` wants a tree it has not already been
@@ -150,14 +151,6 @@ export async function addWorktree(
   };
 }
 
-/**
- * The worktree `--take` empties, which is the one the shell is standing in.
- *
- * Never guessed at. "The worktree you were last in", or the trunk, or the only
- * dirty one would each be a rule somebody has to learn before they dare use
- * the flag — and the cost of learning it wrong is a directory emptied that
- * nobody meant. Standing somewhere is the one answer that needs no rule.
- */
 /**
  * The move, with the one fact its own error cannot know added to it.
  *
@@ -188,6 +181,14 @@ async function take(
   }
 }
 
+/**
+ * The worktree `--take` empties, which is the one the shell is standing in.
+ *
+ * Never guessed at. "The worktree you were last in", or the trunk, or the only
+ * dirty one would each be a rule somebody has to learn before they dare use
+ * the flag — and the cost of learning it wrong is a directory emptied that
+ * nobody meant. Standing somewhere is the one answer that needs no rule.
+ */
 function takeSource(cwd: string, worktrees: readonly WorktreeRecord[]): string {
   const here = worktrees.find((record) => contains(record.path, cwd));
 
@@ -346,11 +347,9 @@ async function resolveSource(
   }
 
   const base = options.from ?? `${REMOTE}/${await defaultBranch(bare)}`;
-  const resolved = await runGit(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], {
-    cwd: bare,
-  });
-
-  if (resolved.code !== 0) {
+  if (
+    !(await gitSucceeds(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], { cwd: bare }))
+  ) {
     throw new GroveError("usage", `cannot start a branch from ${JSON.stringify(base)}`, {
       hint: options.from ? "--from takes a branch, tag, or commit that exists" : undefined,
     });
@@ -387,18 +386,5 @@ function argsFor(source: Source, options: AddOptions, path: string): readonly st
     // saying so is the honest answer.
     case "new":
       return ["worktree", "add", "--no-track", "-b", options.branch, path, source.base];
-  }
-}
-
-async function pushBranch(path: string, branch: string, reporter: Reporter): Promise<void> {
-  const step = reporter.step(`pushing ${branch}`);
-  try {
-    await runGitOrThrow(["push", "-u", REMOTE, "HEAD"], { cwd: path });
-    step.succeed(`pushed ${branch}`);
-  } catch (error) {
-    // The worktree exists and is usable; only the push failed. Say so rather
-    // than letting the error imply nothing happened.
-    step.fail(`created the worktree, but pushing ${branch} failed`);
-    throw error;
   }
 }

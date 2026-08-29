@@ -9,10 +9,7 @@ import {
   parseSetupFile,
   plannedCount,
   readSetupFile,
-  renderSetupFile,
-  revokeTrust,
   SETUP_FILE,
-  setupFilePath,
   trust,
 } from "./setup-file.ts";
 import { seedGit, withTempRepo } from "./test-utils.ts";
@@ -263,19 +260,6 @@ run = ["docker compose down"]
   });
 });
 
-describe("setupFilePath", () => {
-  test("is the file inside the worktree", () => {
-    expect(setupFilePath("/tmp/repo/main")).toBe(join("/tmp/repo/main", SETUP_FILE));
-  });
-
-  test("refuses the bare directory, which is not a worktree", () => {
-    const error = refusalFrom(() => setupFilePath("/tmp/repo/.bare"));
-
-    expect(error.code).toBe("usage");
-    expect(error.message).toContain(".bare");
-  });
-});
-
 describe("readSetupFile", () => {
   test("a worktree without one is not an error", async () => {
     await withTempRepo(async (repo) => {
@@ -306,49 +290,6 @@ describe("readSetupFile", () => {
 
       await expect(readSetupFile(repo.work)).rejects.toThrow("has no key named");
     });
-  });
-});
-
-describe("renderSetupFile", () => {
-  test("round-trips through the parser", () => {
-    const text = renderSetupFile([".env", "local.properties"], []);
-
-    expect(parseSetupFile(text).copy).toEqual([".env", "local.properties"]);
-  });
-
-  test("leaves directories commented out, so the decision is the user's", () => {
-    const text = renderSetupFile([".env"], ["node_modules"]);
-    const plan = parseSetupFile(text);
-
-    expect(text).toContain('# link = ["node_modules"]');
-    expect(plan.copy).toEqual([".env"]);
-    expect(plan.link).toEqual([]);
-    expect(plan.commands).toEqual([]);
-  });
-
-  test("the commented lines parse once they are uncommented", () => {
-    const text = renderSetupFile([".env"], ["node_modules"]);
-    const uncommented = text
-      .split("\n")
-      .filter((line) => !line.startsWith("# A directory") && !line.startsWith("# which"))
-      .map((line) => line.replace(/^# (?=link|run)/, ""))
-      .join("\n");
-
-    const plan = parseSetupFile(uncommented);
-
-    expect(plan.link).toEqual(["node_modules"]);
-    expect(plan.commands).toEqual(["bun install"]);
-  });
-
-  test("nothing detected is still a valid file", () => {
-    expect(renderSetupFile([], [])).toBe("[setup]\n");
-    expect(parseSetupFile(renderSetupFile([], []))).toEqual(EMPTY_PLAN);
-  });
-
-  test("quotes a name that would otherwise not survive TOML", () => {
-    const text = renderSetupFile(['a "b"', "c\\d"], []);
-
-    expect(parseSetupFile(text).copy).toEqual(['a "b"', "c\\d"]);
   });
 });
 
@@ -438,21 +379,6 @@ describe("trust", () => {
       // `[setup]` commands stop running too.
       const edited = both.replace("docker compose down", "docker compose down --volumes");
       expect(await isTrusted(bare, fingerprintOf(edited))).toBe(false);
-    });
-  });
-
-  test("revoking says whether there was anything to revoke", async () => {
-    await withTempRepo(async (repo) => {
-      const bare = await bareRepo(repo.root, "trust.git");
-      const fingerprint = fingerprintOf('[setup]\nrun = ["bun install"]\n');
-
-      expect(await revokeTrust(bare)).toBe(false);
-
-      await trust(bare, fingerprint);
-
-      expect(await revokeTrust(bare)).toBe(true);
-      expect(await isTrusted(bare, fingerprint)).toBe(false);
-      expect(await revokeTrust(bare)).toBe(false);
     });
   });
 

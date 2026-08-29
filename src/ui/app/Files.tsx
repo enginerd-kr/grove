@@ -48,7 +48,7 @@ const EDGE = "  │ ";
 const INDENT = "  ";
 
 /** Truncates to `width`, saying so — `padTo`'s half of the job, without the pad. */
-function clip(text: string, width: number): string {
+export function clip(text: string, width: number): string {
   if (width <= 0) return "";
   if (text.length <= width) return text;
 

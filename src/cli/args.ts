@@ -114,21 +114,15 @@ export type CliCommand =
 
 export { BIN_NAME };
 
-type ParsedValues = Record<string, string | boolean | (string | boolean)[] | undefined>;
+type ParsedValues = Record<string, string | boolean | undefined>;
 
 function optionsFor(flags: readonly FlagSpec[]) {
-  const config: Record<string, { type: "string" | "boolean"; short?: string; multiple?: boolean }> =
-    {};
-
-  for (const flag of flags) {
-    config[flag.name] = {
-      type: flag.type,
-      ...(flag.short === undefined ? {} : { short: flag.short }),
-      ...(flag.multiple === true ? { multiple: true } : {}),
-    };
-  }
-
-  return config;
+  return Object.fromEntries(
+    flags.map((flag) => [
+      flag.name,
+      { type: flag.type, ...(flag.short === undefined ? {} : { short: flag.short }) },
+    ]),
+  );
 }
 
 function text(output: string): CliCommand {
@@ -170,6 +164,23 @@ function str(values: ParsedValues, key: string): string | undefined {
 
 function bool(values: ParsedValues, key: string): boolean {
   return values[key] === true;
+}
+
+/** The four global options, read the same way either side of the subcommand. */
+function globalsFrom(values: ParsedValues): GlobalOptions {
+  return {
+    repo: str(values, "repo"),
+    json: bool(values, "json"),
+    verbose: bool(values, "verbose"),
+    headless: bool(values, "headless"),
+  };
+}
+
+function notAShell(spec: SubcommandSpec, value: string): CliCommand {
+  return usageError(
+    spec,
+    `${JSON.stringify(value)} is not a shell this knows; expected ${SHELLS.join(", ")}`,
+  );
 }
 
 function buildCommand(
@@ -246,21 +257,11 @@ function buildCommand(
       if (first === undefined) {
         return usageError(spec, `${spec.name} needs a shell: ${SHELLS.join(", ")}`);
       }
-      if (!isShell(first)) {
-        return usageError(
-          spec,
-          `${JSON.stringify(first)} is not a shell this knows; expected ${SHELLS.join(", ")}`,
-        );
-      }
+      if (!isShell(first)) return notAShell(spec, first);
       return { name: "shell-init", shell: first };
     }
     case "install": {
-      if (first !== undefined && !isShell(first)) {
-        return usageError(
-          spec,
-          `${JSON.stringify(first)} is not a shell this knows; expected ${SHELLS.join(", ")}`,
-        );
-      }
+      if (first !== undefined && !isShell(first)) return notAShell(spec, first);
       return { name: "install", shell: first };
     }
     case "reset": {
@@ -384,12 +385,7 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   if (head === undefined) {
     return {
       kind: "app",
-      global: {
-        repo: str(leadingValues, "repo"),
-        json: bool(leadingValues, "json"),
-        verbose: bool(leadingValues, "verbose"),
-        headless: bool(leadingValues, "headless"),
-      },
+      global: globalsFrom(leadingValues),
       usage: formatGlobalHelp(),
     };
   }
@@ -452,14 +448,5 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   // what `grove -C a list -C b` reads as.
   const global = { ...leadingValues, ...values };
 
-  return {
-    kind: "run",
-    command: built,
-    global: {
-      repo: str(global, "repo"),
-      json: bool(global, "json"),
-      verbose: bool(global, "verbose"),
-      headless: bool(global, "headless"),
-    },
-  };
+  return { kind: "run", command: built, global: globalsFrom(global) };
 }

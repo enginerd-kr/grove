@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, localBranchExists } from "../branches.ts";
+import { defaultBranch, localBranchExists, pushUpstream } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
@@ -100,7 +100,11 @@ export async function renameWorktree(
   const moved = target.path !== path;
   if (moved) await moveWorktree(repo, target.path, path, from, options.to, reporter);
 
-  const pushed = options.push ? await pushBranch(path, options.to, reporter) : false;
+  // Pushing the new name leaves the old branch on the remote. Deleting it is a
+  // decision about somebody else's pull request and somebody else's checkout,
+  // and it is not one a rename on this machine gets to make.
+  const pushFailure = `renamed it, but pushing ${options.to} failed`;
+  if (options.push) await pushUpstream(path, options.to, reporter, pushFailure);
 
   return {
     from,
@@ -108,8 +112,8 @@ export async function renameWorktree(
     path,
     dir,
     moved,
-    pushed,
-    upstreamNote: pushed ? undefined : await upstreamNote(repo.gitDir, options.to),
+    pushed: options.push,
+    upstreamNote: options.push ? undefined : await upstreamNote(repo.gitDir, options.to),
     // A directory that moves takes the shell inside it along by inode, so
     // nothing breaks and `pwd` quietly starts lying. Saying where it went is
     // cheaper than letting somebody work that out from a path that no longer
@@ -229,26 +233,4 @@ async function upstreamNote(bare: string, branch: string): Promise<string | unde
   if (upstream.length === 0 || upstream === `${REMOTE}/${branch}`) return undefined;
 
   return `still tracking ${upstream}; \`grove rename … --push\` or \`git push -u ${REMOTE} ${branch}\` moves it`;
-}
-
-/**
- * Pushes the new name, and says what it did not do.
- *
- * The remote keeps the old branch. Deleting it is a decision about somebody
- * else's pull request and somebody else's checkout, and it is not one a rename
- * on this machine gets to make.
- */
-async function pushBranch(path: string, branch: string, reporter: Reporter): Promise<boolean> {
-  const step = reporter.step(`pushing ${branch}`);
-  try {
-    await runGitOrThrow(["push", "-u", REMOTE, "HEAD"], { cwd: path });
-    step.succeed(`pushed ${branch}`);
-
-    return true;
-  } catch (error) {
-    // The rename landed; only the push did not. Saying so beats an error that
-    // reads as though nothing happened.
-    step.fail(`renamed it, but pushing ${branch} failed`);
-    throw error;
-  }
 }

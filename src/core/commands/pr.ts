@@ -65,12 +65,9 @@ type PrDetail = {
   readonly url: string;
   readonly state: PrState;
   readonly isDraft: boolean;
-  readonly baseRefName: string;
   readonly headRefName: string;
-  readonly isCrossRepository: boolean;
   readonly headOwner: string;
   readonly headRepo: string;
-  readonly author: string;
 };
 
 export type PrOptions = {
@@ -164,11 +161,14 @@ async function runGh(argv: readonly string[], cwd: string): Promise<string> {
  * answer we cannot read is gh disappointing us rather than a bug in this tool,
  * and it exits 10 with gh's own words instead of 1 with a `SyntaxError`.
  */
-function parseGh(output: string, what: string): unknown {
+async function ghJson(argv: readonly string[], cwd: string): Promise<unknown> {
+  const [head = "", second = ""] = argv;
+  const output = await runGh(argv, cwd);
+
   try {
     return JSON.parse(output);
   } catch {
-    throw new GroveError("gh", `${what} answered with something that is not JSON`, {
+    throw new GroveError("gh", `gh ${head} ${second} answered with something that is not JSON`, {
       details: stderrDetails(output),
     });
   }
@@ -193,12 +193,10 @@ export async function listPullRequests(
   repo: RepoPaths,
   limit = 30,
 ): Promise<readonly PullRequest[]> {
-  const output = await runGh(
+  const parsed: unknown = await ghJson(
     ["pr", "list", "--state", "open", "--limit", String(limit), "--json", LIST_FIELDS],
     repo.root,
   );
-
-  const parsed: unknown = parseGh(output, "gh pr list");
   if (!Array.isArray(parsed)) return [];
 
   return parsed.map((entry) => {
@@ -219,9 +217,7 @@ export async function listPullRequests(
 }
 
 async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
-  const row = record(
-    parseGh(await runGh(["pr", "view", pr, "--json", PR_FIELDS], repo.root), "gh pr view"),
-  );
+  const row = record(await ghJson(["pr", "view", pr, "--json", PR_FIELDS], repo.root));
   const state = text(row.state);
 
   const detail: PrDetail = {
@@ -230,12 +226,9 @@ async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
     url: text(row.url),
     state: state === "MERGED" || state === "CLOSED" ? state : "OPEN",
     isDraft: row.isDraft === true,
-    baseRefName: text(row.baseRefName),
     headRefName: text(row.headRefName),
-    isCrossRepository: row.isCrossRepository === true,
     headOwner: text(record(row.headRepositoryOwner).login),
     headRepo: text(record(row.headRepository).name),
-    author: text(record(row.author).login),
   };
 
   // Refused here, before `configureRemote` writes anything. These four are the

@@ -236,34 +236,36 @@ export async function listWorktreeSummaries(
   });
 }
 
-/** What is true about the working tree itself, before the remote comes into it. */
-function localParts(summary: WorktreeSummary): string[] {
+/**
+ * What is true about the working tree itself, before the remote comes into it.
+ *
+ * `withDirty` is off for the app, which draws that one as a dot instead.
+ */
+function stateParts(summary: WorktreeSummary, withDirty: boolean): string[] {
   const parts: string[] = [];
 
   // Reported instead of "detached", which is technically true of a stopped
   // rebase and tells the user nothing about what to do next.
   if (summary.rebasing) parts.push("rebasing");
   else if (summary.detached) parts.push("detached");
-  if (summary.dirty) parts.push("dirty");
+  if (withDirty && summary.dirty) parts.push("dirty");
+  // First of the ordinary states, and the only one that is an invitation
+  // rather than a warning: `merged` on a row is the tool saying there is
+  // nothing left to do here, which is what `r` — or `grove prune` for all of
+  // them at once — is for.
   if (summary.finished !== undefined) parts.push(summary.finished);
 
   return parts;
 }
 
-function settle(parts: readonly string[], locked: boolean): string {
-  const all = locked ? [...parts, "locked"] : [...parts];
-  if (all.length === 0) all.push("clean");
-
-  return all.join(", ");
-}
-
 /** The state column: the shortest true description of the worktree. */
-export function describeState(summary: WorktreeSummary): string {
-  const parts = localParts(summary);
+function describeState(summary: WorktreeSummary): string {
+  const parts = stateParts(summary, true);
   if (summary.ahead > 0) parts.push(`${summary.ahead} ahead`);
   if (summary.behind > 0) parts.push(`${summary.behind} behind`);
+  if (summary.locked) parts.push("locked");
 
-  return settle(parts, summary.locked);
+  return parts.length === 0 ? "clean" : parts.join(", ");
 }
 
 /**
@@ -275,17 +277,7 @@ export function describeState(summary: WorktreeSummary): string {
  * are things you would rather read than decode.
  */
 export function noteParts(summary: WorktreeSummary): readonly string[] {
-  const parts: string[] = [];
-
-  // Reported instead of "detached", which is technically true of a stopped
-  // rebase and tells the user nothing about what to do next.
-  if (summary.rebasing) parts.push("rebasing");
-  else if (summary.detached) parts.push("detached");
-  // First of the ordinary states, and the only one that is an invitation
-  // rather than a warning: `merged` on a row is the tool saying there is
-  // nothing left to do here, which is what `r` — or `grove prune` for all of
-  // them at once — is for.
-  if (summary.finished !== undefined) parts.push(summary.finished);
+  const parts = stateParts(summary, false);
   if (summary.locked) parts.push("locked");
 
   return parts;

@@ -2,7 +2,7 @@ import { Box, Text } from "ink";
 import { version } from "../../../package.json";
 import { BIN_NAME } from "../../cli/help.ts";
 import { theme } from "../theme.ts";
-import { type ChangelogEntry, latestChange } from "./changelog.ts";
+import { latestChange } from "./changelog.ts";
 
 /**
  * The welcome: a card with the name in its border, a greeting over the art on
@@ -128,18 +128,9 @@ type Props = {
   readonly here?: string;
   readonly columns: number;
   readonly rows: number;
-  /** The latest changelog entry. A prop only so tests can hold it still. */
-  readonly whatsNew?: ChangelogEntry;
 };
 
-export function Banner({
-  repoRoot,
-  worktrees,
-  here,
-  columns,
-  rows,
-  whatsNew = latestChange,
-}: Props) {
+export function Banner({ repoRoot, worktrees, here, columns, rows }: Props) {
   const folder = describeFolder(worktrees, here);
   const release = ` v${version}`;
 
@@ -159,7 +150,8 @@ export function Banner({
   }
 
   const withTips = columns >= TIPS_COLUMNS;
-  const news = whatsNew !== undefined && whatsNew.bullets.length > 0 ? whatsNew : undefined;
+  const news =
+    latestChange !== undefined && latestChange.bullets.length > 0 ? latestChange : undefined;
   const leftWidth = withTips ? LEFT_WIDTH : columns - 4;
   const newsWidth = Math.max(10, columns - 4 - LEFT_WIDTH - DIVIDER_WIDTH);
   const title = `${BIN_NAME}${release}`;

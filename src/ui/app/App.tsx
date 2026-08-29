@@ -23,12 +23,12 @@ import type { PullRequest } from "../../core/commands/pr.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import type { Commit } from "../../core/history.ts";
 import type { LineStore } from "../../report/lines.ts";
-import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
+import { type Hint, StatusBar, statusBarRows } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
-import { Files } from "./Files.tsx";
+import { clip, Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor, messageRows } from "./message.ts";
@@ -260,6 +260,25 @@ const GENERAL_TIPS: readonly Message[] = [
   },
 ];
 
+// The keys each popup answers to. A mode that takes the keyboard says so here
+// rather than in the memo below, where only the list's own hints are decided.
+const MODE_HINTS: Partial<Record<Mode["kind"], readonly Hint[]>> = {
+  busy: [{ keys: "ctrl+c", action: "cancel" }],
+  add: [
+    { keys: "enter", action: "add" },
+    { keys: "esc", action: "cancel" },
+  ],
+  confirm: [
+    { keys: "y", action: "remove" },
+    { keys: "n", action: "keep" },
+  ],
+  pick: [
+    { keys: "↑↓", action: "move" },
+    { keys: "enter", action: "check out" },
+    { keys: "esc", action: "cancel" },
+  ],
+};
+
 /**
  * The directory a row stands for, as an absolute path.
  *
@@ -271,13 +290,12 @@ function pathOf(row: TreeRow, repoRoot: string): string {
   return row.kind === "group" ? join(repoRoot, row.key.replace(/\/+$/, "")) : row.summary.path;
 }
 
-/** A new set with `key` in it, and one without — `Set` is mutable and state is not. */
-function with_(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
-  return new Set([...set, key]);
-}
+/** A new set with `key` flipped in or out — `Set` is mutable and state is not. */
+function toggled(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  const next = new Set(set);
+  if (!next.delete(key)) next.add(key);
 
-function without(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
-  return new Set([...set].filter((each) => each !== key));
+  return next;
 }
 
 /** `1 command`, `2 commands` — the label a confirmed action is given. */
@@ -293,10 +311,7 @@ const GAP = "    ";
 
 /** Pads or truncates to exactly `width`, so columns stay columns. */
 function padTo(text: string, width: number): string {
-  if (width <= 0) return "";
-  if (text.length <= width) return text.padEnd(width);
-
-  return `${text.slice(0, Math.max(0, width - 1))}…`;
+  return clip(text, width).padEnd(width);
 }
 
 type Widths = {
@@ -305,6 +320,7 @@ type Widths = {
   readonly trunk: number;
   readonly touched: number;
   readonly state: number;
+  readonly slack: number;
 };
 
 /**
@@ -429,36 +445,37 @@ function StateCell({
  * Each one says what survives, since that is what the person is actually
  * weighing: the directory goes, the branch stays, and any uncommitted changes
  * go with the directory.
+ *
+ * How loudly to ask comes back with the words, because it is the same question
+ * asked once: which of the four wordings this is decides the colour too.
  */
-function describePending(target: Pending): string {
+function describePending(target: Pending): { readonly text: string; readonly colour: string } {
   // A dirty worktree is not refused any more — it is asked about instead, and
   // the question has to carry what `y` now costs: the uncommitted changes go
-  // with the directory, counted the same way the reset counts them.
+  // with the directory, counted the same way the reset counts them. A removal
+  // that discards them is a risk of a different kind from one that only takes a
+  // directory back, which is what the danger colour is for.
   if (target.kind === "one") {
     const { dir, dirty, changed, untracked } = target.summary;
     if (dirty) {
-      return `remove ${dir} and discard ${describeDiscard(changed - untracked, untracked)}? the branch stays`;
+      return {
+        text: `remove ${dir} and discard ${describeDiscard(changed - untracked, untracked)}? the branch stays`,
+        colour: theme.danger,
+      };
     }
 
-    return `remove ${dir}? the directory goes, the branch stays`;
+    return { text: `remove ${dir}? the directory goes, the branch stays`, colour: theme.warn };
   }
 
   const all = `remove all ${target.paths.length} under ${target.label}?`;
   if (target.dirty > 0) {
-    return `${all} ${target.dirty} ${target.dirty === 1 ? "has" : "have"} uncommitted changes, which go too — the branches stay`;
+    return {
+      text: `${all} ${target.dirty} ${target.dirty === 1 ? "has" : "have"} uncommitted changes, which go too — the branches stay`,
+      colour: theme.danger,
+    };
   }
 
-  return `${all} the directories go, the branches stay`;
-}
-
-/** How loudly to ask, which is not the same for both questions. */
-function colourFor(target: Pending): string | undefined {
-  // A removal that discards uncommitted changes is a risk of a different kind
-  // from one that only takes a directory back.
-  if (target.kind === "one" && target.summary.dirty) return theme.danger;
-  if (target.kind === "many" && target.dirty > 0) return theme.danger;
-
-  return theme.warn;
+  return { text: `${all} the directories go, the branches stay`, colour: theme.warn };
 }
 
 function Row({
@@ -1043,7 +1060,7 @@ export function App({
      */
     if (key.rightArrow || input === "l") {
       if (current?.kind === "group" && current.collapsed) {
-        return setCollapsed(without(collapsed, current.key));
+        return setCollapsed(toggled(collapsed, current.key));
       }
 
       const child = current === undefined ? undefined : firstChildOf(tree, current);
@@ -1053,7 +1070,7 @@ export function App({
 
     if (key.leftArrow || input === "h") {
       if (current?.kind === "group" && !current.collapsed) {
-        return setCollapsed(with_(collapsed, current.key));
+        return setCollapsed(toggled(collapsed, current.key));
       }
 
       const parent = current === undefined ? undefined : parentOf(tree, current);
@@ -1133,52 +1150,23 @@ export function App({
   // things people call it.
   const trunkName = rows.find((summary) => summary.isDefault)?.branch ?? "trunk";
 
-  const hints = useMemo(() => {
-    if (mode.kind === "busy") return [{ keys: "ctrl+c", action: "cancel" }];
-    if (mode.kind === "add") {
-      return [
-        { keys: "enter", action: "add" },
-        { keys: "esc", action: "cancel" },
-      ];
-    }
-    if (mode.kind === "confirm") {
-      return [
-        { keys: "y", action: "remove" },
-        { keys: "n", action: "keep" },
-      ];
-    }
-    if (mode.kind === "pick") {
-      return [
-        { keys: "↑↓", action: "move" },
-        { keys: "enter", action: "check out" },
-        { keys: "esc", action: "cancel" },
-      ];
-    }
+  const hints = useMemo((): readonly Hint[] => {
+    const popup = MODE_HINTS[mode.kind];
+    if (popup !== undefined) return popup;
 
     // A folder offers what a folder can do. Leaving `s` on it to mean what it
-    // means on a worktree would be a menu that lies.
-    if (current?.kind === "group") {
-      return [
-        { keys: "↑↓", action: "move" },
-        { keys: "←→", action: current.collapsed ? "open" : "fold" },
-        { keys: "enter", action: "copy path" },
-        { keys: "a", action: `add under ${current.label}` },
-        { keys: "r", action: `remove all ${under.length}` },
-        { keys: "p", action: "review" },
-        { keys: "S", action: "sync all" },
-        { keys: "R", action: "refresh" },
-        { keys: "L", action: logOn ? "hide log" : "show log" },
-        { keys: "q", action: "quit" },
-      ];
-    }
+    // means on a worktree would be a menu that lies. An empty tree has no row
+    // under the cursor at all, and takes the worktree list.
+    const group = current?.kind === "group" ? current : undefined;
 
     return [
       { keys: "↑↓", action: "move" },
+      ...(group !== undefined ? [{ keys: "←→", action: group.collapsed ? "open" : "fold" }] : []),
       { keys: "enter", action: "copy path" },
-      { keys: "a", action: "add" },
-      { keys: "r", action: "remove" },
+      { keys: "a", action: group !== undefined ? `add under ${group.label}` : "add" },
+      { keys: "r", action: group !== undefined ? `remove all ${under.length}` : "remove" },
       { keys: "p", action: "review" },
-      { keys: "s", action: "sync" },
+      ...(group === undefined ? [{ keys: "s", action: "sync" }] : []),
       { keys: "S", action: "sync all" },
       { keys: "R", action: "refresh" },
       { keys: "L", action: logOn ? "hide log" : "show log" },
@@ -1341,31 +1329,25 @@ export function App({
         : 0;
 
     const taken = [remote, trunk, touched].filter((width) => width > 0);
+    const state = Math.max(0, Math.min(stateWidth, spare(...taken)));
 
     return {
       tree: treeColumn,
       remote,
       trunk,
       touched,
-      state: Math.max(0, Math.min(stateWidth, spare(...taken))),
+      state,
+      /**
+       * What is left of the row once the list has had its columns, gaps and
+       * marker.
+       *
+       * Taken out of the same budget the columns were sized from, rather than
+       * counted back off the marker and each column that survived — so the two
+       * cannot disagree about where the list ends and the empty screen begins.
+       */
+      slack: spare(...taken) - state,
     };
   }, [tree, columns, trunkName]);
-
-  /**
-   * How much of a row the list actually draws on, gaps and marker included.
-   *
-   * Counted the same way `widths` budgeted it — the marker, then each column
-   * that survived with the gap in front of it — so the two cannot disagree
-   * about where the list ends and the empty screen begins.
-   */
-  const listWidth =
-    4 +
-    widths.tree +
-    GAP.length +
-    (widths.remote > 0 ? widths.remote + GAP.length : 0) +
-    (widths.trunk > 0 ? widths.trunk + GAP.length : 0) +
-    widths.state +
-    (widths.touched > 0 ? GAP.length + widths.touched : 0);
 
   /**
    * The uncommitted-files panel's width, out of the screen the list is not on.
@@ -1375,9 +1357,10 @@ export function App({
    * gutter beside the rows that are almost all of them. A folder is not a
    * worktree and has no working tree of its own, so it draws none either.
    */
-  const slack = columns - listWidth;
   const filesWidth =
-    selected?.dirty === true && slack >= MIN_FILES_COLS ? Math.min(slack, MAX_FILES_COLS) : 0;
+    selected?.dirty === true && widths.slack >= MIN_FILES_COLS
+      ? Math.min(widths.slack, MAX_FILES_COLS)
+      : 0;
 
   const rule = "─".repeat(Math.max(0, columns));
   // The banner already says how many there are, so the last row is left with
@@ -1397,6 +1380,10 @@ export function App({
       : commits.length === 0 && log?.path === selectedPath
         ? "no commits on this branch yet"
         : undefined;
+
+  // The removal question and its colour, decided together because they are the
+  // same answer: see `describePending`.
+  const pending = mode.kind === "confirm" ? describePending(mode.target) : undefined;
 
   return (
     <Box flexDirection="column" width={columns} height={terminalRows} paddingTop={1}>
@@ -1499,13 +1486,13 @@ export function App({
         </Box>
       ) : null}
 
-      {mode.kind === "confirm" ? (
+      {pending !== undefined ? (
         // Red for a removal that discards uncommitted changes, amber for a
         // clean one, because they are not the same risk: a removed clean
         // worktree leaves its branch and its commits behind and `grove add`
         // brings it back, while discarded changes leave nothing at all.
-        <Text color={colourFor(mode.target)} wrap="truncate">
-          {describePending(mode.target)}
+        <Text color={pending.colour} wrap="truncate">
+          {pending.text}
         </Text>
       ) : null}
 

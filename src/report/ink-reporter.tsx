@@ -1,8 +1,8 @@
 import { Box, render, Static } from "ink";
 import { useRef, useSyncExternalStore } from "react";
-// Imported from the files rather than the barrel: `ui/index.ts` also exports the
-// interactive app, and a one-shot `grove list` should not load a screen it will
-// never render.
+// Imported one file at a time rather than through anything that gathers the UI
+// up: the interactive app would come with it, and a one-shot `grove list` should
+// not load a screen it will never render.
 import { StatusBar } from "../ui/components/StatusBar.tsx";
 import { StepRow } from "../ui/components/StepRow.tsx";
 import { createStoreReporter, isStep, type Line, LineStore } from "./lines.ts";

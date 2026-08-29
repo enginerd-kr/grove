@@ -36,6 +36,11 @@ export function detectShell(env: NodeJS.ProcessEnv = process.env): Shell | undef
   return name !== undefined && isShell(name) ? name : undefined;
 }
 
+/** An unset or empty environment variable means "the default", not "the empty string". */
+function orDefault(value: string | undefined, fallback: string): string {
+  return value !== undefined && value !== "" ? value : fallback;
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await stat(path);
@@ -59,15 +64,10 @@ export async function rcFileFor(
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
 ): Promise<string> {
-  if (shell === "zsh") {
-    const zdotdir = env.ZDOTDIR;
-    return join(zdotdir !== undefined && zdotdir !== "" ? zdotdir : home, ".zshrc");
-  }
+  if (shell === "zsh") return join(orDefault(env.ZDOTDIR, home), ".zshrc");
 
   if (shell === "fish") {
-    const xdgConfig = env.XDG_CONFIG_HOME;
-    const configHome =
-      xdgConfig !== undefined && xdgConfig !== "" ? xdgConfig : join(home, ".config");
+    const configHome = orDefault(env.XDG_CONFIG_HOME, join(home, ".config"));
     return join(configHome, "fish", "config.fish");
   }
 
@@ -136,10 +136,7 @@ export function shellSetupMarkerPath(
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
 ): string {
-  const xdgCache = env.XDG_CACHE_HOME;
-  const base = xdgCache !== undefined && xdgCache !== "" ? xdgCache : join(home, ".cache");
-
-  return join(base, "grove", "shell-setup-shown");
+  return join(orDefault(env.XDG_CACHE_HOME, join(home, ".cache")), "grove", "shell-setup-shown");
 }
 
 export async function hasSeenShellSetup(path: string = shellSetupMarkerPath()): Promise<boolean> {

@@ -371,10 +371,7 @@ export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undef
   if (conflicted.length > 0) {
     return new GroveError("rebase-conflict", describe(conflicted, "conflicted"), {
       hint: "resolve them by hand, or sync after committing",
-      details: conflicted.flatMap((outcome) => [
-        `${outcome.dir}: ${outcome.reason ?? ""}`,
-        ...(outcome.conflicts ?? []).map((file) => `  ${file}`),
-      ]),
+      details: reasons(conflicted),
     });
   }
 
@@ -388,14 +385,19 @@ export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undef
 
   if (skipped.length > 0) {
     return new GroveError("refused", describe(skipped, "skipped"), {
-      details: skipped.flatMap((outcome) => [
-        `${outcome.dir}: ${outcome.reason ?? ""}`,
-        ...(outcome.conflicts ?? []).map((file) => `  ${file}`),
-      ]),
+      details: reasons(skipped),
     });
   }
 
   return undefined;
+}
+
+/** Why each of these went the way it did, with any conflicting files indented under it. */
+function reasons(outcomes: readonly SyncOutcome[]): string[] {
+  return outcomes.flatMap((outcome) => [
+    `${outcome.dir}: ${outcome.reason ?? ""}`,
+    ...(outcome.conflicts ?? []).map((file) => `  ${file}`),
+  ]);
 }
 
 function describe(outcomes: readonly SyncOutcome[], what: string): string {

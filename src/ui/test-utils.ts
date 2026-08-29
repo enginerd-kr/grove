@@ -19,8 +19,6 @@ export const keys = {
   // what Ink reports as `key.backspace`.
   backspace: String.fromCharCode(127),
   esc: ESC,
-  tab: "\t",
-  shiftTab: `${ESC}[Z`,
 } as const;
 
 /** Lets Ink flush pending state updates before the next assertion. */

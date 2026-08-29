@@ -97,7 +97,7 @@ type Context = {
   readonly hasRemoteTracking: boolean;
 };
 
-type Check = (context: Context) => Promise<readonly Finding[]>;
+type Check = (context: Context) => Promise<Finding | undefined>;
 
 function count(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
@@ -116,25 +116,23 @@ async function checkFetchRefspec({
   repo,
   hasOrigin,
   hasFetchRefspec,
-}: Context): Promise<readonly Finding[]> {
-  if (!hasOrigin || hasFetchRefspec) return [];
+}: Context): Promise<Finding | undefined> {
+  if (!hasOrigin || hasFetchRefspec) return undefined;
 
-  return [
-    {
-      check: "fetch-refspec",
-      severity: "error",
-      summary: `${REMOTE} has no fetch refspec, so ${REMOTE}/* is never written`,
-      details: [
-        "a bare clone maps nothing into refs/remotes/*, and `git fetch` then exits 0",
-        "having updated nothing: `add` cannot find a remote branch, `sync` has no",
-        "upstream to rebase onto, and every worktree reads as having no upstream",
-      ],
-      fix: [
-        `git -C ${repo.gitDir} config remote.${REMOTE}.fetch '${FETCH_REFSPEC}'`,
-        `git -C ${repo.gitDir} fetch ${REMOTE} --prune --tags`,
-      ],
-    },
-  ];
+  return {
+    check: "fetch-refspec",
+    severity: "error",
+    summary: `${REMOTE} has no fetch refspec, so ${REMOTE}/* is never written`,
+    details: [
+      "a bare clone maps nothing into refs/remotes/*, and `git fetch` then exits 0",
+      "having updated nothing: `add` cannot find a remote branch, `sync` has no",
+      "upstream to rebase onto, and every worktree reads as having no upstream",
+    ],
+    fix: [
+      `git -C ${repo.gitDir} config remote.${REMOTE}.fetch '${FETCH_REFSPEC}'`,
+      `git -C ${repo.gitDir} fetch ${REMOTE} --prune --tags`,
+    ],
+  };
 }
 
 /** The refspec is there, but nothing has been pulled through it yet. */
@@ -143,18 +141,16 @@ async function checkRemoteTracking({
   hasOrigin,
   hasFetchRefspec,
   hasRemoteTracking,
-}: Context): Promise<readonly Finding[]> {
-  if (!hasOrigin || !hasFetchRefspec || hasRemoteTracking) return [];
+}: Context): Promise<Finding | undefined> {
+  if (!hasOrigin || !hasFetchRefspec || hasRemoteTracking) return undefined;
 
-  return [
-    {
-      check: "remote-tracking",
-      severity: "error",
-      summary: `${REMOTE}/* is empty: the refspec is configured, but nothing has been fetched`,
-      details: ["until a fetch fills these in, every branch reads as having no upstream"],
-      fix: [`git -C ${repo.gitDir} fetch ${REMOTE} --prune --tags`],
-    },
-  ];
+  return {
+    check: "remote-tracking",
+    severity: "error",
+    summary: `${REMOTE}/* is empty: the refspec is configured, but nothing has been fetched`,
+    details: ["until a fetch fills these in, every branch reads as having no upstream"],
+    fix: [`git -C ${repo.gitDir} fetch ${REMOTE} --prune --tags`],
+  };
 }
 
 /**
@@ -170,8 +166,8 @@ async function checkOriginHead({
   hasOrigin,
   hasFetchRefspec,
   hasRemoteTracking,
-}: Context): Promise<readonly Finding[]> {
-  if (!hasOrigin || !hasFetchRefspec || !hasRemoteTracking) return [];
+}: Context): Promise<Finding | undefined> {
+  if (!hasOrigin || !hasFetchRefspec || !hasRemoteTracking) return undefined;
 
   const head = await runGit(["symbolic-ref", "--short", `refs/remotes/${REMOTE}/HEAD`], {
     cwd: repo.gitDir,
@@ -183,23 +179,21 @@ async function checkOriginHead({
       ["rev-parse", "--verify", "--quiet", `refs/remotes/${target}`],
       { cwd: repo.gitDir },
     );
-    if (resolves) return [];
+    if (resolves) return undefined;
   }
 
-  return [
-    {
-      check: "origin-head",
-      severity: "error",
-      summary: `${REMOTE}/HEAD does not resolve, so nothing can tell which branch is the trunk`,
-      details: [
-        head.code === 0 && target.length > 0
-          ? `it points at ${target}, and that ref is not there`
-          : "it is not set",
-        "`grove list`, `grove add` and `grove sync` all stop on this",
-      ],
-      fix: [`git -C ${repo.gitDir} remote set-head ${REMOTE} --auto`],
-    },
-  ];
+  return {
+    check: "origin-head",
+    severity: "error",
+    summary: `${REMOTE}/HEAD does not resolve, so nothing can tell which branch is the trunk`,
+    details: [
+      head.code === 0 && target.length > 0
+        ? `it points at ${target}, and that ref is not there`
+        : "it is not set",
+      "`grove list`, `grove add` and `grove sync` all stop on this",
+    ],
+    fix: [`git -C ${repo.gitDir} remote set-head ${REMOTE} --auto`],
+  };
 }
 
 /**
@@ -208,8 +202,8 @@ async function checkOriginHead({
  * Only a managed repository has one; in a plain clone `.git` is the repository
  * itself and there is nothing here to be wrong.
  */
-async function checkGitFile({ repo }: Context): Promise<readonly Finding[]> {
-  if (repo.kind !== "managed") return [];
+async function checkGitFile({ repo }: Context): Promise<Finding | undefined> {
+  if (repo.kind !== "managed") return undefined;
 
   const rewrite = `echo 'gitdir: ./${BARE_DIR}' > ${repo.gitFile}`;
   const finding = (
@@ -220,65 +214,57 @@ async function checkGitFile({ repo }: Context): Promise<readonly Finding[]> {
 
   const info = await lstat(repo.gitFile).catch(() => undefined);
   if (info === undefined) {
-    return [
-      finding("the repo root has no .git file, so git does not work from the root itself", [
-        `${BARE_DIR} is there, but nothing points at it`,
-      ]),
-    ];
+    return finding("the repo root has no .git file, so git does not work from the root itself", [
+      `${BARE_DIR} is there, but nothing points at it`,
+    ]);
   }
   if (info.isDirectory()) {
-    return [
-      finding(
-        ".git at the repo root is a directory, where this layout wants a pointer file",
-        [`a second repository beside ${BARE_DIR}: whichever git finds first is the one you get`],
-        // Deliberately not the rewrite above: `>` cannot overwrite a directory,
-        // and a directory here is a repository with history in it that this
-        // command has no business proposing to flatten.
-        [
-          "decide which of the two the root belongs to, and move the loser aside;",
-          `if ${BARE_DIR} is the one you want, replace .git with its pointer afterwards`,
-        ],
-      ),
-    ];
+    return finding(
+      ".git at the repo root is a directory, where this layout wants a pointer file",
+      [`a second repository beside ${BARE_DIR}: whichever git finds first is the one you get`],
+      // Deliberately not the rewrite above: `>` cannot overwrite a directory,
+      // and a directory here is a repository with history in it that this
+      // command has no business proposing to flatten.
+      [
+        "decide which of the two the root belongs to, and move the loser aside;",
+        `if ${BARE_DIR} is the one you want, replace .git with its pointer afterwards`,
+      ],
+    );
   }
 
   const text = await Bun.file(repo.gitFile).text();
   const match = /^gitdir:\s*(.+)$/m.exec(text);
   if (match?.[1] === undefined) {
-    return [finding("the repo root's .git file does not name a git directory", [text.trim()])];
+    return finding("the repo root's .git file does not name a git directory", [text.trim()]);
   }
 
   const target = resolve(repo.root, match[1].trim());
-  if (await pathExists(join(target, "HEAD"))) return [];
+  if (await pathExists(join(target, "HEAD"))) return undefined;
 
-  return [
-    finding("the repo root's .git file points at a git directory that is not there", [
-      `it names ${target}`,
-    ]),
-  ];
+  return finding("the repo root's .git file points at a git directory that is not there", [
+    `it names ${target}`,
+  ]);
 }
 
 /** Worktrees git still lists, whose directories have gone. */
-async function checkPrunable({ repo, worktrees }: Context): Promise<readonly Finding[]> {
+async function checkPrunable({ repo, worktrees }: Context): Promise<Finding | undefined> {
   const prunable = worktrees.filter((record) => record.prunable !== undefined);
-  if (prunable.length === 0) return [];
+  if (prunable.length === 0) return undefined;
 
-  return [
-    {
-      check: "prunable-worktree",
-      severity: "warning",
-      summary: `${count(prunable.length, "worktree")} git still lists, gone from disk`,
-      details: prunable.map((record) => {
-        const why =
-          record.prunable === undefined || record.prunable.length === 0
-            ? ""
-            : ` — ${record.prunable}`;
+  return {
+    check: "prunable-worktree",
+    severity: "warning",
+    summary: `${count(prunable.length, "worktree")} git still lists, gone from disk`,
+    details: prunable.map((record) => {
+      const why =
+        record.prunable === undefined || record.prunable.length === 0
+          ? ""
+          : ` — ${record.prunable}`;
 
-        return `${worktreeDir(repo.root, record.path)}${why}`;
-      }),
-      fix: [`git -C ${repo.gitDir} worktree prune`],
-    },
-  ];
+      return `${worktreeDir(repo.root, record.path)}${why}`;
+    }),
+    fix: [`git -C ${repo.gitDir} worktree prune`],
+  };
 }
 
 /** A directory's `.git`, and what it is. */
@@ -340,27 +326,25 @@ async function scanForOrphans(
   }
 }
 
-async function checkOrphans({ repo, worktrees }: Context): Promise<readonly Finding[]> {
+async function checkOrphans({ repo, worktrees }: Context): Promise<Finding | undefined> {
   // A plain repository's root *is* its checkout, so there is nothing to walk
   // here that is not the project's own tree.
-  if (repo.kind !== "managed") return [];
+  if (repo.kind !== "managed") return undefined;
 
   const found: string[] = [];
   await scanForOrphans(repo.root, new Set(worktrees.map((record) => record.path)), 1, found);
-  if (found.length === 0) return [];
+  if (found.length === 0) return undefined;
 
-  return [
-    {
-      check: "orphan-worktree",
-      severity: "warning",
-      summary: `${count(found.length, "directory", "directories")} left behind by a pruned worktree`,
-      details: found.map((path) => worktreeDir(repo.root, path)),
-      fix: [
-        "git has no record of these, so nothing here will remove them: look inside for",
-        "work you have not committed, then delete the directory yourself",
-      ],
-    },
-  ];
+  return {
+    check: "orphan-worktree",
+    severity: "warning",
+    summary: `${count(found.length, "directory", "directories")} left behind by a pruned worktree`,
+    details: found.map((path) => worktreeDir(repo.root, path)),
+    fix: [
+      "git has no record of these, so nothing here will remove them: look inside for",
+      "work you have not committed, then delete the directory yourself",
+    ],
+  };
 }
 
 /**
@@ -373,23 +357,21 @@ async function checkOrphans({ repo, worktrees }: Context): Promise<readonly Find
  * Only the paths the file names are looked at. A dangling symlink somewhere in a
  * checkout is the project's own, and not a thing to report.
  */
-async function checkLinks({ repo, worktrees }: Context): Promise<readonly Finding[]> {
+async function checkLinks({ repo, worktrees }: Context): Promise<Finding | undefined> {
   let plan: SetupPlan;
   try {
     plan = await repoSetupPlan(repo);
   } catch (error) {
-    return [
-      {
-        check: "setup-file",
-        severity: "error",
-        summary: `${SETUP_FILE} cannot be read, so every new worktree fails before it is filled in`,
-        details: [error instanceof Error ? error.message : String(error)],
-        fix: [`fix ${SETUP_FILE} in the default branch's worktree`],
-      },
-    ];
+    return {
+      check: "setup-file",
+      severity: "error",
+      summary: `${SETUP_FILE} cannot be read, so every new worktree fails before it is filled in`,
+      details: [error instanceof Error ? error.message : String(error)],
+      fix: [`fix ${SETUP_FILE} in the default branch's worktree`],
+    };
   }
 
-  if (plan.link.length === 0) return [];
+  if (plan.link.length === 0) return undefined;
 
   const broken: string[] = [];
   for (const record of worktrees) {
@@ -407,22 +389,20 @@ async function checkLinks({ repo, worktrees }: Context): Promise<readonly Findin
     }
   }
 
-  if (broken.length === 0) return [];
+  if (broken.length === 0) return undefined;
 
-  return [
-    {
-      check: "broken-link",
-      severity: "warning",
-      summary:
-        `${count(broken.length, "link")} from ${SETUP_FILE}` +
-        ` ${broken.length === 1 ? "points" : "point"} at nothing`,
-      details: broken,
-      fix: [
-        "they are relative into the default branch's worktree — restore what they name",
-        "there, by re-running whatever creates it",
-      ],
-    },
-  ];
+  return {
+    check: "broken-link",
+    severity: "warning",
+    summary:
+      `${count(broken.length, "link")} from ${SETUP_FILE}` +
+      ` ${broken.length === 1 ? "points" : "point"} at nothing`,
+    details: broken,
+    fix: [
+      "they are relative into the default branch's worktree — restore what they name",
+      "there, by re-running whatever creates it",
+    ],
+  };
 }
 
 const CHECKS: readonly Check[] = [
@@ -451,7 +431,6 @@ function writesRemoteTracking(spec: string): boolean {
 
 async function hasFetchRefspec(gitDir: string): Promise<boolean> {
   const result = await runGit(["config", "--get-all", `remote.${REMOTE}.fetch`], { cwd: gitDir });
-  if (result.code !== 0) return false;
 
   return result.stdout.split("\n").some((line) => writesRemoteTracking(line.trim()));
 }
@@ -500,7 +479,7 @@ export async function diagnose(repo: RepoPaths): Promise<Diagnosis> {
     grove: version,
     git,
     checked: CHECKS.length,
-    findings: results.flat(),
+    findings: results.filter((f) => f !== undefined),
   };
 }
 

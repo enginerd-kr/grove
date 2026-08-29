@@ -15,8 +15,6 @@ export type FlagSpec = {
   readonly type: "string" | "boolean";
   /** Shown after the flag in help, e.g. `--from <base>`. String flags only. */
   readonly placeholder?: string;
-  /** Repeatable: every occurrence is kept, rather than the last one winning. */
-  readonly multiple?: boolean;
   readonly summary: string;
 };
 

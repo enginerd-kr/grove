@@ -1,7 +1,8 @@
+import type { Reporter } from "../report/reporter.ts";
 import { GroveError } from "./errors.ts";
-import { gitOutput, gitSucceeds, runGit } from "./git.ts";
+import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
 
-/** Questions about refs, asked of the bare repository — and the two calls that maintain them. */
+/** Questions about refs, asked of the bare repository — and the calls that maintain them. */
 
 const REMOTE = "origin";
 
@@ -314,26 +315,44 @@ export async function updateRemoteHead(bare: string): Promise<boolean> {
   return (await runGit(["remote", "set-head", REMOTE, "--auto"], { cwd: bare })).code === 0;
 }
 
+/**
+ * Pushes a worktree's HEAD to `origin` and sets it as the branch's upstream.
+ *
+ * The push is always the tail of a larger operation that has already landed, so
+ * the failure line belongs to the caller: what did happen is the part only the
+ * caller knows, and an error that says nothing about it reads as though the
+ * whole command came to nothing. The error is still rethrown — a branch that
+ * was meant to be on the remote and is not is not a success to report quietly.
+ */
+export async function pushUpstream(
+  path: string,
+  branch: string,
+  reporter: Reporter,
+  failure: string,
+): Promise<void> {
+  const step = reporter.step(`pushing ${branch}`);
+  try {
+    await runGitOrThrow(["push", "-u", REMOTE, "HEAD"], { cwd: path });
+    step.succeed(`pushed ${branch}`);
+  } catch (error) {
+    step.fail(failure);
+    throw error;
+  }
+}
+
 /** The remote-tracking ref for a branch — what `branchStates` measures against. */
 export function remoteRef(branch: string): string {
   return `${REMOTE}/${branch}`;
 }
 
 export async function localBranchExists(bare: string, branch: string): Promise<boolean> {
-  return (
-    (await runGit(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: bare }))
-      .code === 0
-  );
+  return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: bare });
 }
 
 export async function remoteBranchExists(bare: string, branch: string): Promise<boolean> {
-  return (
-    (
-      await runGit(["rev-parse", "--verify", "--quiet", `refs/remotes/${REMOTE}/${branch}`], {
-        cwd: bare,
-      })
-    ).code === 0
-  );
+  return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/remotes/${REMOTE}/${branch}`], {
+    cwd: bare,
+  });
 }
 
 export async function localBranches(bare: string): Promise<readonly string[]> {
