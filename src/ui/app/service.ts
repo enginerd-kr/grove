@@ -1,5 +1,5 @@
 import { fetchRemotes } from "../../core/branches.ts";
-import { copyToClipboard } from "../../core/clipboard.ts";
+import { cdCommand, copyToClipboard } from "../../core/clipboard.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
@@ -38,11 +38,14 @@ export type WorktreeService = {
   /**
    * Put a directory's absolute path on the clipboard, and say so.
    *
-   * The one thing here that touches no worktree: `add` already ends by copying
-   * the path of the one it made, and this is that same handoff for one that
-   * already exists — the path is wanted in a terminal this screen is not in, so
-   * the clipboard is the only way to hand it over. Unlike `add`'s best-effort
-   * copy, a failure here is the whole outcome and is thrown.
+   * The one thing here that touches no worktree: `add` already ends by putting
+   * the worktree it made on the clipboard, and this is that same handoff for
+   * one that already exists — the path is wanted in a terminal this screen is
+   * not in, so the clipboard is the only way to hand it over. The bare path
+   * rather than `add`'s `cd` line, because a path that already exists is as
+   * often headed for an editor's "open folder" box as for a shell. Unlike
+   * `add`'s best-effort copy, a failure here is the whole outcome and is
+   * thrown.
    */
   readonly copyPath: (path: string) => Promise<string>;
   /**
@@ -190,11 +193,16 @@ export function createWorktreeService(
         reporter,
       );
 
+      // The `cd` line rather than the path alone: what follows a new worktree
+      // is stepping into it, and a clipboard that arrives ready to run saves
+      // the two characters everyone types next. `Enter` still copies the bare
+      // path, for the editor boxes that want one.
+      //
       // Best-effort and silent on failure: the worktree exists either way, and
       // a screen with no clipboard tool installed has nothing useful to say
       // about it beyond what `add` already reported.
-      const copied = await copyToClipboard(result.path);
-      const suffix = copied ? ", path copied" : "";
+      const copied = await copyToClipboard(cdCommand(result.path));
+      const suffix = copied ? ", cd copied" : "";
 
       if (result.alreadyPresent) return `${result.branch} already has a worktree${suffix}`;
       // Said back rather than assumed: `from` is only honoured for a branch that

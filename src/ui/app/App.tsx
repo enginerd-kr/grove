@@ -886,9 +886,11 @@ export function App({
      *
      * The path is wanted somewhere `grove` is not — another terminal tab, an
      * editor's "open folder" box — and the clipboard is the only way across.
-     * `a` already ends by copying the path of the worktree it made; this is
-     * the same handoff for one that already exists, on the key that reads as
-     * "take this one" rather than a letter to remember.
+     * `a` already ends by copying a `cd` line for the worktree it made; this
+     * is the same handoff for one that already exists, on the key that reads
+     * as "take this one" rather than a letter to remember — and the path
+     * alone, since the box being pasted into is as likely to be an editor's
+     * as a shell's.
      *
      * A folder answers too: it is a real directory on disk, and a key that
      * works on some rows and not others is one you have to look at the screen

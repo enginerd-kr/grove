@@ -61,3 +61,41 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 
   return false;
 }
+
+/**
+ * Bare when it can be, quoted when it has to be.
+ *
+ * A path with a space in it pasted unquoted is two arguments and a shell error,
+ * so quoting is not optional — but quoting every path would put marks around
+ * the overwhelming majority that do not need them, and this line is read as
+ * often as it is run.
+ */
+function quoteFor(platform: NodeJS.Platform, path: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./\\-]+$/.test(path)) return path;
+
+  // A double quote cannot appear in a Windows path — the filesystem refuses
+  // the character — so there is nothing to escape, and both `cmd` and
+  // PowerShell take the quoted form as one argument.
+  if (platform === "win32") return `"${path}"`;
+
+  // Single quotes on POSIX, where nothing but the closing quote is special:
+  // the usual `'\''` dance ends the quoting, spells the quote, and starts it
+  // again.
+  return `'${path.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * The line to paste into a shell to end up in `path`, not the path alone.
+ *
+ * What follows a freshly made worktree is almost always stepping into it, and
+ * the clipboard is what carries it to the terminal `grove` is not in — so it
+ * carries the whole command rather than half of it.
+ *
+ * `cd` on every platform this runs on: PowerShell and Git Bash both take it,
+ * so `cmd`'s `/d` — which the other two reject outright — is left off. A path
+ * on a different drive than the terminal's is the one case `cmd` will not
+ * follow, and it is not one a worktree beside its repository reaches.
+ */
+export function cdCommand(path: string, platform: NodeJS.Platform = process.platform): string {
+  return `cd ${quoteFor(platform, path)}`;
+}
