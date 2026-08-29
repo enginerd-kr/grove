@@ -1,8 +1,15 @@
 #!/bin/sh
 #
-# Stop hook: runs the full CI gate (`biome ci` + `tsc --noEmit` + `bun test`)
-# before Claude finishes a turn, so "done" means the same checks GitHub Actions
-# runs on the pull request.
+# Stop hook: runs the fast half of the CI gate (`biome ci` + `tsc --noEmit`)
+# before Claude finishes a turn.
+#
+# `bun test` is deliberately NOT here. The suite spawns real git processes and a
+# PTY, so it runs for minutes rather than seconds — long enough that gating every
+# turn on it cost more than it caught, and it overran the hook timeout. Lint and
+# types still catch the mistakes a turn actually tends to end on.
+#
+# The consequence is the point: a green hook no longer means the tests pass.
+# Run `bun run ci` before calling substantive work done.
 #
 # Wired up in .claude/settings.json. Exit codes:
 #   0  nothing to check, or the gate passed
@@ -26,7 +33,7 @@ changed=$(git status --porcelain -- \
   '*.ts' '*.tsx' '*.js' '*.jsx' '*.mjs' '*.cjs' '*.json' '*.jsonc')
 [ -z "$changed" ] && exit 0
 
-output=$(bun run ci 2>&1) && exit 0
+output=$(bun run check 2>&1) && exit 0
 
-printf 'Stop hook: `bun run ci` failed. Fix it before finishing.\n\n%s\n' "$output" >&2
+printf 'Stop hook: `bun run check` failed. Fix it before finishing.\n\n%s\n' "$output" >&2
 exit 2
