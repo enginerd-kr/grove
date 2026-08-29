@@ -121,6 +121,38 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     ],
   },
   {
+    name: "pr",
+    aliases: [],
+    args: "<pr>",
+    summary: "create a worktree for reviewing a pull request",
+    description: [
+      "Fetches pull request <pr> from wherever it was proposed — a branch on",
+      "the remote, or somebody's fork — and gives it a worktree at pr/<number>,",
+      "on a real branch of that name. Committing there and pushing sends the",
+      "change back to the pull request rather than to a branch of your own.",
+      "",
+      "<pr> is a number, the URL you copied out of the browser, or the branch it",
+      "was proposed from; `gh` is what resolves it, and `gh` is the only tool",
+      "beyond git that grove runs — here and nowhere else.",
+      "",
+      "The worktree is filled in from .grove.toml the same way `add` fills one",
+      "in. Run it again to catch the worktree up when the pull request moves; it",
+      "refuses rather than dropping commits you added to it.",
+    ],
+    flags: [
+      {
+        name: "no-setup",
+        type: "boolean",
+        summary: "skip the copies, links, and commands .grove.toml asks for",
+      },
+      {
+        name: "trust",
+        type: "boolean",
+        summary: "run .grove.toml's commands, recording that you have read them",
+      },
+    ],
+  },
+  {
     name: "path",
     aliases: [],
     args: "[target]",

@@ -51,6 +51,7 @@ eval "$(grove shell-init zsh)"    # works for zsh, bash, and fish
 ```bash
 grove clone <url> [dir]     # Clone a repository as a bare clone and set up its default branch
 grove add <branch>          # Create a new worktree for a branch, tracking its remote counterpart
+grove pr <number>           # Create a worktree for reviewing a pull request, on a branch you can push back from
 grove list                  # List all worktrees along with their git status and sync drift
 grove sync [target]         # Fetch and bring all worktrees up-to-date by rebasing them
 grove prune                 # Remove every worktree whose branch is merged or gone from the remote
@@ -69,10 +70,11 @@ Running `grove` without any arguments opens the interactive terminal UI:
 - **Quick Actions**: Press `a` to add a worktree, `r` to remove one — or every worktree under the selected folder — `s` to sync the selected worktree, and `S` to sync them all. `R` re-reads the list on demand. Removals always ask for confirmation first, and say what they would discard.
 - **Copy a Path**: Press `Enter` to put the selected worktree's absolute path on the clipboard — a folder answers too — ready to paste into another terminal tab or an editor's "open folder" box.
 - **Recent Commits**: The last few commits of the selected worktree are drawn under the list — the sha, how long ago, and where `HEAD` and `origin` point — so `↑2` is something you can read rather than a number to go and look up. `L` puts the panel away when the rows are wanted for the list instead.
+- **Pull Requests**: Press `p` to list the repository's open pull requests and pick one. It arrives as a worktree at `pr/<number>`, on a branch of the same name, fetched from wherever it was proposed — somebody's fork included — so reviewing it is a directory you can build and run in rather than a branch you have to put your own work down for. Needs [`gh`](https://cli.github.com), the only tool besides git that `grove` ever runs.
 - **Uncommitted Files**: When the selected worktree has changes in it, the files are drawn beside the list as the tree they sit in — directories folded the same way the worktrees are, so a change confined to one directory reads as one heading — and nothing but the paths, so "what have I got open over there" is answered without a `git status` in another terminal. The panel takes only the space to the right of the columns, so it never costs the list a column, and a clean worktree shows nothing at all.
 - **Finished Branches**: A row whose branch the trunk already has, or whose branch the remote no longer has, reads `merged` or `gone` beside its state — so the worktrees with nothing left in them are visible without going and asking. `r` clears the one under the cursor; `grove prune` clears every one of them at once.
 
-The keys stay deliberately few: they are the three things worktree management is made of. Everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out on purpose.
+The keys stay deliberately few: they are the things worktree management is made of, plus the one thing you cannot type without going to look it up first — a pull request's number. Everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out on purpose.
 
 ### Clearing away what is finished
 
@@ -114,6 +116,8 @@ Running `grove clone https://github.com/org/repo.git` inside `~/work` creates th
     search/       # Worktree for feat/search
   fix/
     crash/        # Worktree for fix/crash
+  pr/
+    42/           # Worktree for pull request 42
 ```
 
 `grove` also works seamlessly inside an ordinary Git clone. If you run it from within a standard clone, `grove add feat/login` will place the new worktree at `../repo-feat-login` without modifying or reorganizing your existing repository structure.
@@ -148,6 +152,22 @@ Pressing `a` and typing a branch name is the whole of it — the worktree appear
 <p align="center">
   <img src="docs/screens/add.svg" alt="grove's screen after pressing a: the new worktree in the tree, and under it the .grove.toml steps that copied the .env, shared node_modules, and ran bun install" width="100%">
 </p>
+
+## Reviewing a Pull Request
+
+`grove pr 42` fetches pull request 42 and checks it out at `pr/42`, on a local branch of that name. Because the branch is real you can commit there; and because `grove` configures the branch's push refspec, a plain `git push` sends those commits back to the pull request's own branch — whatever it happens to be called, and even when it lives on a fork whose author allowed edits from maintainers.
+
+```bash
+grove pr 42                                             # by number
+grove pr https://github.com/org/repo/pull/42            # by the URL you copied
+grove pr octocat:fix/crash                              # by the branch it came from
+```
+
+Run it again and the worktree catches up with whatever the pull request has become. If it has moved *and* you have commits of your own sitting there, `grove` refuses rather than choosing for you, and names the one line that would resolve it.
+
+When you are finished, `grove remove pr/42` — or press `r` on the `pr/` folder in the app to clear out every pull request you have looked at, in one go.
+
+Each pull request `grove` fetches gets a git remote of its own, named `pr-42`, carrying a single-branch refspec so it costs one ref rather than a fork's worth of stale branches. Deleting the branch takes the remote with it (`grove remove pr/42 --delete-branch`), and any left behind by a branch that went another way are swept up the next time `grove pr` runs.
 
 ## Development
 

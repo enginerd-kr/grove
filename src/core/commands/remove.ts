@@ -232,6 +232,28 @@ async function deleteBranch(
   }
 
   reporter.info(`deleted branch ${branch}`);
+
+  await dropPrRemote(bare, branch, reporter);
+}
+
+/**
+ * Takes a pull request's remote with its branch.
+ *
+ * `pr-42` exists to serve `pr/42` and nothing else — it carries a push refspec
+ * naming that branch — so once the branch is gone it is a remote the refresh
+ * tick fetches forever on behalf of a review that finished. Only ever removed
+ * alongside the branch, never alongside the worktree: a worktree can be removed
+ * and the branch kept, and the branch is what the remote is for.
+ */
+async function dropPrRemote(bare: string, branch: string, reporter: Reporter): Promise<void> {
+  const match = /^pr\/(\d+)$/.exec(branch);
+  if (match === null) return;
+
+  const remote = `pr-${match[1]}`;
+  const result = await runGit(["remote", "remove", remote], { cwd: bare });
+  // Absent is the ordinary case for a `pr/<n>` branch nobody made with
+  // `grove pr`, and it is not something to report either way.
+  if (result.code === 0) reporter.info(`dropped remote ${remote}`);
 }
 
 /**

@@ -19,6 +19,7 @@ import {
   noteParts,
   type WorktreeSummary,
 } from "../../core/commands/list.ts";
+import type { PullRequest } from "../../core/commands/pr.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import type { Commit } from "../../core/history.ts";
 import type { LineStore } from "../../report/lines.ts";
@@ -31,6 +32,7 @@ import { Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor, messageRows } from "./message.ts";
+import { PullRequests, pullRequestRows } from "./PullRequests.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tree.ts";
 
@@ -90,6 +92,14 @@ type Mode =
       readonly from?: string;
     }
   | { readonly kind: "confirm"; readonly target: Pending }
+  /**
+   * The open pull requests, and which one the cursor is on.
+   *
+   * The rows are read before the popup opens rather than while it is up, for
+   * the same reason `add` carries its base: a list that filled itself in under
+   * the cursor would move what `enter` is aimed at.
+   */
+  | { readonly kind: "pick"; readonly prs: readonly PullRequest[]; readonly index: number }
   | { readonly kind: "busy"; readonly label: string };
 
 type Props = {
@@ -152,6 +162,17 @@ const LOG_ROWS = 5;
  * anyone should have to press to get out of that.
  */
 const LOG_MIN_ROWS = 2;
+
+/**
+ * The most pull requests the popup draws at once.
+ *
+ * Eight is where a list stops being something you glance down and starts being
+ * something you page through, and the popup takes its rows out of the list
+ * underneath it. A repository with more open than that is one where the number
+ * is worth typing: `grove pr <n>` takes it directly, and the window scrolls
+ * either way.
+ */
+const PR_ROWS = 8;
 
 /**
  * The narrowest and widest the uncommitted-files panel is allowed to be.
@@ -678,6 +699,38 @@ export function App({
     [service, perform],
   );
 
+  /**
+   * `p`: ask the forge what is open, then draw it.
+   *
+   * Not a `perform`, because there is no outcome to report — the answer is a
+   * popup, not a line. What it does borrow is `busy`, which is the loading
+   * state and comes for free: keys are dropped while `gh` is out, the refresh
+   * tick is paused, and Ctrl-C still reaches the child.
+   */
+  const openPrs = useCallback(async () => {
+    store.clear();
+    setMessage(undefined);
+    setMode({ kind: "busy", label: "reading pull requests" });
+
+    try {
+      const prs = await service.pullRequests();
+
+      // An empty list is an answer, not a popup: one there is nothing to pick
+      // from is chrome, so it goes on the message line where the other answers
+      // to a keypress go.
+      if (prs.length === 0) {
+        setMessage({ kind: "info", text: "no open pull requests" });
+      } else {
+        setMode({ kind: "pick", prs, index: 0 });
+        return;
+      }
+    } catch (error) {
+      setMessage(messageFor(error));
+    }
+
+    setMode({ kind: "list" });
+  }, [service, store]);
+
   // The first read is not an action: it reports no outcome, and going through
   // `perform` would open the screen with an empty message line.
   useEffect(() => {
@@ -877,6 +930,29 @@ export function App({
 
     if (mode.kind === "busy") return;
 
+    if (mode.kind === "pick") {
+      // Arrows and enter, and nothing that types: `Prompt.tsx` was removed on
+      // purpose, and a filter box here would quietly bring the text buffer it
+      // took with it back.
+      if (key.escape || input === "q") return setMode({ kind: "list" });
+      if (key.upArrow || input === "k") {
+        return setMode({ ...mode, index: Math.max(0, mode.index - 1) });
+      }
+      if (key.downArrow || input === "j") {
+        return setMode({ ...mode, index: Math.min(mode.prs.length - 1, mode.index + 1) });
+      }
+      if (key.return) {
+        const pr = mode.prs[mode.index];
+        if (pr === undefined) return setMode({ kind: "list" });
+
+        return void perform(`checking out pull request ${pr.number}`, () =>
+          service.checkoutPr(pr.number),
+        ).then(() => runPendingCommands(`pr/${pr.number}`));
+      }
+
+      return;
+    }
+
     if (mode.kind === "add") {
       if (key.escape) return setMode({ kind: "list" });
       if (key.return) {
@@ -1034,6 +1110,9 @@ export function App({
         },
       });
     }
+    // Not aimed at the row under the cursor, unlike every other key here: it
+    // asks the forge, and what comes back is a list of its own to move through.
+    if (input === "p") return void openPrs();
     if (input === "s" && selected) {
       return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
     }
@@ -1064,6 +1143,13 @@ export function App({
         { keys: "n", action: "keep" },
       ];
     }
+    if (mode.kind === "pick") {
+      return [
+        { keys: "↑↓", action: "move" },
+        { keys: "enter", action: "check out" },
+        { keys: "esc", action: "cancel" },
+      ];
+    }
 
     // A folder offers what a folder can do. Leaving `s` on it to mean what it
     // means on a worktree would be a menu that lies.
@@ -1074,6 +1160,7 @@ export function App({
         { keys: "enter", action: "copy path" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
+        { keys: "p", action: "review" },
         { keys: "S", action: "sync all" },
         { keys: "R", action: "refresh" },
         { keys: "L", action: logOn ? "hide log" : "show log" },
@@ -1086,6 +1173,7 @@ export function App({
       { keys: "enter", action: "copy path" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },
+      { keys: "p", action: "review" },
       { keys: "s", action: "sync" },
       { keys: "S", action: "sync all" },
       { keys: "R", action: "refresh" },
@@ -1110,8 +1198,24 @@ export function App({
   // the folder hints (`a add under feat/`) reach first. Asked for rather than
   // assumed, for the same reason as the banner.
   const footerRows = 1 + statusBarRows(hints, columns) + 1;
+  /**
+   * How many pull requests the popup may draw, out of what is actually free.
+   *
+   * Budgeted like the log panel rather than like the `add` box: `add` reserves
+   * a flat three rows however long the branch name is, while this is as tall as
+   * the forge says — so it is capped at `PR_ROWS` and then capped again by the
+   * rows left once the header, the key bar and `MIN_LIST_ROWS` have taken
+   * theirs. At least one row either way: a popup you cannot see the cursor in
+   * is worse than a short one.
+   */
+  const prBody = Math.max(
+    1,
+    Math.min(PR_ROWS, terminalRows - headerRows - footerRows - 3 - MIN_LIST_ROWS),
+  );
+
   const detailRows =
     (mode.kind === "add" ? 3 : 0) +
+    (mode.kind === "pick" ? pullRequestRows(mode.prs.length, prBody) : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     (message === undefined || mode.kind === "busy" ? 0 : messageRows(message));
 
@@ -1366,6 +1470,10 @@ export function App({
             ))}
           </Box>
         </>
+      ) : null}
+
+      {mode.kind === "pick" ? (
+        <PullRequests prs={mode.prs} index={mode.index} rows={prBody} />
       ) : null}
 
       {mode.kind === "add" ? (

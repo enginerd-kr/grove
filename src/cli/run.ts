@@ -8,6 +8,7 @@ import {
 } from "../core/commands/doctor.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
 import { worktreePath } from "../core/commands/path.ts";
+import { checkoutPullRequest } from "../core/commands/pr.ts";
 import { describePrune, formatPruneTable, pruneWorktrees } from "../core/commands/prune.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
 import { renameWorktree } from "../core/commands/rename.ts";
@@ -87,6 +88,33 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
         reporter.info(
           `the changes are also saved as a commit: git stash apply ${result.took.stash}`,
         );
+      }
+
+      if (global.json) {
+        reporter.out(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      reporter.out(`${display(cwd, result.path)}\t${result.branch}`);
+      return;
+    }
+
+    case "pr": {
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await checkoutPullRequest(
+        repo,
+        cwd,
+        { pr: command.pr, setup: command.setup, trust: command.trust },
+        reporter,
+      );
+
+      // A worktree that was already there is only "nothing happened" when the
+      // branch did not move either; catching up with the pull request is the
+      // outcome, and the same line has to say which of the two it was.
+      if (result.updated === "fast-forwarded") {
+        reporter.info(`${result.branch} caught up with pull request ${result.number}`);
+      } else if (result.alreadyPresent) {
+        reporter.info(`${result.branch} already has a worktree`);
       }
 
       if (global.json) {

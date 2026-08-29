@@ -17,10 +17,11 @@ app/Setup.tsx     the screen when there is no repository yet: ask, clone, hand o
 app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
 app/Log.tsx       the commits under the list, for the row the cursor is on
 app/Files.tsx     the uncommitted files beside the list, as the tree they sit in
+app/PullRequests.tsx  the open pull requests, as a list to pick one out of
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths, and one worktree's changed paths, as the trees they are
-app/service.ts    what the screens are allowed to do: add, sync, remove
+app/service.ts    what the screens are allowed to do: add, sync, remove, check out a PR
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
 e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
@@ -64,6 +65,14 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   beats what was committed yesterday — and below `LOG_MIN_ROWS` it is dropped rather than drawn as
   a heading with one commit stuck to it. The panel renders its own fixed height, blank rows
   included, so a shallow history does not move the rule above it.
+- **The pull-request popup is budgeted like the log panel, not like the `add` box.** `add`
+  reserves a flat three rows however long the branch name is; a list of pull requests is as tall as
+  the forge says, so `pullRequestRows` caps it at `PR_ROWS` and then caps *that* by what is free
+  once the header, the key bar and `MIN_LIST_ROWS` have taken theirs — with a floor of one row,
+  since a popup you cannot see the cursor in is worse than a short one. The rows come out of the
+  list, which is the same trade the `add` box makes; the difference is only that this one could
+  ask for eight. Its window centres on the cursor the way the list's does, so the rows move under
+  the selection rather than the selection running off the end of what is drawn.
 - **The files panel is drawn in the list's slack, and nowhere else.** `Files.tsx` names the
   uncommitted paths of the row under the cursor — the paths alone, since the `state` dot has
   already said the one thing a status letter would add — and it comes and goes as the cursor
@@ -164,12 +173,20 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   so two presses in one frame both read the same rendered index and the second goes nowhere —
   which is exactly what holding an arrow key does. The clamp lives in the updater too, so a list
   that shrank under the cursor cannot leave it past the end.
-- **The screen holds no git knowledge.** `App` takes a `WorktreeService` — add, sync, remove and
-  the reads behind them, each answering with the line to show afterwards. It is deliberately
-  narrow: a stash, a bisect, a force-push or a PR stays on the command line, where it has to be
-  typed out on purpose rather than reached with one finger. That is what lets `App.test.tsx` drive every key
-  with a stub and no repository, and it is why a keystroke cannot grow a capability the command
-  line does not have.
+- **The screen holds no git knowledge.** `App` takes a `WorktreeService` — add, sync, remove,
+  check out a pull request, and the reads behind them, each answering with the line to show
+  afterwards. It is still deliberately narrow: a stash, a bisect, a force-push stays on the
+  command line, where it has to be typed out on purpose rather than reached with one finger. That
+  is what lets `App.test.tsx` drive every key with a stub and no repository, and it is why a
+  keystroke cannot grow a capability the command line does not have.
+- **`p` is the one key whose answer is not `git`, and it is here for a reason the others are
+  not.** What it needs is not a command but a *choice*, out of a list only the forge can produce:
+  `grove pr 42` already exists and works, but knowing that 42 is the number means leaving to go and
+  look it up — and not leaving is the whole argument for a key. It runs exactly what the command
+  line runs, through the same `checkoutPullRequest`, so the rule above still holds. `gh` is the
+  only tool besides git that any of this spawns, and it answers only what git cannot: which
+  repository the head is on, what the ref is called there, and whether the pull request is still
+  open.
 - **`r` goes through a `confirm` whichever row it is on.** `Pending` covers a removal and a
   folder's worth of removals; the question is always "is this the row you meant", and the answer
   should not depend on how many rows are behind it. What `y` costs is spelled out before it is

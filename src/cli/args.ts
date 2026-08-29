@@ -48,6 +48,13 @@ export type GroveCommand =
       /** `--take`: move the current worktree's uncommitted changes into the new one. */
       readonly take: boolean;
     }
+  | {
+      readonly name: "pr";
+      /** As typed: a number, a URL, or a branch. `gh` resolves it, so we do not. */
+      readonly pr: string;
+      readonly setup: boolean;
+      readonly trust: boolean;
+    }
   | { readonly name: "list" }
   | { readonly name: "doctor" }
   | {
@@ -191,6 +198,15 @@ function buildCommand(
         setup: !bool(values, "no-setup"),
         trust: bool(values, "trust"),
         take: bool(values, "take"),
+      };
+    }
+    case "pr": {
+      if (first === undefined) return usageError(spec, `${spec.name} needs a pull request`);
+      return {
+        name: "pr",
+        pr: first,
+        setup: !bool(values, "no-setup"),
+        trust: bool(values, "trust"),
       };
     }
     case "list":

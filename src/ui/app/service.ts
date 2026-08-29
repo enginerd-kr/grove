@@ -3,6 +3,7 @@ import { cdCommand, copyToClipboard } from "../../core/clipboard.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
+import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
 import { GroveError } from "../../core/errors.ts";
@@ -21,8 +22,14 @@ import type { Reporter } from "../../report/reporter.ts";
  * screen cannot quietly grow a capability the command line does not have.
  *
  * Deliberately narrow. Everything else git can do — a stash, a bisect, a
- * force-push, a PR — stays on the command line, where it has to be typed out
- * on purpose rather than reached with one finger.
+ * force-push — stays on the command line, where it has to be typed out on
+ * purpose rather than reached with one finger.
+ *
+ * The two pull-request calls are the exception, and they are `grove pr` and
+ * nothing more: the same function, the same refusals, the same worktree. What
+ * the key buys is the *number*, which is the one part of that command you
+ * cannot supply without leaving to go and look it up — and not leaving is the
+ * whole argument for a key.
  */
 export type WorktreeService = {
   readonly list: () => Promise<readonly WorktreeSummary[]>;
@@ -84,6 +91,24 @@ export type WorktreeService = {
    * refuses does not stop the rest; the answer says how many did what.
    */
   readonly removeMany: (targets: readonly string[], discardDirty?: boolean) => Promise<string>;
+  /**
+   * The open pull requests, for the popup to pick one from.
+   *
+   * The one read here that leaves the machine for something other than git,
+   * and the one that can answer "no such thing" honestly: `gh` missing is a
+   * refusal with a URL in it rather than a crash. An empty list is a real
+   * answer too, and the screen says so on its message line rather than opening
+   * a popup there is nothing to pick from.
+   */
+  readonly pullRequests: () => Promise<readonly PullRequest[]>;
+  /**
+   * The same worktree `grove pr <n>` makes, from the row that was picked.
+   *
+   * Answers with what changed, because re-picking a pull request already open
+   * is a normal thing to do: it may have made a worktree, caught an existing
+   * one up, or found nothing to do at all.
+   */
+  readonly checkoutPr: (number: number) => Promise<string>;
   /** `target` omitted means every worktree — the app's `S`. */
   readonly sync: (target?: string) => Promise<string>;
   /**
@@ -267,6 +292,33 @@ export function createWorktreeService(
       if (refusals.length === 0) return `removed ${removed} worktree${plural}`;
 
       return `removed ${removed} worktree${plural}, ${refusals.length} refused`;
+    },
+
+    pullRequests: () => listPullRequests(repo),
+
+    checkoutPr: async (number) => {
+      // `setup: true, trust: false` exactly like `add` above, and the app runs
+      // the commands afterwards through `runPendingCommands`. Worth being
+      // explicit about why that is safe here: a pull request can edit
+      // `.grove.toml`, but `repoSetupPlan` reads the *trunk's* copy, never the
+      // new worktree's — so what runs is the maintainer's file in both cases,
+      // and this key opens no door `a` did not already open.
+      const result = await checkoutPullRequest(
+        repo,
+        cwd,
+        { pr: String(number), setup: true, trust: false },
+        reporter,
+      );
+
+      const copied = await copyToClipboard(cdCommand(result.path));
+      const suffix = copied ? ", cd copied" : "";
+
+      if (result.updated === "unchanged") return `pr/${number} is already up to date${suffix}`;
+      if (result.updated === "fast-forwarded") {
+        return `pr/${number} caught up with the pull request${suffix}`;
+      }
+
+      return `added pr/${number} — ${result.title}${suffix}`;
     },
 
     pendingCommands: () => pendingCommands(repo),
