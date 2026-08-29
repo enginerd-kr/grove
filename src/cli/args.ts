@@ -72,6 +72,8 @@ export type GroveCommand =
       readonly target: string;
       readonly force: boolean;
       readonly deleteBranch: boolean;
+      /** `--no-teardown`: skip `.grove.toml`'s `[teardown]` commands. */
+      readonly teardown: boolean;
     }
   | {
       readonly name: "sync";
@@ -241,6 +243,7 @@ function buildCommand(
         target: first,
         force: bool(values, "force"),
         deleteBranch: bool(values, "delete-branch"),
+        teardown: !bool(values, "no-teardown"),
       };
     }
     case "sync":

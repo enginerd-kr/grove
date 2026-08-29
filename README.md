@@ -69,7 +69,6 @@ Running `grove` without any arguments opens the interactive terminal UI:
 - **Copy a Path**: Press `Enter` to put the selected worktree's absolute path on the clipboard — a folder answers too — ready to paste into another terminal tab or an editor's "open folder" box.
 - **Recent Commits**: The last few commits of the selected worktree are drawn under the list — the sha, how long ago, and where `HEAD` and `origin` point — so `↑2` is something you can read rather than a number to go and look up. `L` puts the panel away when the rows are wanted for the list instead.
 - **Uncommitted Files**: When the selected worktree has changes in it, the files are drawn beside the list as the tree they sit in — directories folded the same way the worktrees are, so a change confined to one directory reads as one heading — and nothing but the paths, so "what have I got open over there" is answered without a `git status` in another terminal. The panel takes only the space to the right of the columns, so it never costs the list a column, and a clean worktree shows nothing at all.
-
 - **Finished Branches**: A row whose branch the trunk already has, or whose branch the remote no longer has, reads `merged` or `gone` beside its state — so the worktrees with nothing left in them are visible without going and asking. `r` clears the one under the cursor; `grove prune` clears every one of them at once.
 
 The keys stay deliberately few: they are the three things worktree management is made of. Everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out on purpose.
@@ -130,13 +129,18 @@ copy = [".env", "certs"]       # Copied files or folders from the default branch
 link = ["node_modules"]        # Symlinked, so packages are only installed once
 env  = { PORT = "3000" }       # Environment variables passed to the run commands below
 run  = ["bun install"]         # Shell commands to run inside the new worktree
+
+[teardown]
+env = { COMPOSE_PROJECT_NAME = "acme" }
+run = ["docker compose down"]  # Shell commands run inside the worktree just before it is removed
 ```
 
 ### How it works:
 - **Tracked configuration**: This file is meant to be checked into your Git repository. Setting up a project (like copying `.env` or folders like `certs/`, and running `bun install`) is a project-wide standard, not just a personal local preference.
 - **Safe local actions**: The `copy` and `link` steps run immediately because they only reference files already present on your local disk.
-- **Secure execution**: Because the `run` commands come from repository code that could be modified in pull requests, `grove` CLI prints and skips them by default for security, until you pass the `--trust` flag.
+- **Secure execution**: Because the `run` commands come from repository code that could be modified in pull requests, `grove` CLI prints and skips them by default for security, until you pass the `--trust` flag. One `--trust` covers both sections, and one edit to the file withdraws both.
 - **Interactive UI**: When adding a worktree through the interactive UI, these commands are run automatically since using the UI is considered explicit consent.
+- **Teardown never blocks a removal**: whatever `[setup]` started is still running when the directory it was started in is about to go, which is what `[teardown]` is for. A command that fails there is reported loudly and the worktree is still removed — a broken `docker compose down` should not leave you unable to delete a directory you have finished with. `grove remove --no-teardown` skips the section outright.
 
 ## Development
 

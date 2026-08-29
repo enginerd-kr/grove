@@ -567,6 +567,88 @@ export async function runSetup(
   };
 }
 
+export type TeardownResult = {
+  readonly dir: string;
+  /** How many commands `[teardown]` asked for. Zero is every ordinary repository. */
+  readonly planned: number;
+  readonly ran: readonly string[];
+  /** Set when a command exited non-zero. The ones after it were not run. */
+  readonly failed?: SetupFailure;
+  /** True when there were commands and this machine has not trusted the file. */
+  readonly untrusted: boolean;
+};
+
+/**
+ * Runs `[teardown]` in a worktree that is about to be removed.
+ *
+ * Never throws, and never stops the removal — which is the decision worth
+ * writing down. A `docker compose down` that fails because Docker is not
+ * running would otherwise leave somebody unable to delete a directory they have
+ * finished with, on account of a cleanup for a thing that is already not
+ * running. So a failure is loud and the removal carries on, and `--no-teardown`
+ * is there for the repository whose cleanup is broken enough to want skipping
+ * outright.
+ *
+ * Trust is the same record `[setup]`'s commands answer to, because it is the
+ * same file: one `--trust` covers both, and one edit withdraws both.
+ */
+export async function runTeardown(
+  repo: RepoPaths,
+  target: SetupTarget,
+  reporter: Reporter,
+): Promise<TeardownResult> {
+  const dir = worktreeDir(repo.root, target.path);
+  const plan = await repoSetupPlan(repo, target.path);
+  const { commands, env } = plan.teardown;
+
+  if (commands.length === 0) {
+    return { dir, planned: 0, ran: [], untrusted: false };
+  }
+
+  const untrusted =
+    plan.fingerprint !== undefined && !(await isTrusted(repo.gitDir, plan.fingerprint));
+
+  if (untrusted) {
+    const where = plan.path === undefined ? SETUP_FILE : relative(repo.root, plan.path);
+    reporter.warn(
+      `${plural(commands.length, "teardown command")} in ${where} ${
+        commands.length === 1 ? "has" : "have"
+      } not been trusted here — the worktree still goes, but nothing was run in it`,
+    );
+
+    return { dir, planned: commands.length, ran: [], untrusted };
+  }
+
+  const commandEnv = {
+    ...Object.fromEntries(env.map(({ name, value }) => [name, value])),
+    GROVE_ROOT: repo.root,
+    GROVE_WORKTREE: target.path,
+    GROVE_BRANCH: target.branch ?? "",
+  };
+
+  const ran: string[] = [];
+  let failed: SetupFailure | undefined;
+
+  for (const command of commands) {
+    const step = reporter.step(`running ${command}`);
+    const result = await runShell(command, { cwd: target.path, env: commandEnv });
+
+    if (result.code !== 0) {
+      step.fail(`${command} exited ${result.code}`);
+      // The rest do not run, for the same reason `[setup]`'s do not: they were
+      // written as a sequence, and the second half of a teardown usually
+      // assumes the first half happened.
+      failed = { command, code: result.code, details: tail(result.stderr, result.stdout) };
+      break;
+    }
+
+    step.succeed(`ran ${command}`);
+    ran.push(command);
+  }
+
+  return { dir, planned: commands.length, ran, failed, untrusted };
+}
+
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }

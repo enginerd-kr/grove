@@ -197,7 +197,12 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       const result = await removeWorktree(
         repo,
         cwd,
-        { target: command.target, force: command.force, deleteBranch: command.deleteBranch },
+        {
+          target: command.target,
+          force: command.force,
+          deleteBranch: command.deleteBranch,
+          teardown: command.teardown,
+        },
         reporter,
       );
 

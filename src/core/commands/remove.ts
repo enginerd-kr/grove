@@ -6,6 +6,7 @@ import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { runTeardown, type TeardownResult } from "../setup.ts";
 import {
   listWorktrees,
   resolveTarget,
@@ -36,6 +37,15 @@ export type RemoveOptions = {
    * branch everything syncs onto, keep standing.
    */
   readonly discardDirty?: boolean;
+  /**
+   * Run `.grove.toml`'s `[teardown]` commands first. On by default.
+   *
+   * On, because whatever `[setup]` started is still running and the directory
+   * it was started in is about to stop existing. Off is for the repository
+   * whose cleanup is itself broken — see `runTeardown`, which never lets a
+   * failed command stop the removal either.
+   */
+  readonly teardown?: boolean;
 };
 
 export type RemoveResult = {
@@ -44,6 +54,8 @@ export type RemoveResult = {
   readonly branchDeleted: boolean;
   /** Set when the branch was kept and holds commits the remote has not seen. */
   readonly unpushedWarning?: string;
+  /** What `[teardown]` did, when the file asked for anything. */
+  readonly teardown?: TeardownResult;
 };
 
 export async function removeWorktree(
@@ -57,6 +69,21 @@ export async function removeWorktree(
   const dir = worktreeDir(repo.root, target.path);
 
   await refuseUnsafe(repo, cwd, target, dir, worktrees, options);
+
+  // After the refusals and before the removal: there is no point stopping a
+  // container for a worktree that then turns out to be locked, and no point
+  // stopping one after the directory holding its compose file has gone.
+  const teardown =
+    options.teardown === false
+      ? undefined
+      : await runTeardown(repo, { path: target.path, branch: target.branch }, reporter);
+
+  if (teardown?.failed) {
+    reporter.warn(
+      `${JSON.stringify(teardown.failed.command)} exited ${teardown.failed.code}; removing ${dir} anyway`,
+    );
+    for (const detail of teardown.failed.details) reporter.info(`  ${detail}`);
+  }
 
   const step = reporter.step(`removing ${dir}`);
   try {
@@ -82,7 +109,7 @@ export async function removeWorktree(
   if (options.deleteBranch && target.branch !== undefined) {
     await deleteBranch(repo.gitDir, target.branch, options.force, reporter);
 
-    return { path: target.path, branch: target.branch, branchDeleted: true };
+    return { path: target.path, branch: target.branch, branchDeleted: true, teardown };
   }
 
   return {
@@ -90,6 +117,7 @@ export async function removeWorktree(
     branch: target.branch,
     branchDeleted: false,
     unpushedWarning: await unpushedWarning(repo.gitDir, target.branch),
+    teardown,
   };
 }
 

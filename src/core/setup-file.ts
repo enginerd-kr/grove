@@ -47,6 +47,26 @@ export type SetupEnv = {
   readonly value: string;
 };
 
+/**
+ * `[teardown]` — what to run in a worktree just before it is removed.
+ *
+ * The other half of `[setup]`, and the half that was missing. A `run` line that
+ * starts a container, a database, or a tunnel leaves that thing running after
+ * the directory it was started in is gone, and nothing in the repository ever
+ * said how to stop it — so it was stopped by hand, by whoever remembered, or
+ * not at all. This is where the project says it once.
+ *
+ * No `copy` and no `link`: there is nothing to take from a worktree on the way
+ * out that could not have been committed. Only commands, and the environment
+ * they need, which is its own rather than `[setup]`'s — the credential that
+ * installs dependencies and the one that tears down a stack are rarely the
+ * same, and sharing them would put both in reach of both.
+ */
+export type TeardownPlan = {
+  readonly env: readonly SetupEnv[];
+  readonly commands: readonly string[];
+};
+
 export type SetupPlan = {
   /** Paths taken from the trunk, each a file or a whole directory. */
   readonly copy: readonly string[];
@@ -55,13 +75,30 @@ export type SetupPlan = {
   readonly env: readonly SetupEnv[];
   /** Command lines, run in the order the file lists them. */
   readonly commands: readonly string[];
+  /**
+   * `[teardown]`, carried on the same plan.
+   *
+   * One read of one file, because it is one file: `trust` records the whole of
+   * its contents and both sections answer to that record, so splitting them
+   * into two plans would mean two reads that could disagree about which
+   * version of the file they were reading.
+   */
+  readonly teardown: TeardownPlan;
   /** Absent when the worktree has no `.grove.toml`. */
   readonly path?: string;
   /** The file's contents, hashed — what `trust` records and compares. */
   readonly fingerprint?: string;
 };
 
-export const EMPTY_PLAN: SetupPlan = { copy: [], link: [], env: [], commands: [] };
+export const EMPTY_TEARDOWN: TeardownPlan = { env: [], commands: [] };
+
+export const EMPTY_PLAN: SetupPlan = {
+  copy: [],
+  link: [],
+  env: [],
+  commands: [],
+  teardown: EMPTY_TEARDOWN,
+};
 
 /** How much of the file asked for something. Zero means there is nothing to do. */
 export function plannedCount(plan: SetupPlan): number {
@@ -80,13 +117,17 @@ const EXAMPLES: Readonly<Record<string, string>> = {
  * `copy = ".env"` is what people write the first time, and refusing it would be
  * pedantry about a shape that has exactly one sensible reading.
  */
-function stringsAt(table: Record<string, unknown>, key: string): readonly string[] {
+function stringsAt(
+  section: string,
+  table: Record<string, unknown>,
+  key: string,
+): readonly string[] {
   const value = table[key];
   if (value === undefined) return [];
   if (typeof value === "string") return [value];
 
   if (!Array.isArray(value) || value.some((each) => typeof each !== "string")) {
-    throw new GroveError("usage", `${SETUP_FILE}: setup.${key} must be a list of strings`, {
+    throw new GroveError("usage", `${SETUP_FILE}: ${section}.${key} must be a list of strings`, {
       hint: `for example: ${key} = [${JSON.stringify(EXAMPLES[key] ?? ".env")}]`,
     });
   }
@@ -95,15 +136,16 @@ function stringsAt(table: Record<string, unknown>, key: string): readonly string
 }
 
 const KNOWN = new Set(["copy", "link", "env", "run"]);
+const KNOWN_TEARDOWN = new Set(["env", "run"]);
 
 /** A name a shell would accept, which is the only kind worth passing to one. */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** The name, checked once, wherever the two spellings below found it. */
-function checkedEnvName(name: string, wrote: string): string {
+function checkedEnvName(section: string, name: string, wrote: string): string {
   if (ENV_NAME.test(name)) return name;
 
-  throw new GroveError("usage", `${SETUP_FILE}: setup.env has no name in ${wrote}`, {
+  throw new GroveError("usage", `${SETUP_FILE}: ${section}.env has no name in ${wrote}`, {
     hint: `a name, then its value: ${EXAMPLES.env} — or UV_INDEX_USERNAME = "PLACE_HOLDER"`,
   });
 }
@@ -117,11 +159,11 @@ function checkedEnvName(name: string, wrote: string): string {
  * list or a table is a different matter: there is no obvious string for those,
  * and guessing one is how a config file starts lying.
  */
-function scalar(value: unknown, name: string): string {
+function scalar(section: string, value: unknown, name: string): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
 
-  throw new GroveError("usage", `${SETUP_FILE}: setup.env.${name} must be a string`, {
+  throw new GroveError("usage", `${SETUP_FILE}: ${section}.env.${name} must be a string`, {
     hint: `for example: ${name} = "PLACE_HOLDER"`,
   });
 }
@@ -159,21 +201,21 @@ function scalar(value: unknown, name: string): string {
  * pushed. For a real secret, keep pointing the tool at a credential store; this
  * is for the settings that merely have to *be there*.
  */
-function envAt(table: Record<string, unknown>): readonly SetupEnv[] {
+function envAt(section: string, table: Record<string, unknown>): readonly SetupEnv[] {
   const value = table.env;
 
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     return Object.entries(value).map(([name, each]) => ({
-      name: checkedEnvName(name, JSON.stringify(name)),
-      value: scalar(each, name),
+      name: checkedEnvName(section, name, JSON.stringify(name)),
+      value: scalar(section, each, name),
     }));
   }
 
-  return stringsAt(table, "env").map((line) => {
+  return stringsAt(section, table, "env").map((line) => {
     const at = line.indexOf("=");
 
     return {
-      name: checkedEnvName(at === -1 ? "" : line.slice(0, at), JSON.stringify(line)),
+      name: checkedEnvName(section, at === -1 ? "" : line.slice(0, at), JSON.stringify(line)),
       value: line.slice(at + 1),
     };
   });
@@ -198,32 +240,57 @@ export function parseSetupFile(text: string): SetupPlan {
   }
 
   const root = (parsed ?? {}) as Record<string, unknown>;
-  const section = root.setup;
-  if (section === undefined) return EMPTY_PLAN;
+  const setup = tableAt(root, "setup", KNOWN);
+  const teardown = tableAt(root, "teardown", KNOWN_TEARDOWN);
+
+  // Read apart rather than one gating the other: a repository whose worktrees
+  // need nothing on the way in and a `docker compose down` on the way out is an
+  // ordinary repository, and returning nothing for it because `[setup]` was
+  // absent would be the silent no-op this file's unknown-key check exists to
+  // prevent, arrived at from the other side.
+  return {
+    copy: stringsAt("setup", setup, "copy"),
+    link: stringsAt("setup", setup, "link"),
+    env: envAt("setup", setup),
+    commands: stringsAt("setup", setup, "run"),
+    teardown: {
+      env: envAt("teardown", teardown),
+      commands: stringsAt("teardown", teardown, "run"),
+    },
+  };
+}
+
+/**
+ * One section, checked for keys it does not have.
+ *
+ * An unknown key is an error rather than something ignored, for both sections
+ * and for the same reason: `cpoy = [".env"]` that quietly does nothing is the
+ * exact failure this file exists to prevent.
+ */
+function tableAt(
+  root: Record<string, unknown>,
+  name: string,
+  known: ReadonlySet<string>,
+): Record<string, unknown> {
+  const section = root[name];
+  if (section === undefined) return {};
 
   if (typeof section !== "object" || section === null || Array.isArray(section)) {
-    throw new GroveError("usage", `${SETUP_FILE}: [setup] must be a table`);
+    throw new GroveError("usage", `${SETUP_FILE}: [${name}] must be a table`);
   }
 
   const table = section as Record<string, unknown>;
   for (const key of Object.keys(table)) {
-    if (KNOWN.has(key)) continue;
+    if (known.has(key)) continue;
 
     throw new GroveError(
       "usage",
-      `${SETUP_FILE}: [setup] has no key named ${JSON.stringify(key)}`,
-      {
-        hint: `the keys are ${[...KNOWN].join(", ")}`,
-      },
+      `${SETUP_FILE}: [${name}] has no key named ${JSON.stringify(key)}`,
+      { hint: `the keys are ${[...known].join(", ")}` },
     );
   }
 
-  return {
-    copy: stringsAt(table, "copy"),
-    link: stringsAt(table, "link"),
-    env: envAt(table),
-    commands: stringsAt(table, "run"),
-  };
+  return table;
 }
 
 /**

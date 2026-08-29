@@ -183,10 +183,19 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     description: [
       "<target> may be a branch name, a directory name, or a path — whichever",
       "you have in mind. Refuses anything unsafe unless --force.",
+      "",
+      "Runs .grove.toml's [teardown] commands inside the worktree first, so",
+      "whatever the setup started — a container, a database, a tunnel — is given",
+      "the chance to stop before the directory it was started in goes away.",
     ],
     flags: [
       { name: "force", type: "boolean", summary: "remove even with uncommitted changes" },
       { name: "delete-branch", type: "boolean", summary: "also delete the branch it held" },
+      {
+        name: "no-teardown",
+        type: "boolean",
+        summary: "skip the commands .grove.toml's [teardown] asks for",
+      },
     ],
   },
   {
