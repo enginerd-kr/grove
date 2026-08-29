@@ -67,7 +67,19 @@ type Mode =
    * were still typing the name would be a different branch than the one the
    * prompt said.
    */
-  | { readonly kind: "add"; readonly value: string; readonly from?: string }
+  /**
+   * `caret` is where the next character lands, counted in characters before
+   * it: 0 is the start of `value` and `value.length` is the end. Kept beside
+   * the text rather than left at the end of it, because a name typed with a
+   * typo three characters back is fixed by walking `←` to it, not by deleting
+   * everything after it.
+   */
+  | {
+      readonly kind: "add";
+      readonly value: string;
+      readonly caret: number;
+      readonly from?: string;
+    }
   | { readonly kind: "confirm"; readonly target: Pending }
   | { readonly kind: "busy"; readonly label: string };
 
@@ -833,13 +845,36 @@ export function App({
           runPendingCommands(value),
         );
       }
+      // The caret moves through the name, and stops at either end rather than
+      // wrapping: a key that jumps from the start to the end is one you have
+      // to look at the screen to use.
+      if (key.leftArrow) {
+        return setMode({ ...mode, caret: Math.max(0, mode.caret - 1) });
+      }
+      if (key.rightArrow) {
+        return setMode({ ...mode, caret: Math.min(mode.value.length, mode.caret + 1) });
+      }
+      // Backspace takes the character the caret sits after, wherever that is,
+      // and the caret follows it back so the next one takes its neighbour.
+      // Both keys mean backspace here: the key labelled Backspace arrives as
+      // `delete` on a mac, and a forward delete is not worth losing that to.
       if (key.backspace || key.delete) {
-        return setMode({ ...mode, value: mode.value.slice(0, -1) });
+        if (mode.caret === 0) return;
+
+        return setMode({
+          ...mode,
+          value: mode.value.slice(0, mode.caret - 1) + mode.value.slice(mode.caret),
+          caret: mode.caret - 1,
+        });
       }
       // Control sequences arrive here as multi-character strings; taking only
       // printable input keeps an arrow key from typing itself into the name.
       if (input.length > 0 && !key.ctrl && !key.meta && /^[\x20-\x7e]+$/.test(input)) {
-        return setMode({ ...mode, value: mode.value + input });
+        return setMode({
+          ...mode,
+          value: mode.value.slice(0, mode.caret) + input + mode.value.slice(mode.caret),
+          caret: mode.caret + input.length,
+        });
       }
 
       return;
@@ -935,11 +970,9 @@ export function App({
     // carry on from, unpushed commits and all. A folder is not a branch and a
     // detached HEAD has no name to pass, so both fall back to the default.
     if (input === "a") {
-      return setMode({
-        kind: "add",
-        value: current?.kind === "group" ? current.key : "",
-        from: selected?.branch,
-      });
+      const value = current?.kind === "group" ? current.key : "";
+
+      return setMode({ kind: "add", value, caret: value.length, from: selected?.branch });
     }
     if (input === "r" && selected) {
       return setMode({ kind: "confirm", target: { kind: "one", summary: selected } });
@@ -1298,8 +1331,12 @@ export function App({
             <Text dimColor>
               {mode.from === undefined ? "new branch " : `new branch from ${mode.from}   `}
             </Text>
-            <Text color={theme.accent}>{mode.value}</Text>
-            <Text inverse> </Text>
+            <Text color={theme.accent}>{mode.value.slice(0, mode.caret)}</Text>
+            {/* The caret is drawn as the block over the character it sits on,
+                which at the end of the name is a space: one shape for "you are
+                about to overwrite this" and "you are about to type here". */}
+            <Text inverse>{mode.value.slice(mode.caret, mode.caret + 1) || " "}</Text>
+            <Text color={theme.accent}>{mode.value.slice(mode.caret + 1)}</Text>
           </Text>
         </Box>
       ) : null}
