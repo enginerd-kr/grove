@@ -8,6 +8,7 @@ import { createPr, type PrPreview, prPreview } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
+import { GroveError } from "../../core/errors.ts";
 import { runGit } from "../../core/git.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../core/setup.ts";
@@ -36,6 +37,15 @@ export type WorktreeService = {
   readonly moveTo: (path: string) => Promise<string>;
   /** Where the service currently stands. What `q` hands the shell. */
   readonly standpoint: () => string;
+  /**
+   * Put a directory's path on the clipboard, and say so.
+   *
+   * The same copy `add` does for the worktree it just made, offered for the
+   * ones that already exist — the path is for a terminal this screen is not
+   * in, so the clipboard is the only way to hand it over. Unlike `add`'s
+   * best-effort copy, a failure here is the whole outcome and is thrown.
+   */
+  readonly copyPath: (path: string) => Promise<string>;
   /**
    * Refresh the remote-tracking refs, so `↑2 ↓1` means what it says.
    *
@@ -209,6 +219,22 @@ export function createWorktreeService(
     },
 
     standpoint: () => cwd,
+
+    copyPath: async (path) => {
+      // Thrown rather than swallowed, unlike `add`'s copy: there the worktree
+      // was the outcome and the copy a courtesy, here the copy *is* what the
+      // key was pressed for, and pretending it happened would leave someone
+      // pasting whatever the clipboard held before.
+      if (!(await copyToClipboard(path))) {
+        throw new GroveError("refused", "nothing was copied — no clipboard tool answered", {
+          hint: "install wl-copy, xclip, or xsel",
+        });
+      }
+
+      // The full path, because that is what the clipboard now holds — the one
+      // line that lets the paste be trusted without being tried.
+      return `copied ${path}`;
+    },
 
     fetch: () => fetchRemotes(repo.gitDir),
 

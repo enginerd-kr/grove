@@ -197,6 +197,7 @@ const GENERAL_TIPS: readonly Message[] = [
   { kind: "info", text: "tip: h and l don't stop at the first fold — they keep going" },
   { kind: "info", text: "tip: a starts the new branch from wherever the cursor is" },
   { kind: "info", text: "tip: p shows the commits before it asks for a title" },
+  { kind: "info", text: "tip: y copies the path under the cursor, for a paste elsewhere" },
 ];
 
 /** A new set with `key` in it, and one without — `Set` is mutable and state is not. */
@@ -227,6 +228,17 @@ function capped(lines: readonly string[]): readonly string[] {
 /** `1 command`, `2 commands` — the label a confirmed action is given. */
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The directory a row stands for, as an absolute path.
+ *
+ * A folder is a real directory on disk, so it answers too. Group keys carry
+ * their trailing slash (it is how they are drawn); a path handed around as a
+ * location should not.
+ */
+function pathOf(row: TreeRow, repoRoot: string): string {
+  return row.kind === "group" ? join(repoRoot, row.key.replace(/\/+$/, "")) : row.summary.path;
 }
 
 /**
@@ -1037,15 +1049,25 @@ export function App({
      * A folder is a real directory on disk, so it is a destination too.
      */
     if (key.return && current !== undefined) {
-      // Group keys carry their trailing slash (it is how they are drawn); a
-      // path handed around as a location should not.
-      const destination =
-        current.kind === "group"
-          ? join(repoRoot, current.key.replace(/\/+$/, ""))
-          : current.summary.path;
+      const destination = pathOf(current, repoRoot);
 
       return void perform(`moving to ${current.label ?? destination}`, () =>
         service.moveTo(destination),
+      );
+    }
+
+    /**
+     * `y` yanks the row's path onto the clipboard — the vim spelling, on a
+     * screen that already moves with `j` and `k`.
+     *
+     * Enter moves this app's standpoint, but the path is just as often wanted
+     * somewhere this app is not: another terminal tab, an editor's "open
+     * folder" box. `a` already ends by copying the path of the worktree it
+     * made; this is the same handoff for one that already exists.
+     */
+    if (input === "y" && current !== undefined) {
+      return void perform(`copying the path of ${current.label}`, () =>
+        service.copyPath(pathOf(current, repoRoot)),
       );
     }
 
@@ -1122,6 +1144,7 @@ export function App({
         { keys: "↑↓", action: "move" },
         { keys: "←→", action: current.collapsed ? "open" : "fold" },
         { keys: "enter", action: "go" },
+        { keys: "y", action: "copy path" },
         { keys: "?", action: "filter · !git" },
         { keys: "a", action: `add under ${current.label}` },
         { keys: "r", action: `remove all ${under.length}` },
@@ -1136,6 +1159,7 @@ export function App({
     return [
       { keys: "↑↓", action: "move" },
       { keys: "enter", action: "go" },
+      { keys: "y", action: "copy path" },
       { keys: "?", action: "filter · !git" },
       { keys: "a", action: "add" },
       { keys: "r", action: "remove" },

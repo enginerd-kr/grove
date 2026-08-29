@@ -63,7 +63,7 @@ Running `grove` without any arguments opens the interactive terminal UI:
 
 - **Navigate**: Move up and down using `↑`/`↓` or `j`/`k`. Pressing `Enter` inspects a worktree, and pressing `q` exits the UI and changes your shell's current directory to that worktree.
 - **Expand/Collapse**: Fold or unfold nested branch directories using `←`/`→` or `h`/`l`.
-- **Quick Actions**: Press `a` to add a new worktree, `r` to remove, `x` to discard uncommitted changes, `s` to sync, and `p` to open a pull request. Destructive actions will always ask for confirmation first.
+- **Quick Actions**: Press `a` to add a new worktree, `r` to remove, `x` to discard uncommitted changes, `s` to sync, `p` to open a pull request, and `y` to copy the selected path to the clipboard. Destructive actions will always ask for confirmation first.
 - **Search & Run**: Press `?` to search and filter the list in real-time. Or, start typing with `!` (e.g., `!git status` or `!log -3`) to run raw Git commands directly inside the selected worktree.
 
 ## Directory Layout
