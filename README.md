@@ -89,6 +89,17 @@ grove prune --delete-branch
 
 It fetches first, since a branch deleted on the forge only reads as gone once a fetch has pruned the ref that tracked it. Anything holding uncommitted work, stopped mid-rebase, locked, or containing the directory you are standing in is reported and left exactly where it is.
 
+### Taking your changes with you
+
+The edits you have been making in `main` for the last twenty minutes should have been a branch. In an ordinary clone that is `git stash`, `git checkout -b`, `git stash pop`; in a repository full of worktrees it is worse, because `refs/stash` is shared between every worktree and a `pop` in one directory can take an entry somebody left in another.
+
+```bash
+cd ~/work/repo/main
+grove add feat/login --take
+```
+
+The new worktree arrives holding the changes — staged ones still staged, untracked files moved across, ignored files left where they are — and the worktree you were in is clean. Nothing goes near the stash stack: the snapshot is a commit object referenced by nothing, and if the changes will not apply cleanly, both worktrees are left exactly as they were and the command tells you the sha that recovers them.
+
 ## Directory Layout
 
 Running `grove clone https://github.com/org/repo.git` inside `~/work` creates the following clean directory structure:

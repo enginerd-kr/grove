@@ -14,6 +14,7 @@ import {
   type SetupResult,
   trustAndRun,
 } from "../setup.ts";
+import { type TakeResult, takeChanges } from "../take.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
 /** `grove add` — give a branch a worktree, creating the branch if it does not exist. */
@@ -43,6 +44,15 @@ export type AddOptions = {
    * that behaved differently under a terminal would be two tools.
    */
   readonly trust: boolean;
+  /**
+   * Carry the uncommitted changes of the worktree you are standing in into the
+   * new one, leaving that one clean.
+   *
+   * Off by default, and only ever explicit: this empties a directory somebody
+   * is working in, and no amount of "you probably meant this" makes that a
+   * thing to do unasked. See `take.ts` for why it is not a `git stash`.
+   */
+  readonly take: boolean;
 };
 
 export type AddResult = {
@@ -55,12 +65,15 @@ export type AddResult = {
   readonly alreadyPresent: boolean;
   /** What `grove.copy`/`link`/`setup` did, when anything was configured. */
   readonly setup?: SetupResult;
+  /** What `--take` carried across, when it was asked for. */
+  readonly took?: TakeResult;
 };
 
 const REMOTE = "origin";
 
 export async function addWorktree(
   repo: RepoPaths,
+  cwd: string,
   options: AddOptions,
   reporter: Reporter,
 ): Promise<AddResult> {
@@ -68,8 +81,20 @@ export async function addWorktree(
   const dir = worktreeDir(repo.root, path);
   const worktrees = await listWorktrees(repo.gitDir);
 
+  // Resolved before anything is created, so `--take` from a directory that is
+  // not a worktree fails while the request is still only a request — rather
+  // than after a `git worktree add` that nobody would then want.
+  const source = options.take ? takeSource(cwd, worktrees) : undefined;
+
   const existing = await checkAlreadyThere(repo.root, options.branch, path, worktrees);
-  if (existing) return existing;
+  if (existing) {
+    // Asking for a worktree that is there is not an error, and neither is
+    // asking for the changes to be moved into it: that half of the request has
+    // not happened yet, and it is the half that was the point.
+    if (source === undefined || source === path) return existing;
+
+    return { ...existing, took: await take(source, path, dir, reporter) };
+  }
 
   refuseNameCollision(repo.root, path, worktrees);
   refuseNesting(repo.root, path, worktrees);
@@ -87,13 +112,16 @@ export async function addWorktree(
   // a worktree at all.
   const plan = options.setup ? await repoSetupPlan(repo) : undefined;
 
-  const source = await resolveSource(repo.gitDir, options, reporter);
+  // `origin` rather than `source`: where the *branch* comes from, which in a
+  // command that can also be moving another worktree's changes across is not
+  // the only thing something could be the source of.
+  const origin = await resolveSource(repo.gitDir, options, reporter);
 
   const step = reporter.step(`adding ${options.branch}`);
   try {
     // `git worktree add` creates intermediate directories itself, so a nested
     // path needs no mkdir of ours.
-    await runGitOrThrow(argsFor(source, options, path), { cwd: repo.gitDir });
+    await runGitOrThrow(argsFor(origin, options, path), { cwd: repo.gitDir });
     step.succeed(`added ${dir}`);
   } catch (error) {
     step.fail(`could not add ${options.branch}`);
@@ -102,6 +130,12 @@ export async function addWorktree(
 
   if (options.push) await pushBranch(path, options.branch, reporter);
 
+  // Before setup, not after. Setup copies files in and runs commands over what
+  // it finds, and `git stash apply` wants a tree it has not already been
+  // written into — so the changes being carried are part of the checkout, and
+  // the filling-in happens on top of them.
+  const took = source === undefined ? undefined : await take(source, path, dir, reporter);
+
   const setup = plan
     ? await setUpWorktree(repo, path, options.branch, options.trust ? undefined : plan, reporter)
     : undefined;
@@ -109,11 +143,62 @@ export async function addWorktree(
   return {
     path,
     branch: options.branch,
-    source: source.kind,
-    upstream: source.kind === "new" && !options.push ? undefined : `${REMOTE}/${options.branch}`,
+    source: origin.kind,
+    upstream: origin.kind === "new" && !options.push ? undefined : `${REMOTE}/${options.branch}`,
     alreadyPresent: false,
     setup,
+    took,
   };
+}
+
+/**
+ * The move, with the one fact its own error cannot know added to it.
+ *
+ * A take that fails still leaves a worktree behind, because the worktree was
+ * made first — and an error that says only "the changes did not apply" reads as
+ * though the whole command came to nothing. The exit code stays a failure: what
+ * was asked for was a branch *with the work in it*, and half of that is not a
+ * success to report quietly.
+ */
+async function take(
+  source: string,
+  path: string,
+  dir: string,
+  reporter: Reporter,
+): Promise<TakeResult> {
+  try {
+    return await takeChanges(source, path, reporter);
+  } catch (error) {
+    if (error instanceof GroveError) {
+      throw new GroveError(error.code, error.message, {
+        hint: error.hint,
+        details: [...error.details, `the worktree ${dir} was made, and is empty of them`],
+        cause: error,
+      });
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * The worktree `--take` empties, which is the one the shell is standing in.
+ *
+ * Never guessed at. "The worktree you were last in", or the trunk, or the only
+ * dirty one would each be a rule somebody has to learn before they dare use
+ * the flag — and the cost of learning it wrong is a directory emptied that
+ * nobody meant. Standing somewhere is the one answer that needs no rule.
+ */
+function takeSource(cwd: string, worktrees: readonly WorktreeRecord[]): string {
+  const here = worktrees.find((record) => contains(record.path, cwd));
+
+  if (!here) {
+    throw new GroveError("usage", "--take moves the changes of the worktree you are in", {
+      hint: "cd into the worktree holding them first",
+    });
+  }
+
+  return here.path;
 }
 
 /**

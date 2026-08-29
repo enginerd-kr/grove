@@ -84,6 +84,11 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "The new worktree is then filled in from .grove.toml, if the default",
       "branch's worktree has one: `copy` and `link` apply on sight, and `run`",
       "commands are printed and skipped until --trust says you have read them.",
+      "",
+      "--take carries the uncommitted changes of the worktree you are standing",
+      "in over to the new one, and leaves that one clean — the stash-and-pop",
+      "that follows every `I should have branched first`, without a stash stack",
+      "shared between every worktree in the repository to get it wrong.",
     ],
     flags: [
       {
@@ -98,6 +103,11 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         summary: "skip the fetch that looks for a remote branch",
       },
       { name: "push", type: "boolean", summary: "push the branch and set its upstream" },
+      {
+        name: "take",
+        type: "boolean",
+        summary: "move this worktree's uncommitted changes into the new one",
+      },
       {
         name: "no-setup",
         type: "boolean",

@@ -45,6 +45,8 @@ export type GroveCommand =
       readonly setup: boolean;
       /** `--trust`: run `.grove.toml`'s commands, having read them. */
       readonly trust: boolean;
+      /** `--take`: move the current worktree's uncommitted changes into the new one. */
+      readonly take: boolean;
     }
   | { readonly name: "list" }
   | { readonly name: "doctor" }
@@ -178,6 +180,7 @@ function buildCommand(
         push: bool(values, "push"),
         setup: !bool(values, "no-setup"),
         trust: bool(values, "trust"),
+        take: bool(values, "take"),
       };
     }
     case "list":

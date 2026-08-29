@@ -189,7 +189,12 @@ export function createWorktreeService(
       // there without ending the session.
       const result = await addWorktree(
         repo,
-        { branch, from, fetch: true, push: false, setup: true, trust: false },
+        cwd,
+        // `take: false`, and not because the screen could not ask: emptying a
+        // worktree somebody is working in is not something a single keystroke
+        // should be able to do. `grove add <branch> --take` is where that is
+        // typed out on purpose.
+        { branch, from, fetch: true, push: false, setup: true, trust: false, take: false },
         reporter,
       );
 

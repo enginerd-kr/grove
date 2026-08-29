@@ -167,7 +167,8 @@ export async function buildFixture(): Promise<Fixture> {
   for (const branch of ["feat/login", "feat/search", "fix/crash", "chore/docs"]) {
     await addWorktree(
       repo,
-      { branch, fetch: false, push: false, setup: true, trust: false },
+      cloned.root,
+      { branch, fetch: false, push: false, setup: true, trust: false, take: false },
       quiet,
     );
   }

@@ -66,6 +66,7 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       const repo = await findRepoRoot(cwd, global.repo);
       const result = await addWorktree(
         repo,
+        cwd,
         {
           branch: command.branch,
           from: command.from,
@@ -73,11 +74,19 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
           push: command.push,
           setup: command.setup,
           trust: command.trust,
+          take: command.take,
         },
         reporter,
       );
 
       if (result.alreadyPresent) reporter.info(`${command.branch} already has a worktree`);
+      // Said out loud rather than left to be discovered: `--take` emptied a
+      // directory somebody was working in, and the sha is what undoes that.
+      if (result.took?.stash !== undefined) {
+        reporter.info(
+          `the changes are also saved as a commit: git stash apply ${result.took.stash}`,
+        );
+      }
 
       if (global.json) {
         reporter.out(JSON.stringify(result, null, 2));
