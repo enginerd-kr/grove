@@ -135,8 +135,24 @@ async function syncOne(
   const onto = `${REMOTE}/${trunk}`;
   const step = reporter.step(`syncing ${name}`);
 
+  /**
+   * `--fork-point` is what makes this survive a force-push.
+   *
+   * Without it git replays every commit the branch has that `base` does not —
+   * which, after somebody rewrote `base`, includes the pre-rewrite copies of
+   * the very commits that replaced them. They land on top of their own
+   * replacements and conflict with themselves, and the user is asked to
+   * resolve a change against an edit of itself.
+   *
+   * The reflog of `base` is what tells the two apart. A commit that is only
+   * reachable from a position `base` used to be at was published and then
+   * withdrawn, so it is dropped; a commit that never was on `base` is the
+   * user's own and is carried, exactly as before. When there is no reflog to
+   * consult — a fresh clone — git falls back to plain `base`, so nothing is
+   * worse than it was.
+   */
   const rebaseOnto = async (base: string): Promise<SyncOutcome | undefined> => {
-    const result = await runGit(["rebase", base], { cwd: record.path });
+    const result = await runGit(["rebase", "--fork-point", base], { cwd: record.path });
     if (result.code === 0) return undefined;
 
     const conflicts = await conflictedPaths(record.path);
@@ -162,7 +178,8 @@ async function syncOne(
    * --rebase` when it has commits of its own.
    *
    * The commits are the deciding fact. A commit sitting only on the local
-   * trunk already happened — somebody made it, it is theirs, and a tool that
+   * trunk — and never on the remote one, which is the line `rebaseOnto` draws
+   * — already happened: somebody made it, it is theirs, and a tool that
    * refused to sync until it was disowned would be demanding an undo of an
    * event. So it is carried: replayed on top of what the remote gained, then
    * pushed back **plainly**. No force spelling is ever aimed at the trunk —
