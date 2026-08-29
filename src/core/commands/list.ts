@@ -6,6 +6,16 @@ import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
 /** `grove list` — what is here, what state it is in, and where you are standing. */
 
+/**
+ * How many changed paths a summary carries with it.
+ *
+ * Higher than any terminal has rows, so the panel that draws them never runs
+ * out of list before it runs out of screen, and low enough that a worktree
+ * somebody unpacked a tarball into does not turn every refresh tick into a
+ * copy of its file listing.
+ */
+const FILE_SAMPLE = 200;
+
 export type WorktreeSummary = {
   readonly path: string;
   readonly dir: string;
@@ -29,6 +39,19 @@ export type WorktreeSummary = {
    * them together would be promising one thing and doing another.
    */
   readonly untracked: number;
+  /**
+   * The changed paths themselves, up to `FILE_SAMPLE` of them.
+   *
+   * `changed` says how much is uncommitted; this says *what*, which is the
+   * question a count only ever raises — and it costs nothing to carry, because
+   * the `status` behind the count already named every one of these.
+   *
+   * Capped because it is drawn into a panel a screen tall: a worktree with ten
+   * thousand changed paths would hold ten thousand strings per refresh tick to
+   * draw thirty of them. `changed` is still the honest total, which is what
+   * lets the panel say how many it is not showing.
+   */
+  readonly files: readonly string[];
   readonly ahead: number;
   readonly behind: number;
   readonly upstream?: string;
@@ -120,6 +143,7 @@ export async function listWorktreeSummaries(
         dirty: status.dirty,
         changed: status.changed.length,
         untracked: status.untracked.length,
+        files: status.changed.slice(0, FILE_SAMPLE),
         ahead: status.ahead,
         behind: status.behind,
         upstream: status.upstream,

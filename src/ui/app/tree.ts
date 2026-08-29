@@ -1,13 +1,21 @@
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 
 /**
- * The worktree list as the tree it already is on disk.
+ * Paths as the tree they already are on disk — the worktree list, and the
+ * changed files beside it.
  *
  * `grove` nests worktrees to match the branch — `feat/login` lives in `feat/login`
  * — so a flat list repeats the prefix on every row and hides the grouping the
  * slashes were there to express. This turns the paths back into the shape the
  * directory has, which is also the shape the eye is looking for with thirty
  * branches: `feat/`, `fix/`, `chore/`.
+ *
+ * The panel to the right of that list has the same problem one level down: a
+ * column of `src/ui/app/App.tsx` repeats the prefix on every row of a change
+ * that touched one directory. `buildFileTree` at the bottom of this file is the
+ * same fold, over one worktree's changed paths, and it sorts by the same rule —
+ * two trees on one screen that ordered themselves differently would be two
+ * conventions to learn for one idea.
  *
  * Pure, and separate from the screen, because the ordering rules below are the
  * part worth testing and none of them need a terminal.
@@ -188,4 +196,86 @@ export function parentOf(rows: readonly TreeRow[], row: TreeRow): TreeRow | unde
   }
 
   return undefined;
+}
+
+/**
+ * One drawn row of a worktree's changed files.
+ *
+ * Deliberately thinner than `TreeRow` above: nothing here is selected, folded
+ * or acted on, so a row is a label at a depth. The `group` rows are directories
+ * the fold produced; the `leaf` rows are the paths `git status` actually named.
+ */
+export type FileRow = {
+  readonly kind: "group" | "leaf";
+  /** The whole path from the worktree root — unique, so it is the React key. */
+  readonly key: string;
+  /** The one segment this row draws; a directory keeps its trailing slash. */
+  readonly label: string;
+  readonly depth: number;
+};
+
+type FileNode = {
+  readonly leaves: { readonly label: string; readonly path: string }[];
+  readonly dirs: Map<string, FileNode>;
+};
+
+function emptyFileNode(): FileNode {
+  return { leaves: [], dirs: new Map() };
+}
+
+function emitFiles(node: FileNode, depth: number, prefix: string, into: FileRow[]): void {
+  // Files before directories at each level, then alphabetically — the rule
+  // `emit` uses on the list above, for the reason it uses it there: a directory
+  // is a heading, and headings after the plain rows keep the top of each level
+  // scannable instead of making you step over `src/` to reach `README.md`.
+  for (const leaf of node.leaves.toSorted((a, b) => a.label.localeCompare(b.label))) {
+    into.push({ kind: "leaf", key: leaf.path, label: leaf.label, depth });
+  }
+
+  for (const name of [...node.dirs.keys()].toSorted((a, b) => a.localeCompare(b))) {
+    const dir = node.dirs.get(name);
+    if (dir === undefined) continue;
+
+    const key = `${prefix}${name}/`;
+    into.push({ kind: "group", key, label: `${name}/`, depth });
+    emitFiles(dir, depth + 1, key, into);
+  }
+}
+
+/**
+ * A worktree's changed paths, folded back into the directories they sit in.
+ *
+ * The paths arrive as `git status` reports them, relative to the worktree root
+ * and separated by `/` on every platform — including the trailing slash git
+ * puts on an untracked directory it did not walk into. That slash is kept: it
+ * is the difference between one file and everything under a folder, and it is
+ * the whole of what the row is saying. It is still a leaf, because it is still
+ * one entry of the status output and one of the numbers `changed` counted.
+ */
+export function buildFileTree(paths: readonly string[]): readonly FileRow[] {
+  const root = emptyFileNode();
+
+  for (const path of paths) {
+    const directory = path.endsWith("/");
+    const segments = path.split("/").filter((segment) => segment.length > 0);
+    const name = segments.pop();
+    if (name === undefined) continue;
+
+    let node = root;
+    for (const segment of segments) {
+      let next = node.dirs.get(segment);
+      if (next === undefined) {
+        next = emptyFileNode();
+        node.dirs.set(segment, next);
+      }
+      node = next;
+    }
+
+    node.leaves.push({ label: directory ? `${name}/` : name, path });
+  }
+
+  const rows: FileRow[] = [];
+  emitFiles(root, 0, "", rows);
+
+  return rows;
 }

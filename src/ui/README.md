@@ -16,9 +16,10 @@ app/App.tsx       the screen: rows, keys, and one mode at a time
 app/Setup.tsx     the screen when there is no repository yet: ask, clone, hand over
 app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
 app/Log.tsx       the commits under the list, for the row the cursor is on
+app/Files.tsx     the uncommitted files beside the list, as the tree they sit in
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
-app/tree.ts       the worktree paths as the tree they are on disk
+app/tree.ts       the worktree paths, and one worktree's changed paths, as the trees they are
 app/service.ts    what the screens are allowed to do: add, sync, remove
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
@@ -63,6 +64,26 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   beats what was committed yesterday — and below `LOG_MIN_ROWS` it is dropped rather than drawn as
   a heading with one commit stuck to it. The panel renders its own fixed height, blank rows
   included, so a shallow history does not move the rule above it.
+- **The files panel is drawn in the list's slack, and nowhere else.** `Files.tsx` names the
+  uncommitted paths of the row under the cursor — the paths alone, since the `state` dot has
+  already said the one thing a status letter would add — and it comes and goes as the cursor
+  crosses a dirty row. That it costs the list nothing is what makes that bearable: every column
+  of the list is sized to its own contents, `listWidth` adds them back up, and the panel takes
+  only what is past the last one, capped by `MAX_FILES_COLS` and dropped below `MIN_FILES_COLS`
+  rather than squeezing the table. A panel that took a column's width with it would shear the
+  whole list on every second keypress. The paths are folded into their directories by
+  `buildFileTree`, so a change confined to one directory is one heading rather than the same
+  prefix down every row, and the rule down the left edge runs the full height it is given — the
+  pane is the same shape beside a worktree with two files open and one with twenty. What the
+  panel is short of is *rows*, which is why the overflow row counts files rather than rows (the
+  directories are the panel's own doing, and nobody is missing one) and why a cut that would
+  leave a directory heading nothing drops it instead.
+- **The changed paths ride along on `WorktreeSummary`, unlike the commits.** `Log` is read by
+  `service.log` when the selection moves, because a `git log` per row would pay for thirty
+  answers to draw one. `Files` needs no read at all: the `git status` that counts `changed` for
+  every row has already named them, so `list.ts` keeps the first `FILE_SAMPLE` of them and the
+  panel draws from the same tick the list does. `changed` stays the honest total, which is what
+  lets the panel say how many it is not showing.
 - **The `add` mode carries its base.** `a` reads the selected worktree's branch when the prompt
   opens and keeps it on the mode, rather than reading the selection again on `enter`. With the
   list refreshing itself, the two are not the same value — and the second one would not be what
@@ -129,9 +150,14 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   for activity and would lose the bottom of its layout to a `--verbose` git line long enough to
   wrap; the reporter draws into a log with nothing under it, so wrapping there costs nothing and
   truncating would throw text away.
-- **The tree is pure and lives in `app/tree.ts`.** Ordering is the part worth testing —
+- **The trees are pure and live in `app/tree.ts`.** Ordering is the part worth testing —
   worktrees before folders at each level, the default branch before its siblings — and none of
-  it needs a terminal. The screen draws what it returns and the cursor walks every row it
+  it needs a terminal. `buildFileTree` is the same fold one level down, over one worktree's
+  changed paths for the panel beside the list, and it sorts by the same rule on purpose: two
+  trees on one screen that ordered themselves differently would be two conventions to learn for
+  one idea. It keeps the trailing slash git puts on an untracked directory it did not walk
+  into — that slash is the difference between one file and everything under a folder — while
+  still counting the row as the single status entry it is. The screen draws what it returns and the cursor walks every row it
   produced, folders included — `leavesUnder` is what turns a folder row back into the worktrees
   it stands for.
 - **Cursor moves go through `setCursor(previous => …)`.** Keys arrive faster than React commits,

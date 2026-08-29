@@ -18,6 +18,7 @@ import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
+import { Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor, messageRows } from "./message.ts";
@@ -130,6 +131,24 @@ const LOG_ROWS = 5;
  * anyone should have to press to get out of that.
  */
 const LOG_MIN_ROWS = 2;
+
+/**
+ * The narrowest and widest the uncommitted-files panel is allowed to be.
+ *
+ * The panel is drawn in the slack to the right of the list and nowhere else —
+ * every column of the list is sized to its own contents, and on most terminals
+ * there is a stretch of empty screen past the last one. Taking only that is
+ * what makes the panel free: it appears and disappears as the cursor crosses a
+ * dirty row, and a panel that took a column's worth of width with it would
+ * shear the whole table every time it did.
+ *
+ * Below the minimum there is no room to say anything a path would survive, so
+ * nothing is drawn. Above the maximum the panel would be a third of the screen
+ * given over to filenames — the list is what is being worked in, and the empty
+ * space to its right is still the list's.
+ */
+const MIN_FILES_COLS = 26;
+const MAX_FILES_COLS = 48;
 
 /**
  * The rows the list keeps whatever else wants them.
@@ -1145,6 +1164,34 @@ export function App({
     };
   }, [tree, columns, trunkName]);
 
+  /**
+   * How much of a row the list actually draws on, gaps and marker included.
+   *
+   * Counted the same way `widths` budgeted it — the marker, then each column
+   * that survived with the gap in front of it — so the two cannot disagree
+   * about where the list ends and the empty screen begins.
+   */
+  const listWidth =
+    4 +
+    widths.tree +
+    GAP.length +
+    (widths.remote > 0 ? widths.remote + GAP.length : 0) +
+    (widths.trunk > 0 ? widths.trunk + GAP.length : 0) +
+    widths.state +
+    (widths.touched > 0 ? GAP.length + widths.touched : 0);
+
+  /**
+   * The uncommitted-files panel's width, out of the screen the list is not on.
+   *
+   * Only for a worktree with something uncommitted in it: a clean row has no
+   * files to name, and a panel that stayed to say so would be a wide blank
+   * gutter beside the rows that are almost all of them. A folder is not a
+   * worktree and has no working tree of its own, so it draws none either.
+   */
+  const slack = columns - listWidth;
+  const filesWidth =
+    selected?.dirty === true && slack >= MIN_FILES_COLS ? Math.min(slack, MAX_FILES_COLS) : 0;
+
   const rule = "─".repeat(Math.max(0, columns));
   // The banner already says how many there are, so the last row is left with
   // the one thing it cannot answer: where the cursor is in a list too long to
@@ -1192,14 +1239,30 @@ export function App({
       ) : null}
       <Text dimColor>{rule}</Text>
 
-      <Box flexDirection="column" flexGrow={1}>
-        {rows.length === 0 && mode.kind !== "busy" ? (
-          <Text dimColor>no worktrees here yet — press a to add one</Text>
-        ) : (
-          visible.map((row) => (
-            <Row key={row.key} row={row} selected={row === current} widths={widths} />
-          ))
-        )}
+      {/* The list, and to its right whatever the row under the cursor has
+          open. A row rather than a column, and the only one on this screen:
+          the files belong beside the worktree they are in, not under a list
+          the eye would have to travel back up. */}
+      <Box flexGrow={1}>
+        <Box flexDirection="column" flexGrow={1}>
+          {rows.length === 0 && mode.kind !== "busy" ? (
+            <Text dimColor>no worktrees here yet — press a to add one</Text>
+          ) : (
+            visible.map((row) => (
+              <Row key={row.key} row={row} selected={row === current} widths={widths} />
+            ))
+          )}
+        </Box>
+
+        {filesWidth > 0 && selected !== undefined ? (
+          <Files
+            label={selected.dir}
+            files={selected.files}
+            total={selected.changed}
+            rows={listHeight}
+            width={filesWidth}
+          />
+        ) : null}
       </Box>
 
       {/* Under the list and above the activity: it belongs to the row the
