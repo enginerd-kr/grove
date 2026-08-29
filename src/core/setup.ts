@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, symlink } from "node:fs/promises";
+import { cp, mkdir, readdir, rm, symlink } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import type { Reporter } from "../report/reporter.ts";
 import { defaultBranch } from "./branches.ts";
@@ -60,8 +60,10 @@ export type SetupResult = {
   readonly ran: readonly string[];
   /** Configured, but not in the source worktree — there was nothing to take. */
   readonly missing: readonly string[];
-  /** Already in this worktree, so left exactly as they were. */
+  /** `link` paths already in this worktree, so left exactly as they were. */
   readonly kept: readonly string[];
+  /** What `copy` replaced with the trunk's version — entries, not `copy` lines. */
+  readonly overwritten: readonly string[];
   /** Set when a command exited non-zero. The ones after it were not run. */
   readonly failed?: SetupFailure;
   /**
@@ -222,6 +224,7 @@ export function describeSetup(result: SetupResult): string {
   const parts: string[] = [];
 
   if (result.copied.length > 0) parts.push(`${result.copied.length} copied`);
+  if (result.overwritten.length > 0) parts.push(`${result.overwritten.length} overwritten`);
   if (result.linked.length > 0) parts.push(`${result.linked.length} linked`);
   if (result.ran.length > 0) parts.push(`${result.ran.length} run`);
   if (result.kept.length > 0) parts.push(`${result.kept.length} kept`);
@@ -277,46 +280,60 @@ async function unignored(worktree: string, paths: readonly string[]): Promise<re
 type FileOutcome = "copied" | "linked" | "missing" | "kept";
 
 /**
- * A copy that fills in what is missing and overwrites nothing.
+ * A copy that takes the trunk's version, what is already there included.
  *
- * Never overwriting is the rule for both kinds: what is already in the worktree
- * is what the branch checked out, and replacing it with another branch's copy is
- * how a colleague's experimental `.env` becomes the one your tests run against.
- * Refreshing one is a `cp`, and typing that is a smaller thing than a flag
- * nobody would be sure of.
+ * The trunk wins: `copy` names the files the trunk's worktree maintains — the
+ * real `.env`, the current certs — and a worktree holding an older copy is
+ * exactly the worktree this exists to fix. So a file already at the destination
+ * is replaced rather than kept, and re-running setup refreshes a stale copy
+ * instead of explaining that it was left alone. What is replaced is said out
+ * loud, in `overwritten`, so the run reports what it took over.
  *
- * A directory is where "already there" stops being one answer. `config/` is
- * tracked and arrives with the checkout, while the `config/local.json` beside it
- * is ignored and does not — so calling the directory present and moving on would
- * mean `copy = ["config"]` did nothing for exactly the repository that wrote it.
- * Two real directories are merged entry by entry instead, and each entry already
- * at the destination is left alone: the same rule as for a single file, applied
- * one level further down.
+ * A directory is not replaced wholesale. Deleting it would take the worktree's
+ * own files with it — the build output inside `config/`, the tracked files the
+ * branch checked out — so two real directories are merged entry by entry
+ * instead: the trunk's entries land, overwriting where both have one, and an
+ * entry only the destination has stays. The same rule, one level further down.
  *
- * Real directories, by `lstat`. A symlink at either end is copied as the link it
- * is rather than descended into — descending through one at the destination
- * would write into whatever it points at, which for a worktree that also has a
- * `link` line is the trunk's copy.
+ * Real directories, by `lstat`. A symlink at either end is the link it is, not
+ * the thing it points at: one at the destination is removed and replaced rather
+ * than descended into or written through — writing through it would land in
+ * whatever it points at, which for a worktree that also has a `link` line is
+ * the trunk's copy — and one at the source is copied as a link.
  */
 async function copyEntry(
   from: string,
   to: string,
   /** The path as configured, and then as descended — collected in `written`. */
   path: string,
-  /** Every path this actually put on disk, for the ignore check below. */
+  /** Every path this put where nothing was, for the ignore check below. */
   written: string[],
+  /** Every path this replaced, so the report can say what was overwritten. */
+  overwritten: string[],
 ): Promise<"copied" | "kept"> {
-  const present = await entryExists(to);
+  if (await entryExists(to)) {
+    if ((await isDirectoryEntry(from)) && (await isDirectoryEntry(to))) {
+      const outcomes = [];
+      for (const name of await readdir(from)) {
+        outcomes.push(
+          await copyEntry(
+            join(from, name),
+            join(to, name),
+            `${path}/${name}`,
+            written,
+            overwritten,
+          ),
+        );
+      }
 
-  if (present) {
-    if (!((await isDirectoryEntry(from)) && (await isDirectoryEntry(to)))) return "kept";
-
-    const outcomes = [];
-    for (const name of await readdir(from)) {
-      outcomes.push(await copyEntry(join(from, name), join(to, name), `${path}/${name}`, written));
+      return outcomes.includes("copied") ? "copied" : "kept";
     }
 
-    return outcomes.includes("copied") ? "copied" : "kept";
+    await rm(to, { recursive: true, force: true });
+    await cp(from, to, { recursive: true, verbatimSymlinks: true });
+    overwritten.push(path);
+
+    return "copied";
   }
 
   await mkdir(dirname(to), { recursive: true });
@@ -327,11 +344,13 @@ async function copyEntry(
 }
 
 /**
- * One path, taken — or left exactly as it was.
+ * One path, taken — or, for `link`, left exactly as it was.
  *
- * `copy` is `copyEntry` above, directories included. `link` is one symlink and
- * has no equivalent of the merge: a link is the whole path or none of it, so a
- * directory already in the worktree is kept and nothing is written beside it.
+ * `copy` is `copyEntry` above, directories and overwriting included. `link` is
+ * one symlink and still never overwrites: a link is the whole path or none of
+ * it, and replacing a real directory with a link into the trunk would silently
+ * share what the worktree thought was its own — so what is already there is
+ * kept, and `kept` is the answer that says so.
  */
 async function takeOne(
   kind: "copy" | "link",
@@ -339,12 +358,13 @@ async function takeOne(
   source: string,
   destination: string,
   written: string[],
+  overwritten: string[],
 ): Promise<FileOutcome> {
   const from = join(source, path);
   const to = join(destination, path);
 
   if (!(await entryExists(from))) return "missing";
-  if (kind === "copy") return copyEntry(from, to, path, written);
+  if (kind === "copy") return copyEntry(from, to, path, written, overwritten);
   if (await entryExists(to)) return "kept";
 
   await mkdir(dirname(to), { recursive: true });
@@ -380,13 +400,19 @@ export async function runSetup(
   const copied: string[] = [];
   const linked: string[] = [];
   /**
-   * What landed, to the precision git needs to be asked about it.
+   * What landed where nothing was, to the precision git needs to be asked
+   * about it.
    *
    * Not the same list as `copied`: a `copy` of a directory the branch already
    * had writes the entries that were missing from it, and warning about the
    * directory — tracked, and staying — would be a warning about the wrong path.
+   * Overwrites are not in here either: a path that existed before this ran was
+   * already the worktree's problem, and the warning below is about the files
+   * that only just appeared.
    */
   const written: string[] = [];
+  /** What `copy` replaced, so the run says which files stopped being theirs. */
+  const overwritten: string[] = [];
   const missing: string[] = [];
   const kept: string[] = [];
   const ran: string[] = [];
@@ -405,6 +431,7 @@ export async function runSetup(
       ran,
       missing,
       kept,
+      overwritten,
       untrusted: false,
     };
   }
@@ -427,7 +454,7 @@ export async function runSetup(
       const step = reporter.step(`filling in ${dir}`);
       try {
         for (const { kind, path } of wanted) {
-          const outcome = await takeOne(kind, path, source.path, target.path, written);
+          const outcome = await takeOne(kind, path, source.path, target.path, written, overwritten);
           buckets[outcome].push(path);
         }
       } catch (error) {
@@ -443,6 +470,9 @@ export async function runSetup(
 
       if (missing.length > 0) {
         reporter.info(`not in ${worktreeDir(repo.root, source.path)}: ${missing.join(", ")}`);
+      }
+      if (overwritten.length > 0) {
+        reporter.info(`already in ${dir}, overwritten: ${overwritten.join(", ")}`);
       }
       if (kept.length > 0) {
         reporter.info(`already in ${dir}, left alone: ${kept.join(", ")}`);
@@ -522,7 +552,19 @@ export async function runSetup(
     ran.push(command);
   }
 
-  return { path: target.path, dir, planned, copied, linked, ran, missing, kept, failed, untrusted };
+  return {
+    path: target.path,
+    dir,
+    planned,
+    copied,
+    linked,
+    ran,
+    missing,
+    kept,
+    overwritten,
+    failed,
+    untrusted,
+  };
 }
 
 function plural(count: number, word: string): string {

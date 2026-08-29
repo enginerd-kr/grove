@@ -26,9 +26,11 @@ import { BARE_DIR } from "./layout.ts";
  * files that are already on your disk, inside a directory you asked to be
  * created — and `run` does not, until `grove trust` says so. See `trust.ts`.
  *
- * `copy` takes a directory as readily as a file — `certs` above — and a
- * directory the branch already checked out is filled in rather than replaced.
- * See `takeOne` in `setup.ts` for why that is not the same rule as `link`'s.
+ * `copy` takes a directory as readily as a file — `certs` above. A file already
+ * in the worktree is overwritten with the trunk's copy, and a directory the
+ * branch already checked out is merged entry by entry, the trunk winning where
+ * both have one. See `copyEntry` and `takeOne` in `setup.ts` for why `link`
+ * does not follow that rule.
  *
  * TOML because Bun parses it with no dependency, and because a file people are
  * expected to read and review deserves comments. It is read out of the trunk's
