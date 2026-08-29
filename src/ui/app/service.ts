@@ -63,7 +63,12 @@ export type WorktreeService = {
    * created — which is why the answer only mentions a base when there was one.
    */
   readonly add: (branch: string, from?: string) => Promise<string>;
-  readonly remove: (target: string) => Promise<string>;
+  /**
+   * `discardDirty` is the answer to a question the app has already asked: the
+   * confirmation names the uncommitted changes before anyone presses `y`, so a
+   * dirty worktree is removed rather than refused after the fact.
+   */
+  readonly remove: (target: string, discardDirty?: boolean) => Promise<string>;
   /**
    * Every worktree under one folder, removed one at a time.
    *
@@ -71,7 +76,7 @@ export type WorktreeService = {
    * refusals — which is what makes a folder safe to select at all. One that
    * refuses does not stop the rest; the answer says how many did what.
    */
-  readonly removeMany: (targets: readonly string[]) => Promise<string>;
+  readonly removeMany: (targets: readonly string[], discardDirty?: boolean) => Promise<string>;
   /**
    * Everything one worktree has changed, thrown away: `git reset --hard` and
    * `git clean -fd`.
@@ -265,20 +270,22 @@ export function createWorktreeService(
       return `added ${result.branch} (${result.source})${suffix}`;
     },
 
-    remove: async (target) => {
-      // Never forced and never deleting the branch: the destructive spellings
-      // stay on the command line, where they have to be typed out on purpose.
+    remove: async (target, discardDirty = false) => {
+      // Never forced and never deleting the branch: those spellings stay on the
+      // command line, where they have to be typed out on purpose. Discarding
+      // dirty changes is the one exception, because the app asked about exactly
+      // that — the confirmation counted them before `y` was pressed.
       const result = await removeWorktree(
         repo,
         shellCwd(),
-        { target, force: false, deleteBranch: false },
+        { target, force: false, deleteBranch: false, discardDirty },
         reporter,
       );
 
       return result.unpushedWarning ?? `removed ${result.branch ?? result.path}`;
     },
 
-    removeMany: async (targets) => {
+    removeMany: async (targets, discardDirty = false) => {
       // Deepest first, so `remove` can prune the folder it empties instead of
       // tripping over a worktree still sitting inside it.
       const ordered = targets.toSorted(
@@ -293,7 +300,7 @@ export function createWorktreeService(
           await removeWorktree(
             repo,
             shellCwd(),
-            { target, force: false, deleteBranch: false },
+            { target, force: false, deleteBranch: false, discardDirty },
             reporter,
           );
           removed += 1;

@@ -47,7 +47,13 @@ import { buildTree, firstChildOf, leavesOf, parentOf, type TreeRow } from "./tre
  */
 type Pending =
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
-  | { readonly kind: "many"; readonly label: string; readonly paths: readonly string[] }
+  | {
+      readonly kind: "many";
+      readonly label: string;
+      readonly paths: readonly string[];
+      /** How many of `paths` are dirty — what makes this question a red one. */
+      readonly dirty: number;
+    }
   | { readonly kind: "reset"; readonly summary: WorktreeSummary };
 
 type Mode =
@@ -355,12 +361,25 @@ function StateCell({
  * rather than something softer.
  */
 function describePending(target: Pending): string {
+  // A dirty worktree is not refused any more — it is asked about instead, and
+  // the question has to carry what `y` now costs: the uncommitted changes go
+  // with the directory, counted the same way the reset counts them.
   if (target.kind === "one") {
-    return `remove ${target.summary.dir}? the directory goes, the branch stays`;
+    const { dir, dirty, changed, untracked } = target.summary;
+    if (dirty) {
+      return `remove ${dir} and discard ${describeDiscard(changed - untracked, untracked)}? the branch stays`;
+    }
+
+    return `remove ${dir}? the directory goes, the branch stays`;
   }
 
   if (target.kind === "many") {
-    return `remove all ${target.paths.length} under ${target.label}? the directories go, the branches stay`;
+    const all = `remove all ${target.paths.length} under ${target.label}?`;
+    if (target.dirty > 0) {
+      return `${all} ${target.dirty} ${target.dirty === 1 ? "has" : "have"} uncommitted changes, which go too — the branches stay`;
+    }
+
+    return `${all} the directories go, the branches stay`;
   }
 
   // Both kinds, counted apart. `x` deletes untracked files too, and one of
@@ -373,8 +392,11 @@ function describePending(target: Pending): string {
 
 /** How loudly to ask, which is not the same for all three questions. */
 function colourFor(target: Pending): string | undefined {
-  // Discarding changes for good is a risk of a different kind from a removal.
+  // Discarding changes for good is a risk of a different kind from a removal —
+  // and a removal that discards them is the same risk wearing another key.
   if (target.kind === "reset") return theme.danger;
+  if (target.kind === "one" && target.summary.dirty) return theme.danger;
+  if (target.kind === "many" && target.dirty > 0) return theme.danger;
 
   return theme.warn;
 }
@@ -954,10 +976,14 @@ export function App({
           );
         }
 
+        // `discardDirty` carries the answer just given: the question counted
+        // the uncommitted changes, so the removal may now discard them.
         return void (target.kind === "one"
-          ? perform(`removing ${target.summary.dir}`, () => service.remove(target.summary.path))
+          ? perform(`removing ${target.summary.dir}`, () =>
+              service.remove(target.summary.path, target.summary.dirty),
+            )
           : perform(`removing ${target.paths.length} under ${target.label}`, () =>
-              service.removeMany(target.paths),
+              service.removeMany(target.paths, target.dirty > 0),
             ));
       }
 
@@ -1024,7 +1050,12 @@ export function App({
     if (input === "r" && current?.kind === "group" && under.length > 0) {
       return setMode({
         kind: "confirm",
-        target: { kind: "many", label: current.key, paths: under.map((summary) => summary.path) },
+        target: {
+          kind: "many",
+          label: current.key,
+          paths: under.map((summary) => summary.path),
+          dirty: under.filter((summary) => summary.dirty).length,
+        },
       });
     }
     // Only where there is something to throw away. A confirmation for a reset
@@ -1416,9 +1447,11 @@ export function App({
       ) : null}
 
       {mode.kind === "confirm" ? (
-        // Red for the reset, amber for the removals, because they are not the
-        // same risk: a removed worktree leaves its branch and its commits behind
-        // and `grove add` brings it back, while a reset leaves nothing at all.
+        // Red for anything that discards changes — the reset, and a removal
+        // whose worktree is dirty — amber for a clean removal, because they are
+        // not the same risk: a removed clean worktree leaves its branch and its
+        // commits behind and `grove add` brings it back, while discarded
+        // changes leave nothing at all.
         // The configure question is neither — nothing it writes destroys
         // anything — so it is asked in the colour of an ordinary line.
         <Text color={colourFor(mode.target)} wrap="truncate">

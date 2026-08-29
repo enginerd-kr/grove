@@ -27,6 +27,15 @@ export type RemoveOptions = {
   readonly target: string;
   readonly force: boolean;
   readonly deleteBranch: boolean;
+  /**
+   * Remove a dirty worktree anyway, discarding its uncommitted changes.
+   *
+   * Narrower than `force` on purpose. The app's confirmation says "and discard
+   * N changes" before anyone answers `y`, so this carries exactly that answer —
+   * while the refusals no question was asked about, the only worktree and the
+   * branch everything syncs onto, keep standing.
+   */
+  readonly discardDirty?: boolean;
 };
 
 export type RemoveResult = {
@@ -51,10 +60,12 @@ export async function removeWorktree(
 
   const step = reporter.step(`removing ${dir}`);
   try {
-    await runGitOrThrow(
-      ["worktree", "remove", ...(options.force ? ["--force"] : []), target.path],
-      { cwd: repo.gitDir },
-    );
+    // `--force` is what lets git delete a dirty tree, so `discardDirty` needs
+    // it too — the refusals grove itself makes were already decided above.
+    const forced = options.force || options.discardDirty === true;
+    await runGitOrThrow(["worktree", "remove", ...(forced ? ["--force"] : []), target.path], {
+      cwd: repo.gitDir,
+    });
     // Clears the administrative files git leaves behind, so a later `add` of the
     // same directory name is not refused by a record of the one just deleted.
     await runGitOrThrow(["worktree", "prune"], { cwd: repo.gitDir });
@@ -132,12 +143,14 @@ async function refuseUnsafe(
       });
     }
 
-    const status = await statusOf(target.path);
-    if (status.dirty) {
-      throw new GroveError("refused", `${dir} has uncommitted changes`, {
-        hint: "commit or stash them, or pass --force to discard them",
-        details: status.changed.slice(0, 5),
-      });
+    if (options.discardDirty !== true) {
+      const status = await statusOf(target.path);
+      if (status.dirty) {
+        throw new GroveError("refused", `${dir} has uncommitted changes`, {
+          hint: "commit or stash them, or pass --force to discard them",
+          details: status.changed.slice(0, 5),
+        });
+      }
     }
   }
 }
