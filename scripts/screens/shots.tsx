@@ -29,7 +29,28 @@ type Shot = {
   /** What the window's title bar says — the caption, in the picture's own chrome. */
   readonly title: string;
   readonly drive: (session: Session) => Promise<void>;
+  /**
+   * Text the finished frame has to hold, checked before the picture is saved.
+   *
+   * The point each shot is making, written down: a picture that stopped making
+   * it is a picture to fix rather than one to publish, and the only way anybody
+   * would otherwise notice is by looking at the README months later.
+   */
+  readonly expects: readonly string[];
 };
+
+/**
+ * The last row's `4 of 8`, which the screen draws only when the list is
+ * scrolled.
+ *
+ * That is the one state a README picture must never be taken in — the shot is
+ * of the grove, and a grove with three of its eight rows showing is a picture
+ * of a cramped terminal instead. It is also the failure that actually happened:
+ * the commit panel arrived under the list, took six rows out of its share, and
+ * every shot went on being taken at the height that fitted before it. Nothing
+ * said so, because a shot that is merely *wrong* still renders.
+ */
+const SCROLLED = /\b\d+ of \d+\b/;
 
 /**
  * The refresh is turned off for the pictures, not sped up.
@@ -39,6 +60,27 @@ type Shot = {
  * every shot put together.
  */
 const NO_REFRESH = 3_600_000;
+
+/**
+ * Refuses to publish a frame that is not the picture it was asked for.
+ *
+ * The frame comes with it, because the useful half of "the shot is wrong" is
+ * seeing what was drawn instead — and the fix is almost always a row count.
+ */
+function check(shot: Shot, frame: string): void {
+  const missing = shot.expects.filter((text) => !frame.includes(text));
+  const scrolled = SCROLLED.test(frame);
+  if (missing.length === 0 && !scrolled) return;
+
+  const why = [
+    ...missing.map((text) => `it never drew ${JSON.stringify(text)}`),
+    ...(scrolled ? [`the list is scrolled — give ${shot.name} more rows`] : []),
+  ];
+
+  throw new Error(
+    `${shot.name} is not the picture it should be:\n  ${why.join("\n  ")}\n\n${frame}`,
+  );
+}
 
 async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
   const store = new LineStore();
@@ -64,8 +106,15 @@ async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
   try {
     // Every shot waits for the list to have read itself: the first frame is an
     // empty screen, and a picture of that is a picture of nothing.
-    await session.until("feat/");
+    //
+    // Waited for in the banner rather than in the list, because the banner
+    // cannot scroll: a row of the list is only drawn if the window happens to
+    // reach it, so waiting on one would make "has it loaded" depend on how tall
+    // the terminal is — which is how this came to time out with a screen that
+    // had loaded perfectly well and simply had no room to show that row.
+    await session.until(`${fixture.branches.length} worktrees`);
     await shot.drive(session);
+    check(shot, session.plain());
     await mkdir(OUT, { recursive: true });
     await writeFile(
       join(OUT, `${shot.name}.svg`),
@@ -81,9 +130,11 @@ async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
 const list: Shot = {
   name: "list",
   columns: 112,
-  // 28 rows: the banner card's own floor, and one more than the list needs —
-  // any taller and the picture is mostly the empty space under the last row.
-  rows: 28,
+  // The banner's card wants 28 and the commits panel under the list wants six
+  // more, which leaves one spare row over the eight the tree draws — any taller
+  // and the picture is mostly the empty space under the last row. `SCROLLED` is
+  // what holds this honest when something else moves in below the list again.
+  rows: 34,
   title: "grove — every worktree, and what has moved under it",
   async drive(session) {
     // Onto `feat/login`: the row that has drifted from the trunk, so `s` on the
@@ -91,15 +142,18 @@ const list: Shot = {
     for (let step = 0; step < 4; step++) await session.press(keys.down);
     await session.settle(200);
   },
+  // The row the cursor was walked to, and the panel that row is the subject of.
+  expects: ["login", "commits in feat/login"],
 };
 
 /** A branch typed, and the worktree that is ready to work in by the time it appears. */
 const add: Shot = {
   name: "add",
   columns: 112,
-  // Two rows taller than `list`: the setup's four lines of progress come out
-  // of the list's share, and the tree should still be whole underneath them.
-  rows: 32,
+  // Taller than `list` by the rows the shot adds to it: the worktree it makes
+  // is a ninth row of the tree, and the setup's lines of progress come out of
+  // the list's share too. The tree should still be whole underneath them.
+  rows: 41,
   title: "grove — a add, and .grove.toml fills the worktree in",
   async drive(session) {
     await session.press("a");
@@ -108,6 +162,8 @@ const add: Shot = {
     await session.until("bun install");
     await session.settle(400);
   },
+  // The worktree the shot is of, and the file's own command running in it.
+  expects: ["paging", "bun install"],
 };
 
 process.stdout.write("shooting the README:\n");

@@ -143,6 +143,12 @@ run = ["docker compose down"]  # Shell commands run inside the worktree just bef
 - **Interactive UI**: When adding a worktree through the interactive UI, these commands are run automatically since using the UI is considered explicit consent.
 - **Teardown never blocks a removal**: whatever `[setup]` started is still running when the directory it was started in is about to go, which is what `[teardown]` is for. A command that fails there is reported loudly and the worktree is still removed — a broken `docker compose down` should not leave you unable to delete a directory you have finished with. `grove remove --no-teardown` skips the section outright.
 
+Pressing `a` and typing a branch name is the whole of it — the worktree appears, and the file fills it in underneath:
+
+<p align="center">
+  <img src="docs/screens/add.svg" alt="grove's screen after pressing a: the new worktree in the tree, and under it the .grove.toml steps that copied the .env, shared node_modules, and ran bun install" width="100%">
+</p>
+
 ## Development
 
 `grove` is built using [Bun](https://bun.sh), [Ink](https://github.com/vadimdemedes/ink) (for the terminal React UI), and [Biome](https://biomejs.dev) (for linting and formatting).

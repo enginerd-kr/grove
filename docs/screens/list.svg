@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="977" height="590" viewBox="0 0 977 590" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
-<rect width="977" height="590" rx="10" fill="#1c1e22" stroke="#2c2f36"/>
-<rect x="1" y="30" width="975" height="559" fill="#141619"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="977" height="704" viewBox="0 0 977 704" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="14">
+<rect width="977" height="704" rx="10" fill="#1c1e22" stroke="#2c2f36"/>
+<rect x="1" y="30" width="975" height="673" fill="#141619"/>
 <circle cx="20" cy="15" r="5.5" fill="#ff5f57"/><circle cx="37" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
 <text x="488.5" y="19" fill="#8b8f98" font-size="12" text-anchor="middle">grove — every worktree, and what has moved under it</text>
 
 <text x="18.0" y="77.0" fill="#5c6370" textLength="25.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">╭─ </text>
 <text x="43.2" y="77.0" fill="#56b6c2" font-weight="600" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">grove</text>
-<text x="85.2" y="77.0" fill="#5c6370" textLength="873.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> v0.3.6 ───────────────────────────────────────────────────────────────────────────────────────────────╮</text>
+<text x="85.2" y="77.0" fill="#5c6370" textLength="873.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> v0.3.7 ───────────────────────────────────────────────────────────────────────────────────────────────╮</text>
 <text x="18.0" y="96.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="950.4" y="96.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="18.0" y="115.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
@@ -31,16 +31,16 @@
 <text x="18.0" y="191.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="152.4" y="191.0" fill="#98c379" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">   ▐▌</text>
 <text x="328.8" y="191.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="337.2" y="191.0" fill="#e4e6ea" textLength="613.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  · `.grove.toml`'s `copy` now takes the trunk's version over what the … </text>
+<text x="337.2" y="191.0" fill="#e4e6ea" textLength="613.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  · The app's keys are back to the three things worktree management is … </text>
 <text x="950.4" y="191.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="18.0" y="210.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="328.8" y="210.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="337.2" y="210.0" fill="#e4e6ea" textLength="613.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  · Removing a dirty worktree asks about its uncommitted changes instea… </text>
+<text x="337.2" y="210.0" fill="#e4e6ea" textLength="613.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  · The row under the cursor shows its uncommitted files beside the lis… </text>
 <text x="950.4" y="210.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="18.0" y="229.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="127.2" y="229.0" fill="#e4e6ea" opacity="0.6" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">~/work/acme</text>
 <text x="328.8" y="229.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
-<text x="337.2" y="229.0" fill="#e4e6ea" textLength="613.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  · `y` copies the path under the cursor to the clipboard — a worktree … </text>
+<text x="337.2" y="229.0" fill="#e4e6ea" textLength="613.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  · The last five commits of the row under the cursor are drawn under t… </text>
 <text x="950.4" y="229.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="18.0" y="248.0" fill="#5c6370" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">│</text>
 <text x="85.2" y="248.0" fill="#e4e6ea" opacity="0.6" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">5 worktrees · in main</text>
@@ -53,7 +53,7 @@
 <text x="18.0" y="343.0" fill="#e4e6ea" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  * main        </text>
 <text x="152.4" y="343.0" fill="#e4e6ea" opacity="0.6" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑0</text>
 <text x="177.6" y="343.0" fill="#e4e6ea" opacity="0.6" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↓0</text>
-<text x="312.0" y="343.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○    </text>
+<text x="312.0" y="343.0" fill="#e4e6ea" opacity="0.6" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○</text>
 <text x="387.6" y="343.0" fill="#e4e6ea" opacity="0.6" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">1d ago</text>
 <text x="18.0" y="362.0" fill="#e4e6ea" opacity="0.6" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    chore/</text>
 <text x="18.0" y="381.0" fill="#e4e6ea" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">      docs      </text>
@@ -61,7 +61,7 @@
 <text x="177.6" y="381.0" fill="#e4e6ea" opacity="0.6" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↓0</text>
 <text x="236.4" y="381.0" fill="#98c379" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑1</text>
 <text x="261.6" y="381.0" fill="#e5c07b" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↓2</text>
-<text x="312.0" y="381.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○    </text>
+<text x="312.0" y="381.0" fill="#e4e6ea" opacity="0.6" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○</text>
 <text x="387.6" y="381.0" fill="#e4e6ea" opacity="0.6" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">4d ago</text>
 <text x="18.0" y="400.0" fill="#e4e6ea" opacity="0.6" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">    feat/</text>
 <text x="18.0" y="419.0" fill="#56b6c2" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▸     login     </text>
@@ -84,22 +84,44 @@
 <text x="177.6" y="476.0" fill="#e4e6ea" opacity="0.6" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↓0</text>
 <text x="236.4" y="476.0" fill="#98c379" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑1</text>
 <text x="261.6" y="476.0" fill="#e5c07b" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↓2</text>
-<text x="312.0" y="476.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○    </text>
+<text x="312.0" y="476.0" fill="#e4e6ea" opacity="0.6" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○</text>
 <text x="387.6" y="476.0" fill="#e4e6ea" opacity="0.6" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2d ago</text>
-<text x="18.0" y="533.0" fill="#56b6c2" textLength="495.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">tip: h and l don't stop at the first fold — they keep going</text>
-<text x="18.0" y="552.0" fill="#e4e6ea" opacity="0.6" textLength="940.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
-<text x="18.0" y="571.0" fill="#56b6c2" font-weight="600" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑↓</text>
-<text x="34.8" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> move · </text>
-<text x="102.0" y="571.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">a</text>
-<text x="110.4" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> add · </text>
-<text x="169.2" y="571.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">r</text>
-<text x="177.6" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> remove · </text>
-<text x="261.6" y="571.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">s</text>
-<text x="270.0" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync · </text>
-<text x="337.2" y="571.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">S</text>
-<text x="345.6" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync all · </text>
-<text x="446.4" y="571.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">R</text>
-<text x="454.8" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> refresh · </text>
-<text x="547.2" y="571.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">q</text>
-<text x="555.6" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> quit</text>
+<text x="18.0" y="533.0" fill="#e4e6ea" opacity="0.6" textLength="940.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">── commits in feat/login ───────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="34.8" y="552.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">ad7df5a</text>
+<text x="110.4" y="552.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2h ago          </text>
+<text x="261.6" y="552.0" fill="#56b6c2" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(HEAD -&gt; feat/login) </text>
+<text x="438.0" y="552.0" fill="#e4e6ea" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Cover the form</text>
+<text x="34.8" y="571.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">e39999e</text>
+<text x="110.4" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3h ago          </text>
+<text x="244.8" y="571.0" fill="#e4e6ea" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add the form</text>
+<text x="34.8" y="590.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">a5c431d</text>
+<text x="110.4" y="590.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2h ago          </text>
+<text x="261.6" y="590.0" fill="#56b6c2" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(origin/feat/login) </text>
+<text x="429.6" y="590.0" fill="#e4e6ea" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Start feat/login</text>
+<text x="34.8" y="609.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">d91b0cb</text>
+<text x="110.4" y="609.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-13 23:44</text>
+<text x="244.8" y="609.0" fill="#e4e6ea" textLength="243.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Set worktrees up on arrival</text>
+<text x="34.8" y="628.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">80137f1</text>
+<text x="110.4" y="628.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-13 13:44</text>
+<text x="244.8" y="628.0" fill="#e4e6ea" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add the entry point</text>
+<text x="18.0" y="647.0" fill="#56b6c2" textLength="495.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">tip: h and l don't stop at the first fold — they keep going</text>
+<text x="18.0" y="666.0" fill="#e4e6ea" opacity="0.6" textLength="940.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="18.0" y="685.0" fill="#56b6c2" font-weight="600" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↑↓</text>
+<text x="34.8" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> move · </text>
+<text x="102.0" y="685.0" fill="#56b6c2" font-weight="600" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">enter</text>
+<text x="144.0" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="109.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> copy path · </text>
+<text x="253.2" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">a</text>
+<text x="261.6" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> add · </text>
+<text x="320.4" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">r</text>
+<text x="328.8" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> remove · </text>
+<text x="412.8" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">s</text>
+<text x="421.2" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync · </text>
+<text x="488.4" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">S</text>
+<text x="496.8" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync all · </text>
+<text x="597.6" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">R</text>
+<text x="606.0" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> refresh · </text>
+<text x="698.4" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">L</text>
+<text x="706.8" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> hide log · </text>
+<text x="807.6" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">q</text>
+<text x="816.0" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> quit</text>
 </svg>

@@ -58,8 +58,20 @@ export type Fixture = {
   readonly repo: RepoPaths;
   /** Where the app is standing: the worktree a person would have opened it in. */
   readonly cwd: string;
+  /**
+   * Every branch this made a worktree for, trunk first.
+   *
+   * Handed back so a shot can wait for the screen to have read the repository
+   * without waiting on a row of the list — the banner counts these, and unlike
+   * a row it cannot scroll out of the picture.
+   */
+  readonly branches: readonly string[];
   readonly dispose: () => Promise<void>;
 };
+
+/** The trunk, and the branches given worktrees on top of it. */
+const TRUNK = "main";
+const BRANCHES = ["feat/login", "feat/search", "fix/crash", "chore/docs"] as const;
 
 /** A reporter with nowhere to write: the fixture's own progress is not the picture. */
 const quiet = createPlainReporter({ out: () => {}, err: () => {} });
@@ -157,14 +169,14 @@ export async function buildFixture(): Promise<Fixture> {
 
   // What `copy` and `link` are pointed at: untracked, machine-local, and
   // exactly the two things nobody wants to re-make per worktree by hand.
-  const trunk = join(cloned.root, "main");
+  const trunk = join(cloned.root, TRUNK);
   await Bun.write(join(trunk, ".env"), "DATABASE_URL=postgres://localhost/acme\n");
   await mkdir(join(trunk, "node_modules", ".bin"), { recursive: true });
 
   // `trust: false`, deliberately: the file's commands stay unread, so the `a`
   // in the pictures is the first time anything has agreed to run them — which
   // is the row the setup picture is of.
-  for (const branch of ["feat/login", "feat/search", "fix/crash", "chore/docs"]) {
+  for (const branch of BRANCHES) {
     await addWorktree(
       repo,
       cloned.root,
@@ -188,6 +200,7 @@ export async function buildFixture(): Promise<Fixture> {
   return {
     repo,
     cwd: trunk,
+    branches: [TRUNK, ...BRANCHES],
     dispose: () => rm(root, { recursive: true, force: true }),
   };
 }
