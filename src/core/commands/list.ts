@@ -249,13 +249,26 @@ function pad2(value: number): string {
 export function describeTouched(summary: WorktreeSummary, now: number): string {
   if (summary.touched === undefined) return "";
 
-  const age = now - summary.touched;
+  return describeAge(summary.touched, now);
+}
+
+/**
+ * The same answer for any moment in the past, which is what the app's commit
+ * log asks of it too.
+ *
+ * Shared rather than written twice, because "when" should read the same
+ * wherever the screen says it: the `last` column and the commits under the
+ * list are the same question about two different things, and two spellings of
+ * `2h ago` would be two conventions to learn.
+ */
+export function describeAge(time: number, now: number): string {
+  const age = now - time;
   if (age < MINUTE) return "now";
   if (age < HOUR) return `${Math.floor(age / MINUTE)}m ago`;
   if (age < DAY) return `${Math.floor(age / HOUR)}h ago`;
   if (age < 7 * DAY) return `${Math.floor(age / DAY)}d ago`;
 
-  const date = new Date(summary.touched);
+  const date = new Date(time);
 
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(
     date.getHours(),

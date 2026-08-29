@@ -15,6 +15,7 @@ hooks/            useInterval
 app/App.tsx       the screen: rows, keys, and one mode at a time
 app/Setup.tsx     the screen when there is no repository yet: ask, clone, hand over
 app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
+app/Log.tsx       the commits under the list, for the row the cursor is on
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths as the tree they are on disk
@@ -52,6 +53,16 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
 - **A shut folder is indicated by its count, and nothing else.** It reads `feat/  3`; open, it
   reads `feat/` with its worktrees indented underneath. A chevron as well would say the same
   thing twice, and the count says the part a chevron cannot — how much is behind it.
+- **The commit panel is a view, and it is budgeted like one.** `Log.tsx` draws `git log --oneline`
+  for the row under the cursor — sha, age, ref names, subject, in columns, with git's own colours —
+  and `L` toggles it for the session (on by default; nothing is written to disk). It is read by
+  `service.log` when the selection changes and again whenever the list re-reads itself, rather than
+  as a column of `listWorktreeSummaries`: that walks every worktree on the refresh tick, and a
+  `git log` per row would pay for thirty answers to draw one. Its height comes out of what is left
+  *after* the activity area has taken its rows — while a command is running, what it is doing now
+  beats what was committed yesterday — and below `LOG_MIN_ROWS` it is dropped rather than drawn as
+  a heading with one commit stuck to it. The panel renders its own fixed height, blank rows
+  included, so a shallow history does not move the rule above it.
 - **The `add` mode carries its base.** `a` reads the selected worktree's branch when the prompt
   opens and keeps it on the mode, rather than reading the selection again on `enter`. With the
   list refreshing itself, the two are not the same value — and the second one would not be what

@@ -11,12 +11,14 @@ import {
   type WorktreeSummary,
 } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
+import type { Commit } from "../../core/history.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar, statusBarRows } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
+import { Log } from "./Log.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor, messageRows } from "./message.ts";
 import type { WorktreeService } from "./service.ts";
@@ -106,6 +108,30 @@ type Props = {
 const ACTIVITY_ROWS = 6;
 
 /**
+ * How many commits the panel under the list shows, and asks git for.
+ *
+ * One number for both, so the read is exactly as big as the drawing: asking
+ * for more would be a `git log` walking history nobody can see, and asking for
+ * fewer would leave blank rows on a screen with the space for them.
+ *
+ * Five is what "what have I been doing here" takes to answer. Past that it is a
+ * history to page through, and paging through it is what `git log` in the
+ * worktree is for — the panel exists so that the usual question does not need
+ * another terminal, not so that this one grows a pager.
+ */
+const LOG_ROWS = 5;
+
+/**
+ * Below this many commits the panel is not drawn at all.
+ *
+ * A heading and a single subject is a rule with a commit stuck to it: it costs
+ * two of the few rows a short terminal has and answers nothing the list did not
+ * already say. Handing them back keeps the list readable, and `L` is not what
+ * anyone should have to press to get out of that.
+ */
+const LOG_MIN_ROWS = 2;
+
+/**
  * The rows the list keeps whatever else wants them.
  *
  * The list is the thing being worked in. A screen that answers "what did that
@@ -165,6 +191,7 @@ const GENERAL_TIPS: readonly Message[] = [
   { kind: "info", text: "tip: r on a folder removes every worktree under it, after one question" },
   { kind: "info", text: "tip: s syncs the row under the cursor, S syncs every worktree" },
   { kind: "info", text: "tip: enter copies the path under the cursor, for a paste elsewhere" },
+  { kind: "info", text: "tip: L puts the commits away when the list wants the rows" },
 ];
 
 /**
@@ -437,6 +464,22 @@ export function App({
   // and missing-shell-function tips apply, plus the standing `GENERAL_TIPS`.
   // Never empty once set. See the rotation `useInterval` below.
   const [tipPool, setTipPool] = useState<readonly Message[]>([]);
+  /**
+   * Whether the commits are drawn under the list at all, and the last read.
+   *
+   * On by default, because the panel is the answer to the question the columns
+   * raise — `↑2` is a number until you can see what the two commits were — and
+   * a view you have to know about to turn on is one most people never see. `L`
+   * puts it away for the session when the rows are wanted for the list instead;
+   * it is a view, so it is not remembered anywhere on disk.
+   *
+   * The read is held with the path it was read for, so the panel can tell its
+   * own commits from the ones still on screen from the row before.
+   */
+  const [logOn, setLogOn] = useState(true);
+  const [log, setLog] = useState<
+    { readonly path: string; readonly commits: readonly Commit[] } | undefined
+  >(undefined);
 
   const lines = useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
 
@@ -699,6 +742,46 @@ export function App({
     mode.kind === "busy" ? null : refreshDelay,
   );
 
+  /**
+   * The commits for the row under the cursor, re-read whenever it could have
+   * changed.
+   *
+   * Kept out of `list` deliberately. That walks every worktree on the refresh
+   * tick, and a `git log` per row would pay for thirty answers to draw one —
+   * this asks about the one row that is being looked at, when it starts being
+   * looked at.
+   *
+   * `rows` is a dependency on purpose: the panel shows the selection as the
+   * list last saw it, so a refresh that brings in a commit re-reads the panel
+   * with it rather than leaving it a minute behind the row above. The lookup
+   * through `rows` is also what keeps a vanished worktree from being read.
+   *
+   * A failure is an empty panel, never a message: nobody pressed a key for
+   * this, and a red line about a background read would be the screen
+   * interrupting itself.
+   */
+  const selectedPath = selected?.path;
+
+  useEffect(() => {
+    const target = rows.find((summary) => summary.path === selectedPath);
+    if (!logOn || target === undefined) return;
+
+    let live = true;
+
+    void service.log(target.path, LOG_ROWS).then(
+      (commits) => {
+        if (live) setLog({ path: target.path, commits });
+      },
+      () => {
+        if (live) setLog({ path: target.path, commits: [] });
+      },
+    );
+
+    return () => {
+      live = false;
+    };
+  }, [logOn, selectedPath, rows, service]);
+
   useInput((input, key) => {
     // Any key is "somebody's here," whatever it does — including the ones
     // handled below that leave the mode untouched. Snapping the delay back
@@ -856,6 +939,9 @@ export function App({
     }
     if (input === "S") return void perform("syncing every worktree", () => service.sync());
     if (input === "R") return void perform("reading worktrees", async () => "refreshed");
+    // A view, not an action: nothing is read, nothing is written, and the rows
+    // it gives back go straight to the list.
+    if (input === "L") return setLogOn((on) => !on);
     if (input === "q" || key.escape) return exit();
   });
 
@@ -890,6 +976,7 @@ export function App({
         { keys: "r", action: `remove all ${under.length}` },
         { keys: "S", action: "sync all" },
         { keys: "R", action: "refresh" },
+        { keys: "L", action: logOn ? "hide log" : "show log" },
         { keys: "q", action: "quit" },
       ];
     }
@@ -902,9 +989,10 @@ export function App({
       { keys: "s", action: "sync" },
       { keys: "S", action: "sync all" },
       { keys: "R", action: "refresh" },
+      { keys: "L", action: logOn ? "hide log" : "show log" },
       { keys: "q", action: "quit" },
     ];
-  }, [mode, current, under.length]);
+  }, [mode, current, under.length, logOn]);
 
   // Every section's height, decided here rather than left to the renderer: the
   // list can only be sliced to fit if something knows what "fit" is.
@@ -949,9 +1037,27 @@ export function App({
   const activity = clipped > 0 ? (room > 1 ? lines.slice(-(room - 1)) : []) : lines;
   const activityRows = activity.length > 0 ? activity.length + (clipped > 0 ? 1 : 0) + 1 : 0;
 
+  /**
+   * The commit panel's height, out of what is left once everything else has
+   * taken its own.
+   *
+   * Budgeted after the activity rather than beside it, which is the precedence
+   * on purpose: while a command is running, what it is doing now beats what was
+   * committed yesterday, and on a terminal too short for both the panel is the
+   * one that gives way. The list keeps `MIN_LIST_ROWS` underneath either way,
+   * and the panel takes nothing at all rather than a row too few to read — one
+   * commit under a heading is a heading with a commit stuck to it.
+   */
+  const logSpare =
+    terminalRows - headerRows - activityRows - detailRows - footerRows - MIN_LIST_ROWS - 1;
+  const logBody = logOn && logSpare >= LOG_MIN_ROWS ? Math.min(LOG_ROWS, logSpare) : 0;
+  // The heading is a row of the panel: it is the rule the commits hang from,
+  // and it says which row they belong to.
+  const logHeight = logBody > 0 ? logBody + 1 : 0;
+
   const listHeight = Math.max(
     1,
-    terminalRows - headerRows - activityRows - detailRows - footerRows,
+    terminalRows - headerRows - activityRows - logHeight - detailRows - footerRows,
   );
 
   // A window onto the tree that keeps the cursor roughly centred, and stops
@@ -1044,6 +1150,18 @@ export function App({
   const position = visible.length < tree.length ? `${index + 1} of ${tree.length}` : "";
   const here = rows.find((summary) => summary.current)?.dir;
 
+  // Only the commits that were read for the row the cursor is on now: a read
+  // for the row before is still on its way back, and showing its subjects
+  // under this heading would be the panel lying about whose history it is.
+  const commits = selected !== undefined && log?.path === selected.path ? log.commits : [];
+  const logLabel = selected?.dir ?? current?.label ?? "";
+  const logNote =
+    current?.kind === "group"
+      ? "a folder has no commits of its own — the worktrees under it do"
+      : commits.length === 0 && log?.path === selectedPath
+        ? "no commits on this branch yet"
+        : undefined;
+
   return (
     <Box flexDirection="column" width={columns} height={terminalRows} paddingTop={1}>
       <Banner
@@ -1081,6 +1199,13 @@ export function App({
           ))
         )}
       </Box>
+
+      {/* Under the list and above the activity: it belongs to the row the
+          cursor is on, so it sits against the list rather than at the bottom
+          of the screen with the things that come and go. */}
+      {logHeight > 0 ? (
+        <Log label={logLabel} commits={commits} note={logNote} rows={logBody} columns={columns} />
+      ) : null}
 
       {activity.length > 0 ? (
         <>

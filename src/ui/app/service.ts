@@ -6,6 +6,7 @@ import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { syncWorktrees } from "../../core/commands/sync.ts";
 import { GroveError } from "../../core/errors.ts";
+import { type Commit, recentCommits } from "../../core/history.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../core/setup.ts";
 import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
@@ -44,6 +45,20 @@ export type WorktreeService = {
    * copy, a failure here is the whole outcome and is thrown.
    */
   readonly copyPath: (path: string) => Promise<string>;
+  /**
+   * The newest `limit` commits in one worktree, for the panel under the list.
+   *
+   * The only read here that answers with data rather than with a line to show:
+   * the panel draws its own columns, and handing it a formatted string would
+   * put the colours and the widths in the wrong place — the screen is what
+   * knows how wide the terminal is.
+   *
+   * Reads nothing else and refuses nothing. It runs whenever the cursor moves,
+   * so a worktree whose history cannot be read — a branch with no commits on
+   * it yet — is an empty list rather than a red line about a key nobody
+   * deliberately pressed.
+   */
+  readonly log: (path: string, limit: number) => Promise<readonly Commit[]>;
   /**
    * Each action answers with the one line worth showing afterwards.
    *
@@ -145,6 +160,8 @@ export function createWorktreeService(
     list: () => listWorktreeSummaries(repo, cwd),
 
     fetch: () => fetchRemotes(repo.gitDir),
+
+    log: (path, limit) => recentCommits(path, limit),
 
     copyPath: async (path) => {
       // Thrown rather than swallowed, unlike `add`'s copy: there the worktree
