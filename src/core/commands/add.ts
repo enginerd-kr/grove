@@ -152,7 +152,7 @@ function worktreeRelSegment(repo: RepoPaths, options: AddOptions): string {
  * `bun install` that failed on a train does not get to report that the worktree
  * is missing — a script reading the exit code would then do the wrong thing
  * with a directory that is sitting right there. It is said out loud instead,
- * along with the command that repeats it once the network is back.
+ * along with what the failing command itself said.
  */
 async function setUpWorktree(
   repo: RepoPaths,
@@ -169,7 +169,14 @@ async function setUpWorktree(
       : await runSetup(repo, target, { plan }, reporter);
   const failure = failureFor(result);
 
-  if (failure) reporter.warn(`${failure.message}; the worktree is there — ${failure.hint}`);
+  if (failure) {
+    reporter.warn(`${failure.message}; the worktree is there`);
+    // The reason is on `details` — the command's own stderr — and it is the
+    // half worth having: `"open ..." exited 1` alone sends somebody off to run
+    // the thing by hand to read what it already said. One line each, because a
+    // warn takes a line and folding four of them into a sentence reads as one.
+    for (const detail of failure.details) reporter.info(`  ${detail}`);
+  }
 
   return result;
 }
