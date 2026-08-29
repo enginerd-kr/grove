@@ -1,0 +1,698 @@
+import { describe, expect, test } from "bun:test";
+import { mkdir, rm, symlink } from "node:fs/promises";
+import { join } from "node:path";
+import { isGroveError } from "../../core/errors.ts";
+import { pathExists } from "../../core/fs.ts";
+import { repoPaths } from "../../core/layout.ts";
+import { seedGit, type TempRepo, withTempRepo } from "../../core/test-utils.ts";
+import type { Reporter, Step } from "../../report/reporter.ts";
+import { runCli } from "../e2e-utils.ts";
+import { createSetupService, createWorktreeService, type WorktreeService } from "./service.ts";
+
+/**
+ * The layer between the keys and `core/commands`, driven against a real repository.
+ *
+ * In-process rather than through a terminal, which is the whole point of the
+ * service existing: what the screen depends on is the *string* each action
+ * answers with and the *shape* `list` hands back, and both are ordinary values
+ * once the component is out of the way. A refusal is asserted as the
+ * `GroveError` it arrives as — carrying a sentence and a hint the screen can
+ * draw — rather than as a crash, because that is the difference between a red
+ * line and a dead session.
+ *
+ * Every test builds its own throwaway origin, so they are parallel-safe and
+ * nothing here touches the network.
+ */
+
+/** A clone, a couple of git processes and a shell command: seconds, not milliseconds. */
+const SLOW = 60_000;
+
+type Recorder = {
+  readonly reporter: Reporter;
+  readonly steps: string[];
+  readonly succeeded: string[];
+  readonly failed: string[];
+  readonly infos: string[];
+  readonly warnings: string[];
+};
+
+/** A reporter that keeps what it was told, standing in for the activity area. */
+function recorder(): Recorder {
+  const steps: string[] = [];
+  const succeeded: string[] = [];
+  const failed: string[] = [];
+  const infos: string[] = [];
+  const warnings: string[] = [];
+
+  const reporter: Reporter = {
+    step(text): Step {
+      let label = text;
+      steps.push(text);
+
+      return {
+        update: (next) => {
+          label = next;
+        },
+        progress: () => {},
+        succeed: (final) => succeeded.push(final ?? label),
+        fail: (final) => failed.push(final ?? label),
+      };
+    },
+    info: (text) => infos.push(text),
+    warn: (text) => warnings.push(text),
+    out: () => {},
+    close: async () => {},
+  };
+
+  return { reporter, steps, succeeded, failed, infos, warnings };
+}
+
+/** `grove clone`, run the way the command line runs it, as the fixture. */
+async function managed(repo: TempRepo): Promise<string> {
+  const clone = await runCli(["clone", repo.originUrl], { cwd: repo.work });
+  expect(clone.exitCode).toBe(0);
+
+  return join(repo.work, "origin");
+}
+
+/** The service as `run.tsx` builds it: the repo it found, and the cwd it started in. */
+function serviceAt(root: string, cwd = root): { service: WorktreeService; log: Recorder } {
+  const log = recorder();
+
+  return { service: createWorktreeService(repoPaths(root), cwd, log.reporter), log };
+}
+
+let scratchCount = 0;
+
+/** Somebody else's commit, pushed from outside the repository under test. */
+async function commitOnOrigin(repo: TempRepo, branch: string, file: string): Promise<void> {
+  scratchCount += 1;
+  const scratch = join(repo.root, `elsewhere-${scratchCount}`);
+
+  await seedGit(repo.root, ["clone", "--branch", branch, repo.originPath, scratch]);
+  await Bun.write(join(scratch, file), `${file}\n`);
+  await seedGit(scratch, ["add", "-A"]);
+  await seedGit(scratch, ["-c", "commit.gpgsign=false", "commit", "-m", `Add ${file}`]);
+  await seedGit(scratch, ["push", "origin", `HEAD:${branch}`]);
+  await rm(scratch, { recursive: true, force: true });
+}
+
+/** The error an action refused with, having asserted that it refused at all. */
+async function refusalFrom(action: Promise<unknown>): Promise<{
+  code: string;
+  message: string;
+  hint: string | undefined;
+  details: readonly string[];
+}> {
+  try {
+    await action;
+  } catch (error) {
+    if (!isGroveError(error)) throw error;
+
+    return {
+      code: error.code,
+      message: error.message,
+      hint: error.hint,
+      details: error.details,
+    };
+  }
+
+  throw new Error("expected the service to refuse, and it did not");
+}
+
+describe("createWorktreeService", () => {
+  test(
+    "list hands over the summaries the tree is built from, and re-reads what changed underneath it",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root, join(root, "main"));
+
+        const first = await service.list();
+
+        expect(first).toHaveLength(1);
+        expect(first[0]).toMatchObject({
+          path: join(root, "main"),
+          dir: "main",
+          branch: "main",
+          detached: false,
+          dirty: false,
+          changed: 0,
+          untracked: 0,
+          files: [],
+          isDefault: true,
+          // `cwd` is what tells the screen which row is the one you are standing in.
+          current: true,
+        });
+
+        // A worktree made outside the app entirely: a refresh is a re-read, not
+        // a cache that has to be told about it.
+        expect((await runCli(["add", "feat/login"], { cwd: root })).exitCode).toBe(0);
+        await Bun.write(join(root, "main", "scratch.txt"), "half-finished\n");
+
+        const second = await service.list();
+
+        expect(second.map((entry) => entry.dir).toSorted()).toEqual(["feat/login", "main"]);
+        expect(second.find((entry) => entry.dir === "main")).toMatchObject({
+          dirty: true,
+          changed: 1,
+          untracked: 1,
+          files: ["scratch.txt"],
+        });
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "add says which way it got the branch, and says so again when there was nothing to do",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        // The suffix depends on whether this machine has a clipboard tool, so
+        // only the sentence in front of it is the service's own answer.
+        //
+        // `from` is ignored here rather than obeyed: the branch is on the
+        // remote, so it is checked out rather than created, and the answer says
+        // "(remote)" instead of naming a base that had nothing to do with it.
+        expect(await service.add("feat/login", "main")).toStartWith("added feat/login (remote)");
+        expect(await pathExists(join(root, "feat", "login"))).toBe(true);
+
+        expect(await service.add("feat/login")).toStartWith("feat/login already has a worktree");
+
+        // A branch nobody has: made, and the base is said back because there
+        // was one.
+        expect(await service.add("spike", "main")).toStartWith("added spike from main");
+        expect(await service.add("solo")).toStartWith("added solo (new)");
+
+        expect((await service.list()).map((entry) => entry.dir).toSorted()).toEqual([
+          "feat/login",
+          "main",
+          "solo",
+          "spike",
+        ]);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "add refuses what the command line refuses, as an error with a sentence and a hint",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        // A name with no usable directory in it — refused before anything is made.
+        const unusable = await refusalFrom(service.add("..."));
+
+        expect(unusable.code).toBe("usage");
+        expect(unusable.message.length).toBeGreaterThan(0);
+
+        await service.add("feat/login");
+        // `feat` would have to become a file where a directory already is.
+        const nested = await refusalFrom(service.add("feat"));
+
+        expect(nested.code).toBe("state-conflict");
+        expect(nested.hint).toBeDefined();
+
+        // The refusal left the repository as it was.
+        expect((await service.list()).map((entry) => entry.dir).toSorted()).toEqual([
+          "feat/login",
+          "main",
+        ]);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "remove answers with the line to show, and refuses the trunk and a name it cannot resolve",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        await service.add("feat/login");
+
+        expect(await service.remove("feat/login")).toBe("removed feat/login");
+        expect(await pathExists(join(root, "feat", "login"))).toBe(false);
+        // The emptied folder goes with it, so the tree does not keep a heading
+        // with nothing under it.
+        expect(await pathExists(join(root, "feat"))).toBe(false);
+
+        const trunk = await refusalFrom(service.remove("main"));
+
+        expect(trunk.code).toBe("refused");
+        expect(trunk.message).toContain("main");
+
+        const missing = await refusalFrom(service.remove("no-such-branch"));
+
+        expect(missing.code).toBe("not-a-repo");
+        // The details are what the screen draws under the sentence, so a name
+        // that matched nothing shows what there was to match.
+        expect(missing.details.join("\n")).toContain("main");
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "a dirty worktree is refused until the confirmation says it was asked about",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        await service.add("feat/login");
+        await Bun.write(join(root, "feat", "login", "scratch.txt"), "half-finished\n");
+
+        const refusal = await refusalFrom(service.remove("feat/login"));
+
+        expect(refusal.code).toBe("refused");
+        expect(await pathExists(join(root, "feat", "login"))).toBe(true);
+
+        // `y` was pressed against a confirmation that counted the changes.
+        expect(await service.remove("feat/login", true)).toBe("removed feat/login");
+        expect(await pathExists(join(root, "feat", "login"))).toBe(false);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "removeMany counts what went, keeps going past a refusal, and raises when nothing went",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        await service.add("feat/login");
+        await service.add("feat/search");
+        await Bun.write(join(root, "feat", "search", "scratch.txt"), "half-finished\n");
+
+        // One clean, one dirty: the clean one still goes.
+        expect(await service.removeMany(["feat/login", "feat/search"])).toBe(
+          "removed 1 worktree, 1 refused",
+        );
+        expect(await pathExists(join(root, "feat", "login"))).toBe(false);
+        expect(await pathExists(join(root, "feat", "search"))).toBe(true);
+
+        // Nothing removed means the refusal is the outcome, not a count of zero.
+        const refusal = await refusalFrom(service.removeMany(["feat/search"]));
+
+        expect(refusal.code).toBe("refused");
+
+        expect(await service.removeMany(["feat/search"], true)).toBe("removed 1 worktree");
+        expect(await service.removeMany([])).toBe("removed 0 worktrees");
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "sync fast-forwards a worktree the origin moved ahead of, one target or all of them",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        await service.add("feat/login");
+        await commitOnOrigin(repo, "main", "newer.txt");
+
+        expect(await service.sync("main")).toBe("main fast-forwarded");
+        expect(await pathExists(join(root, "main", "newer.txt"))).toBe(true);
+
+        await commitOnOrigin(repo, "feat/login", "later.txt");
+
+        // "rebased" and not "fast-forwarded", even though nothing local had to
+        // move: only the trunk is fast-forwarded, and every other branch goes
+        // through the rebase that keeps it on top of its own remote.
+        expect(await service.sync("feat/login")).toBe("feat/login rebased");
+        expect(await pathExists(join(root, "feat", "login", "later.txt"))).toBe(true);
+
+        // Every worktree, which is what `S` does — counted by outcome once
+        // there is more than one to count.
+        expect(await service.sync()).toBe("2 up-to-date");
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "a worktree sync could not touch is reported on the same line, not raised",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        await service.add("feat/login");
+        await Bun.write(join(root, "feat", "login", "scratch.txt"), "half-finished\n");
+        await commitOnOrigin(repo, "feat/login", "later.txt");
+
+        // Worth pinning as it is: `grove sync` on the command line turns a skip
+        // into exit 4 through `failureFor`, and the service deliberately does
+        // not — the screen reports outcomes and stays open.
+        expect(await service.sync("feat/login")).toBe("feat/login skipped");
+        expect(await pathExists(join(root, "feat", "login", "later.txt"))).toBe(false);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "sync with nothing to say still says something",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        expect(await service.sync()).toBe("main up-to-date");
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "fetch answers rather than throws, so a laptop on a train is not an error",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service, log } = serviceAt(root);
+
+        expect(await service.fetch()).toBe(true);
+
+        // The origin is gone — which is every offline refresh tick, and is not
+        // something to interrupt anybody about.
+        await rm(repo.originPath, { recursive: true, force: true });
+
+        expect(await service.fetch()).toBe(false);
+        expect(log.warnings).toEqual([]);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "log answers with commits, and with nothing rather than a failure",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+        const main = join(root, "main");
+
+        const commits = await service.log(main, 5);
+
+        expect(commits.length).toBeGreaterThan(0);
+        expect(commits[0]).toMatchObject({ subject: "Add app.txt" });
+        expect(commits[0]?.sha).toMatch(/^[0-9a-f]{7,}$/);
+        expect(commits[0]?.when).toBeGreaterThan(0);
+        // Newest first, which is the order the panel draws.
+        expect(commits.at(-1)?.subject).toBe("Add a readme");
+
+        expect(await service.log(main, 1)).toHaveLength(1);
+        expect(await service.log(main, 0)).toEqual([]);
+      });
+    },
+    SLOW,
+  );
+
+  // `recentCommits` documents "a directory that is no longer there" as one of
+  // the ways it answers "nothing to show". The tolerance is real rather than
+  // the caller's: `spawnProcess` turns the missing cwd into the failure git
+  // would have reported, and the `code !== 0` guard already there takes it.
+  test(
+    "log on a directory that has gone is an empty panel, not a rejection",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        expect(await service.log(join(root, "not-a-worktree"), 5)).toEqual([]);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "copyPath either says what it copied or refuses in a way the screen can draw",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+        const main = join(root, "main");
+
+        // Which of the two happens is a property of the machine — a headless
+        // Linux runner has no clipboard tool — and both are contracts the
+        // screen relies on, so both are spelled out here.
+        try {
+          expect(await service.copyPath(main)).toBe(`copied ${main}`);
+        } catch (error) {
+          if (!isGroveError(error)) throw error;
+
+          expect(error.code).toBe("refused");
+          expect(error.hint).toBe("install wl-copy, xclip, or xsel");
+        }
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "the commands a new worktree was denied are offered, and running them trusts the file for good",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service, log } = serviceAt(root);
+
+        // The trunk's copy is the one that governs, so that is where it goes.
+        await Bun.write(
+          join(root, "main", ".grove.toml"),
+          '[setup]\nrun = ["echo ran > ran.txt"]\n',
+        );
+
+        // Making the worktree does not run it: `add` passes `trust: false`,
+        // exactly like the command line without `--trust`.
+        expect(await service.add("feat/login")).toStartWith("added feat/login (remote)");
+        expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(false);
+        expect(log.warnings.join("\n")).toContain("not been trusted");
+
+        // What the app asks straight afterwards, and what it puts the question on.
+        expect(await service.pendingCommands()).toEqual(["echo ran > ran.txt"]);
+
+        // Using the screen is the consent, so `y` runs them — reported as a
+        // step while it runs, and answered with what was done and where.
+        expect(await service.trustAndRun("feat/login")).toBe("1 run in feat/login");
+        expect(log.steps).toContain("running echo ran > ran.txt");
+        expect(log.succeeded).toContain("ran echo ran > ran.txt");
+        expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(true);
+
+        // Trusted now, so nothing is left to ask about.
+        expect(await service.pendingCommands()).toEqual([]);
+
+        // The same record `--trust` writes: the command line stops asking too,
+        // and a worktree it makes runs the commands without being told again.
+        expect((await runCli(["add", "chore/tidy"], { cwd: root })).exitCode).toBe(0);
+        expect(await pathExists(join(root, "chore", "tidy", "ran.txt"))).toBe(true);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "an edit to the file withdraws the trust, and a command that fails is raised with what it said",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+        const file = join(root, "main", ".grove.toml");
+
+        await Bun.write(file, '[setup]\nrun = ["echo ran > ran.txt"]\n');
+        await service.add("feat/login");
+        await service.trustAndRun("feat/login");
+
+        // Trust is of the contents, so a pull that changes them asks again.
+        await Bun.write(file, '[setup]\nrun = ["echo ran > ran.txt", "exit 3"]\n');
+
+        expect(await service.pendingCommands()).toEqual(["echo ran > ran.txt", "exit 3"]);
+
+        const failure = await refusalFrom(service.trustAndRun("feat/login"));
+
+        expect(failure.code).toBe("setup-failed");
+        expect(failure.message).toBe('"exit 3" exited 3');
+        // The command before it still ran; the ones after it did not.
+        expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(true);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "an ordinary repository has nothing pending and nothing to run",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        expect(await service.pendingCommands()).toEqual([]);
+
+        await service.add("feat/login");
+
+        expect(await service.pendingCommands()).toEqual([]);
+        expect(await service.trustAndRun("feat/login")).toBe("no .grove.toml in feat/login");
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "the pull request keys refuse with a URL when `gh` is not installed",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const { service } = serviceAt(root);
+
+        // The one read here that leaves the machine. A PATH holding nothing but
+        // git is what makes this hermetic — git is still needed, because
+        // `checkoutPr` prunes remotes before it asks the forge anything — and
+        // the missing-tool refusal is the answer the screen has to be able to
+        // draw anyway.
+        const bin = join(repo.root, "only-git");
+        await mkdir(bin, { recursive: true });
+        const git = Bun.which("git");
+        if (git === null) throw new Error("these tests need git on PATH");
+        await symlink(git, join(bin, "git"));
+
+        const path = process.env.PATH;
+        process.env.PATH = bin;
+
+        try {
+          const listed = await refusalFrom(service.pullRequests());
+
+          expect(listed.code).toBe("gh");
+          expect(listed.hint).toContain("https://cli.github.com");
+
+          const checkout = await refusalFrom(service.checkoutPr(7));
+
+          expect(checkout.code).toBe("gh");
+        } finally {
+          process.env.PATH = path;
+        }
+      });
+    },
+    SLOW,
+  );
+});
+
+describe("createSetupService", () => {
+  test(
+    "clone turns a URL into the repository the app then talks to",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const log = recorder();
+        const setup = createSetupService(repo.work, false, log.reporter);
+
+        const { paths, branch } = await setup.clone(repo.originUrl);
+        const root = join(repo.work, "origin");
+
+        // The paths are what `run.tsx` hands to `createWorktreeService`, so
+        // every field of them is load-bearing.
+        expect(paths).toEqual({
+          root,
+          gitDir: join(root, ".bare"),
+          gitFile: join(root, ".git"),
+          kind: "managed",
+        });
+        expect(branch).toBe("main");
+        expect(await pathExists(paths.gitDir)).toBe(true);
+        expect(await pathExists(join(root, "main"))).toBe(true);
+
+        // The steps are the screen's activity area while it waits.
+        expect(log.succeeded).toEqual(["cloned", "fetched refs"]);
+
+        // And the repository it produced is one the worktree service can read.
+        const { service } = serviceAt(paths.root);
+
+        expect((await service.list()).map((entry) => entry.dir)).toEqual(["main"]);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "in place, the folder becomes the repository instead of gaining one",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const log = recorder();
+        const here = join(repo.work, "here");
+        await mkdir(here, { recursive: true });
+
+        const { paths } = await createSetupService(here, true, log.reporter).clone(repo.originUrl);
+
+        expect(paths.root).toBe(here);
+        expect(await pathExists(join(here, ".bare"))).toBe(true);
+        expect(await pathExists(join(here, "origin"))).toBe(false);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "a URL that is not one, and a folder that is not empty, are refused before anything is made",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const log = recorder();
+        const setup = createSetupService(repo.work, false, log.reporter);
+
+        const bad = await refusalFrom(setup.clone("not a url"));
+
+        expect(bad.code).toBe("usage");
+
+        await mkdir(join(repo.work, "origin"), { recursive: true });
+        await Bun.write(join(repo.work, "origin", "mine.txt"), "already here\n");
+
+        const occupied = await refusalFrom(setup.clone(repo.originUrl));
+
+        expect(occupied.code).toBe("state-conflict");
+        expect(occupied.hint).toBeDefined();
+        expect(await pathExists(join(repo.work, "origin", "mine.txt"))).toBe(true);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "a clone whose file wants to run something says so and runs none of it",
+    async () => {
+      await withTempRepo(async (repo) => {
+        scratchCount += 1;
+        const scratch = join(repo.root, `seeded-${scratchCount}`);
+        await seedGit(repo.root, ["clone", "--branch", "main", repo.originPath, scratch]);
+        await Bun.write(join(scratch, ".grove.toml"), '[setup]\nrun = ["echo ran > ran.txt"]\n');
+        await seedGit(scratch, ["add", "-A"]);
+        await seedGit(scratch, ["-c", "commit.gpgsign=false", "commit", "-m", "Add .grove.toml"]);
+        await seedGit(scratch, ["push", "origin", "HEAD:main"]);
+        await rm(scratch, { recursive: true, force: true });
+
+        const log = recorder();
+        const { paths } = await createSetupService(repo.work, false, log.reporter).clone(
+          repo.originUrl,
+        );
+
+        // The worst moment there has ever been to run a command is ten seconds
+        // after downloading it, so the clone names it and leaves it.
+        expect(log.warnings.join("\n")).toContain("wants to run");
+        expect(await pathExists(join(paths.root, "main", "ran.txt"))).toBe(false);
+
+        // It is waiting on the screen instead, which is where the question gets
+        // asked with the file in front of you.
+        const { service } = serviceAt(paths.root);
+
+        expect(await service.pendingCommands()).toEqual(["echo ran > ran.txt"]);
+      });
+    },
+    SLOW,
+  );
+});
