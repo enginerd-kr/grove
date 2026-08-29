@@ -4,6 +4,12 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.6 — 2026-08-29
+
+- `.grove.toml`'s `copy` now takes the trunk's version over what the worktree already holds — a stale `.env` is refreshed instead of kept, directories merge with the trunk winning, and what only the worktree has stays
+- Removing a dirty worktree asks about its uncommitted changes instead of refusing after the fact: the confirmation counts what `y` would discard, in red, and answering it removes the worktree, changes and all
+- `y` copies the path under the cursor to the clipboard — a worktree or a folder, ready to paste into another tab
+
 ## 0.3.5 — 2026-08-29
 
 - `.grove.toml`'s `copy` now fills in a directory the new worktree already has, so the ignored files inside a tracked folder — `config/local.json` and the like — arrive with it instead of being skipped as "already there"
