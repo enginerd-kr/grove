@@ -1,5 +1,6 @@
 import { mkdir, rm } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
+import { HOOKS_FILE, pendingCommands } from "../../hooks/index.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import {
   defaultBranch,
@@ -20,7 +21,6 @@ import {
   repoPaths,
   worktreeRelPath,
 } from "../layout.ts";
-import { pendingCommands, SETUP_FILE } from "../setup.ts";
 
 /**
  * `grove clone` — turn a remote URL into a managed repository.
@@ -160,7 +160,7 @@ async function sayWhatTheFileWants(
   const commands = await pendingCommands(paths, worktree);
   if (commands.length === 0) return;
 
-  const where = relative(paths.root, join(worktree, SETUP_FILE));
+  const where = relative(paths.root, join(worktree, HOOKS_FILE));
   const what = commands.map((command) => JSON.stringify(command)).join(", ");
 
   reporter.warn(`${where} wants to run ${what} — nothing has; read it, then run it yourself`);

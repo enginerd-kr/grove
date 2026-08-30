@@ -1,12 +1,12 @@
 import { rmdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { failureFor, runTeardown, type TeardownResult } from "../../hooks/index.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase } from "../layout.ts";
-import { failureFor, runTeardown, type TeardownResult } from "../setup.ts";
 import {
   listWorktrees,
   resolveTarget,

@@ -1,8 +1,8 @@
+import type { SetupResult } from "../../hooks/index.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import { GroveError, stderrDetails } from "../errors.ts";
 import { gitOutput, runGit, runGitOrThrow, runTool } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
-import type { SetupResult } from "../setup.ts";
 import { listWorktrees, statusOf } from "../worktrees.ts";
 import { addWorktree } from "./add.ts";
 

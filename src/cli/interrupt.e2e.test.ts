@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { pathExists } from "../core/fs.ts";
-import { SETUP_FILE } from "../core/setup.ts";
 import { managedRepo, type TempRepo, withTempRepo } from "../core/test-utils.ts";
+import { HOOKS_FILE } from "../hooks/index.ts";
 import { ExitCode } from "./exit-codes.ts";
 import { type LiveCli, runCli, startCli } from "./test-cli.ts";
 
@@ -248,7 +248,7 @@ describe("an interrupt, through a real signal", () => {
       // A TOML literal string, so the quoting in it is the shell's and not
       // TOML's, and `$$`/`$!` are the shell's own answer to "what are we".
       await Bun.write(
-        join(repo.root, "main", SETUP_FILE),
+        join(repo.root, "main", HOOKS_FILE),
         `[setup]\nrun = ['sleep 300 & printf "%s %s" "$$" "$!" > ${pids}; wait']\n`,
       );
 

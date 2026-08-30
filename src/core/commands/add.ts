@@ -1,3 +1,11 @@
+import {
+  failureFor,
+  type Hooks,
+  repoHooks,
+  runSetup,
+  type SetupResult,
+  trustAndRun,
+} from "../../hooks/index.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, localBranchExists, pushUpstream, remoteBranchExists } from "../branches.ts";
 import { GroveError } from "../errors.ts";
@@ -5,14 +13,6 @@ import { pathExists } from "../fs.ts";
 import { gitSucceeds, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { contains, worktreePathFor } from "../layout.ts";
-import {
-  failureFor,
-  repoSetupPlan,
-  runSetup,
-  type SetupPlan,
-  type SetupResult,
-  trustAndRun,
-} from "../setup.ts";
 import { type TakeResult, takeChanges } from "../take.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
@@ -125,7 +125,7 @@ export async function addWorktree(
   // afterwards would mean a directory on disk that the same command refused.
   // The file is the trunk's, which is why it can be read before this branch has
   // a worktree at all.
-  const plan = options.setup ? await repoSetupPlan(repo) : undefined;
+  const hooks = options.setup ? await repoHooks(repo) : undefined;
 
   // `origin` rather than `source`: where the *branch* comes from, which in a
   // command that can also be moving another worktree's changes across is not
@@ -152,12 +152,12 @@ export async function addWorktree(
   // the filling-in happens on top of them.
   const took = source === undefined ? undefined : await take(source, path, dir, reporter);
 
-  const setup = plan
+  const setup = hooks
     ? await setUpWorktree(
         repo,
         path,
         options.branch,
-        options.trust ? undefined : plan,
+        options.trust ? undefined : hooks,
         reporter,
         options.open,
       )
@@ -238,16 +238,16 @@ async function setUpWorktree(
   repo: RepoPaths,
   path: string,
   branch: string,
-  /** Absent when `--trust` was passed: the plan is re-read after it is recorded. */
-  plan: SetupPlan | undefined,
+  /** Absent when `--trust` was passed: the file is re-read after it is recorded. */
+  hooks: Hooks | undefined,
   reporter: Reporter,
   open?: boolean,
 ): Promise<SetupResult> {
   const target = { path, branch };
   const result =
-    plan === undefined
+    hooks === undefined
       ? await trustAndRun(repo, target, reporter, { open })
-      : await runSetup(repo, target, { plan, open }, reporter);
+      : await runSetup(repo, target, { hooks, open }, reporter);
   const failure = failureFor(result);
 
   if (failure) {

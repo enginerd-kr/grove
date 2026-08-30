@@ -1,0 +1,132 @@
+import { openShell } from "../core/git.ts";
+import type { RepoPaths } from "../core/layout.ts";
+import type { Reporter } from "../report/reporter.ts";
+import { commandEnvFor, type HookFailure, type HookTarget } from "./command.ts";
+import { HOOKS_FILE, type Hooks, openHere, openTargetFor, wantsOpen } from "./config.ts";
+
+/**
+ * `open` — the hook whose subject is a person rather than a worktree.
+ *
+ * Every other hook leaves something on disk that a script can go and read.
+ * This one puts a window in front of whoever is sitting there, and that one
+ * difference is where all of its rules come from.
+ *
+ * It cannot be a `run` line. Those go through `runShell`, which is `detached`
+ * so that a cancelled `bun install && bun run build` takes its whole tree down
+ * with it — and a process group is exactly what an editor must not be in,
+ * because the next Ctrl-C would close it. They are also awaited, which would
+ * leave `grove add` sitting behind an editor nobody has quit yet, and their
+ * output is piped somewhere nobody reads. `openShell` in `../core/git.ts` does
+ * the opposite of all three: started, watched only for the moment a mistake
+ * would show, and then let go of.
+ *
+ * Letting go is the price, and it is paid in what can be reported. No stream is
+ * kept — a pipe nobody drains stops the writer, and one somebody drains holds
+ * `grove` here for an editor's whole lifetime — so a line's own words are lost.
+ * What survives is the exit code, if there is one inside the moment `openShell`
+ * watches for: `open -a "Visual Stuio Code" .` answers in about a sixth of a
+ * second, and a misspelled editor that opened nothing and said nothing was the
+ * worst thing this key could do. Past that moment a line is one that means to
+ * keep running, which is what opening something looks like.
+ */
+
+/**
+ * Starts `[setup] open`, once there is a worktree worth opening.
+ *
+ * Four things have to be true first, and each is a different kind of no.
+ *
+ * Trust is the same record the commands answer to — it is a shell line out of a
+ * file that arrived with a pull, and `open = "curl … | sh"` reaches this
+ * machine by exactly the road `run` does. Being let go of afterwards makes it
+ * worse than `run`, not better, so it waits for the same `--trust`.
+ *
+ * A failed command stops it, even though nothing here depends on that command
+ * having worked. `run` is what makes the checkout runnable and `open` is what
+ * you do with it once it is; opening an editor onto a half-finished install
+ * puts the failure two screens up in a scrollback nobody is looking at any
+ * more, and the warning `add` prints is easier to read where it was printed.
+ *
+ * No terminal stops it too, and that one is an exception to a rule this tool
+ * otherwise keeps — `add` behaves the same in a pipe as under a terminal
+ * precisely so it is one tool and not two. What makes it affordable is the
+ * paragraph at the top of this file: in `grove add | tee` or on CI there is
+ * nobody sitting there for a window to be put in front of. So it is skipped,
+ * and it says so rather than leaving the silence to be worked out.
+ *
+ * And a platform the file did not write a line for opens nothing, which is the
+ * only one of the four that is not really a refusal.
+ */
+export async function openWhatItAsksFor(
+  repo: RepoPaths,
+  target: HookTarget,
+  hooks: Hooks,
+  state: {
+    readonly untrusted: boolean;
+    readonly failed?: HookFailure;
+    /**
+     * Whether there is a terminal to open into — `SetupOptions.open`, resolved.
+     *
+     * A boolean and not the options the caller was handed: this hook has no
+     * business in `[setup]`'s shape, and taking the whole record would make the
+     * two modules point at each other over one field.
+     */
+    readonly allowed: boolean;
+  },
+  reporter: Reporter,
+): Promise<string | undefined> {
+  const { untrusted, failed, allowed } = state;
+  const command = openHere(hooks);
+
+  if (command === "") {
+    // Said once rather than left as silence: a file that opens an editor for
+    // the rest of the team and not for you is a thing to find out from the run
+    // that did not open one, not from asking why afterwards.
+    if (wantsOpen(hooks.open) && !untrusted) {
+      reporter.info(`nothing in ${HOOKS_FILE} opens on ${openTargetFor(process.platform)}`);
+    }
+
+    return undefined;
+  }
+
+  if (untrusted) return undefined;
+
+  if (failed !== undefined) {
+    reporter.info(`did not open: ${failed.command} failed`);
+
+    return undefined;
+  }
+
+  if (!allowed) {
+    reporter.info("did not open: this is not a terminal");
+
+    return undefined;
+  }
+
+  reporter.info(`opening ${command}`);
+
+  try {
+    const code = await openShell(command, {
+      cwd: target.path,
+      env: commandEnvFor(repo, target, hooks.env),
+    });
+
+    // `undefined` is the line still running, which is what opening something
+    // looks like. A number means it was over before grove stopped watching, and
+    // a non-zero one is the misspelled application this key used to swallow.
+    if (code !== undefined && code !== 0) {
+      reporter.warn(`could not open: ${command} exited ${code}`);
+
+      return undefined;
+    }
+  } catch (error) {
+    // The spawn itself, which is a worktree that stopped existing between being
+    // made and being opened. Warned and not thrown, because the worktree is
+    // what `add` was asked for and an editor that would not start is no reason
+    // to report that it is missing.
+    reporter.warn(`could not open: ${error instanceof Error ? error.message : String(error)}`);
+
+    return undefined;
+  }
+
+  return command;
+}

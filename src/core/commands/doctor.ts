@@ -1,11 +1,11 @@
 import { lstat, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { version } from "../../../package.json";
+import { HOOKS_FILE, type Hooks, repoHooks } from "../../hooks/index.ts";
 import { GroveError } from "../errors.ts";
 import { childDirectories, pathExists } from "../fs.ts";
 import { gitSucceeds, runGit } from "../git.ts";
 import { BARE_DIR, type RepoKind, type RepoPaths } from "../layout.ts";
-import { repoSetupPlan, SETUP_FILE, type SetupPlan } from "../setup.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
 /**
@@ -358,24 +358,24 @@ async function checkOrphans({ repo, worktrees }: Context): Promise<Finding | und
  * checkout is the project's own, and not a thing to report.
  */
 async function checkLinks({ repo, worktrees }: Context): Promise<Finding | undefined> {
-  let plan: SetupPlan;
+  let hooks: Hooks;
   try {
-    plan = await repoSetupPlan(repo);
+    hooks = await repoHooks(repo);
   } catch (error) {
     return {
       check: "setup-file",
       severity: "error",
-      summary: `${SETUP_FILE} cannot be read, so every new worktree fails before it is filled in`,
+      summary: `${HOOKS_FILE} cannot be read, so every new worktree fails before it is filled in`,
       details: [error instanceof Error ? error.message : String(error)],
-      fix: [`fix ${SETUP_FILE} in the default branch's worktree`],
+      fix: [`fix ${HOOKS_FILE} in the default branch's worktree`],
     };
   }
 
-  if (plan.link.length === 0) return undefined;
+  if (hooks.link.length === 0) return undefined;
 
   const broken: string[] = [];
   for (const record of worktrees) {
-    for (const path of plan.link) {
+    for (const path of hooks.link) {
       const link = join(record.path, path);
       const info = await lstat(link).catch(() => undefined);
 
@@ -395,7 +395,7 @@ async function checkLinks({ repo, worktrees }: Context): Promise<Finding | undef
     check: "broken-link",
     severity: "warning",
     summary:
-      `${count(broken.length, "link")} from ${SETUP_FILE}` +
+      `${count(broken.length, "link")} from ${HOOKS_FILE}` +
       ` ${broken.length === 1 ? "points" : "point"} at nothing`,
     details: broken,
     fix: [

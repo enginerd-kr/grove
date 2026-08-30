@@ -13,8 +13,8 @@ import {
 import { GroveError } from "../../core/errors.ts";
 import { type Commit, recentCommits } from "../../core/history.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
-import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../core/setup.ts";
 import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
+import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../hooks/index.ts";
 import type { Reporter } from "../../report/reporter.ts";
 
 /**
@@ -323,7 +323,7 @@ export function createWorktreeService(
       // `setup: true, trust: false` exactly like `add` above, and the app runs
       // the commands afterwards through `runPendingCommands`. Worth being
       // explicit about why that is safe here: a pull request can edit
-      // `.grove.toml`, but `repoSetupPlan` reads the *trunk's* copy, never the
+      // `.grove.toml`, but `repoHooks` reads the *trunk's* copy, never the
       // new worktree's — so what runs is the maintainer's file in both cases,
       // and this key opens no door `a` did not already open.
       const result = await checkoutPullRequest(

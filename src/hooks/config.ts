@@ -1,9 +1,12 @@
 import { join } from "node:path";
-import { GroveError } from "./errors.ts";
-import { runGit, runGitOrThrow } from "./git.ts";
+import { defaultBranch } from "../core/branches.ts";
+import { GroveError } from "../core/errors.ts";
+import { BARE_DIR, type RepoPaths } from "../core/layout.ts";
+import { listWorktrees } from "../core/worktrees.ts";
+import { fingerprintOf } from "./trust.ts";
 
 /**
- * `.grove.toml` — how a repository says what its worktrees need.
+ * `.grove.toml` — how a repository says what it wants done around a worktree.
  *
  * It is a tracked file in the worktree, and that is the point. "This project
  * copies `.env` and runs `bun install`" is a property of the project and not of
@@ -21,12 +24,16 @@ import { runGit, runGitOrThrow } from "./git.ts";
  * open = "code ."
  * ```
  *
+ * This module is the file and nothing else: what it says, where it is read
+ * from, and what each key is refused for. Doing what it says belongs to the
+ * hooks beside it — see `index.ts` for why they are their own package.
+ *
  * The cost of travelling is `run`: a `git pull` can now hand you a command that
  * executes on your machine. So `copy` and `link` apply on sight — they move
  * files that are already on your disk, inside a directory you asked to be
- * created — and `run` does not, until `--trust` says so. See `isTrusted` and
- * `trust` below: the record is a fingerprint of these exact contents, kept in
- * the bare repository's config, so an edit withdraws it.
+ * created — and `run` does not, until `--trust` says so. See `trust.ts`: the
+ * record is a fingerprint of these exact contents, kept in the bare
+ * repository's config, so an edit withdraws it.
  *
  * `copy` takes a directory as readily as a file — `certs` above. A file already
  * in the worktree is overwritten with the trunk's copy, and a directory the
@@ -34,17 +41,11 @@ import { runGit, runGitOrThrow } from "./git.ts";
  * both have one. See `copyEntry` and `takeOne` in `setup.ts` for why `link`
  * does not follow that rule.
  *
- * `open` is the last line of the file's story and the one thing here that is not
- * about the worktree: `run` makes a checkout runnable, and `open` is the editor
- * you were going to start anyway. It is a separate key because it cannot be a
- * `run` line. Those go through `runShell`, which is `detached` so that a
- * cancelled `bun install && bun run build` takes its whole tree down with it —
- * and a process group is exactly what an editor must not be in, because the
- * next Ctrl-C would close it. They are also awaited, which would leave `grove
- * add` sitting behind an editor nobody has quit yet, and their output is piped
- * somewhere nobody reads. `openShell` in `git.ts` does the opposite of all
- * three: started, watched only for the moment a mistake would show, and then
- * let go of.
+ * `open` is the last line of the file's story and the one hook here whose
+ * subject is a person: `run` makes a checkout runnable, and `open` is the
+ * editor you were going to start anyway. It is a separate key because it cannot
+ * be a `run` line — see `open.ts`, which explains what letting go of a process
+ * costs and why it is worth paying.
  *
  * It is a command line like `run`'s, and it runs in the worktree, so `.` is the
  * worktree. What it is not is a line that works everywhere: `open -a` is macOS
@@ -67,38 +68,25 @@ import { runGit, runGitOrThrow } from "./git.ts";
  * "and this too" as `&&` — and because a list is what somebody reaches for when
  * what they wanted was the table above, which is where the refusal points them.
  *
- * Letting go is the price, and it is paid in what can be reported. No stream is
- * kept — a pipe nobody drains stops the writer, and one somebody drains holds
- * `grove` here for an editor's whole lifetime — so a line's own words are lost.
- * What survives is the exit code, if there is one inside the moment `openShell`
- * watches for: `open -a "Visual Stuio Code" .` answers in about a sixth of a
- * second, and a misspelled editor that opened nothing and said nothing was the
- * worst thing this key could do. Past that moment a line is one that means to
- * keep running, which is what opening something looks like.
- *
  * TOML because Bun parses it with no dependency, and because a file people are
  * expected to read and review deserves comments. It is read out of the trunk's
- * worktree and not out of the one being set up — see `readSetupPlan` — which is
+ * worktree and not out of the one being set up — see `readHooks` — which is
  * also what makes `env` usable: the committed file carries placeholders, and the
  * real values are an uncommitted edit to the one copy every worktree reads.
  */
 
-export const SETUP_FILE = ".grove.toml";
+export const HOOKS_FILE = ".grove.toml";
 
 /** One `NAME=value` from `env`, split where the first `=` is. */
-export type SetupEnv = {
+export type HookEnv = {
   readonly name: string;
   readonly value: string;
 };
 
 /**
- * `[teardown]` — what to run in a worktree just before it is removed.
+ * `[teardown]` — the commands to run in a worktree just before it is removed.
  *
- * The other half of `[setup]`, and the half that was missing. A `run` line that
- * starts a container, a database, or a tunnel leaves that thing running after
- * the directory it was started in is gone, and nothing in the repository ever
- * said how to stop it — so it was stopped by hand, by whoever remembered, or
- * not at all. This is where the project says it once.
+ * See `teardown.ts` for why the section exists at all.
  *
  * No `copy` and no `link`: there is nothing to take from a worktree on the way
  * out that could not have been committed. Only commands, and the environment
@@ -106,8 +94,8 @@ export type SetupEnv = {
  * installs dependencies and the one that tears down a stack are rarely the
  * same, and sharing them would put both in reach of both.
  */
-export type TeardownPlan = {
-  readonly env: readonly SetupEnv[];
+export type TeardownHook = {
+  readonly env: readonly HookEnv[];
   readonly commands: readonly string[];
 };
 
@@ -115,7 +103,7 @@ export type TeardownPlan = {
 export type OpenTarget = "macos" | "linux" | "windows";
 
 /** One command line per platform, run in the worktree. `""` means "not here". */
-export type OpenPlan = Readonly<Record<OpenTarget, string>>;
+export type OpenHook = Readonly<Record<OpenTarget, string>>;
 
 /**
  * Which key a running platform answers to.
@@ -134,19 +122,31 @@ export function openTargetFor(platform: NodeJS.Platform): OpenTarget {
   return "linux";
 }
 
-export const NO_OPEN: OpenPlan = { macos: "", linux: "", windows: "" };
+export const NO_OPEN: OpenHook = { macos: "", linux: "", windows: "" };
 
 /** Whether the file asked to open anything at all, on any platform. */
-export function wantsOpen(open: OpenPlan): boolean {
+export function wantsOpen(open: OpenHook): boolean {
   return open.macos !== "" || open.linux !== "" || open.windows !== "";
 }
 
-export type SetupPlan = {
+/**
+ * The `open` line for the platform this is running on, or `""`.
+ *
+ * The platform is read once, here, so that every question about `open` — what
+ * is pending, what the trust gate counts, what actually starts — is answering
+ * about the same line. A file that names only `macos` gives a Linux machine
+ * nothing, which is "nothing to open" and not an error.
+ */
+export function openHere(hooks: Hooks, platform: NodeJS.Platform = process.platform): string {
+  return hooks.open[openTargetFor(platform)];
+}
+
+export type Hooks = {
   /** Paths taken from the trunk, each a file or a whole directory. */
   readonly copy: readonly string[];
   readonly link: readonly string[];
   /** Given to every command, over the environment grove was started in. */
-  readonly env: readonly SetupEnv[];
+  readonly env: readonly HookEnv[];
   /** Command lines, run in the order the file lists them. */
   readonly commands: readonly string[];
   /**
@@ -167,42 +167,42 @@ export type SetupPlan = {
    * awaited against watched-briefly-then-released, killable against not, part
    * of what `add` reports against beside it.
    */
-  readonly open: OpenPlan;
+  readonly open: OpenHook;
   /**
-   * `[teardown]`, carried on the same plan.
+   * `[teardown]`, carried on the same record.
    *
    * One read of one file, because it is one file: `trust` records the whole of
    * its contents and both sections answer to that record, so splitting them
    * into two plans would mean two reads that could disagree about which
    * version of the file they were reading.
    */
-  readonly teardown: TeardownPlan;
+  readonly teardown: TeardownHook;
   /** Absent when the worktree has no `.grove.toml`. */
   readonly path?: string;
   /** The file's contents, hashed — what `trust` records and compares. */
   readonly fingerprint?: string;
 };
 
-export const EMPTY_TEARDOWN: TeardownPlan = { env: [], commands: [] };
+export const NO_TEARDOWN: TeardownHook = { env: [], commands: [] };
 
-export const EMPTY_PLAN: SetupPlan = {
+export const NO_HOOKS: Hooks = {
   copy: [],
   link: [],
   env: [],
   commands: [],
   open: NO_OPEN,
-  teardown: EMPTY_TEARDOWN,
+  teardown: NO_TEARDOWN,
 };
 
 /** How much of the file asked for something. Zero means there is nothing to do. */
-export function plannedCount(plan: SetupPlan): number {
+export function plannedCount(hooks: Hooks): number {
   // `open` counts once however many arguments or platforms spell it: it is one
   // application, and the rest is how to start it rather than more work. Counted
   // even when this platform is not one it named, because the question here is
   // whether the file asked for anything — "nothing to do" and "no file at all"
   // are different answers and this is what tells them apart.
   return (
-    plan.copy.length + plan.link.length + plan.commands.length + (wantsOpen(plan.open) ? 1 : 0)
+    hooks.copy.length + hooks.link.length + hooks.commands.length + (wantsOpen(hooks.open) ? 1 : 0)
   );
 }
 
@@ -232,7 +232,7 @@ function stringsAt(
   if (typeof value === "string") return [value];
 
   if (!Array.isArray(value) || value.some((each) => typeof each !== "string")) {
-    throw new GroveError("usage", `${SETUP_FILE}: ${section}.${key} must be a list of strings`, {
+    throw new GroveError("usage", `${HOOKS_FILE}: ${section}.${key} must be a list of strings`, {
       hint: `for example: ${key} = [${JSON.stringify(EXAMPLES[key] ?? ".env")}]`,
     });
   }
@@ -255,7 +255,7 @@ function stringsAt(
  * the team is on, and inventing a name for a platform they left out would be
  * guessing at an application that is not installed.
  */
-function openAt(setup: Record<string, unknown>): OpenPlan {
+function openAt(setup: Record<string, unknown>): OpenHook {
   const value = setup.open;
   if (value === undefined) return NO_OPEN;
 
@@ -266,7 +266,7 @@ function openAt(setup: Record<string, unknown>): OpenPlan {
 
       throw new GroveError(
         "usage",
-        `${SETUP_FILE}: [setup.open] has no key named ${JSON.stringify(key)}`,
+        `${HOOKS_FILE}: [setup.open] has no key named ${JSON.stringify(key)}`,
         { hint: `the keys are ${[...OPEN_TARGETS].join(", ")}` },
       );
     }
@@ -300,7 +300,7 @@ function commandAt(section: string, table: Record<string, unknown>, key: string)
   if (value === undefined) return "";
 
   if (typeof value !== "string") {
-    throw new GroveError("usage", `${SETUP_FILE}: ${section}.${key} must be one command line`, {
+    throw new GroveError("usage", `${HOOKS_FILE}: ${section}.${key} must be one command line`, {
       hint:
         `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)} — ` +
         "and [setup.open] to say it differently per platform",
@@ -308,7 +308,7 @@ function commandAt(section: string, table: Record<string, unknown>, key: string)
   }
 
   if (value.trim().length === 0) {
-    throw new GroveError("usage", `${SETUP_FILE}: ${section}.${key} has nothing to open`, {
+    throw new GroveError("usage", `${HOOKS_FILE}: ${section}.${key} has nothing to open`, {
       hint: `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)}`,
     });
   }
@@ -328,7 +328,7 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 function checkedEnvName(section: string, name: string, wrote: string): string {
   if (ENV_NAME.test(name)) return name;
 
-  throw new GroveError("usage", `${SETUP_FILE}: ${section}.env has no name in ${wrote}`, {
+  throw new GroveError("usage", `${HOOKS_FILE}: ${section}.env has no name in ${wrote}`, {
     hint: `a name, then its value: ${EXAMPLES.env} — or UV_INDEX_USERNAME = "PLACE_HOLDER"`,
   });
 }
@@ -346,7 +346,7 @@ function scalar(section: string, value: unknown, name: string): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
 
-  throw new GroveError("usage", `${SETUP_FILE}: ${section}.env.${name} must be a string`, {
+  throw new GroveError("usage", `${HOOKS_FILE}: ${section}.env.${name} must be a string`, {
     hint: `for example: ${name} = "PLACE_HOLDER"`,
   });
 }
@@ -384,7 +384,7 @@ function scalar(section: string, value: unknown, name: string): string {
  * pushed. For a real secret, keep pointing the tool at a credential store; this
  * is for the settings that merely have to *be there*.
  */
-function envAt(section: string, table: Record<string, unknown>): readonly SetupEnv[] {
+function envAt(section: string, table: Record<string, unknown>): readonly HookEnv[] {
   const value = table.env;
 
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
@@ -411,12 +411,12 @@ function envAt(section: string, table: Record<string, unknown>): readonly SetupE
  * that quietly does nothing is the exact failure this file exists to prevent —
  * somebody would find out weeks later, from a worktree that would not build.
  */
-export function parseSetupFile(text: string): SetupPlan {
+export function parseHooks(text: string): Hooks {
   let parsed: unknown;
   try {
     parsed = Bun.TOML.parse(text);
   } catch (error) {
-    throw new GroveError("usage", `${SETUP_FILE} is not valid TOML`, {
+    throw new GroveError("usage", `${HOOKS_FILE} is not valid TOML`, {
       details: [error instanceof Error ? error.message : String(error)],
       cause: error,
     });
@@ -460,7 +460,7 @@ function tableAt(
   if (section === undefined) return {};
 
   if (typeof section !== "object" || section === null || Array.isArray(section)) {
-    throw new GroveError("usage", `${SETUP_FILE}: [${name}] must be a table`);
+    throw new GroveError("usage", `${HOOKS_FILE}: [${name}] must be a table`);
   }
 
   const table = section as Record<string, unknown>;
@@ -469,7 +469,7 @@ function tableAt(
 
     throw new GroveError(
       "usage",
-      `${SETUP_FILE}: [${name}] has no key named ${JSON.stringify(key)}`,
+      `${HOOKS_FILE}: [${name}] has no key named ${JSON.stringify(key)}`,
       { hint: `the keys are ${[...known].join(", ")}` },
     );
   }
@@ -483,46 +483,123 @@ function tableAt(
  * A worktree without one is not an error and not a warning: most repositories
  * need none of this, and the ones that do should be the ones that say so.
  */
-export async function readSetupFile(worktree: string): Promise<SetupPlan> {
-  const path = join(worktree, SETUP_FILE);
+export async function readHooksFile(worktree: string): Promise<Hooks> {
+  const path = join(worktree, HOOKS_FILE);
   const file = Bun.file(path);
-  if (!(await file.exists())) return EMPTY_PLAN;
+  if (!(await file.exists())) return NO_HOOKS;
 
   const text = await file.text();
-  const plan = parseSetupFile(text);
+  const hooks = parseHooks(text);
 
-  return { ...plan, path, fingerprint: fingerprintOf(text) };
+  return { ...hooks, path, fingerprint: fingerprintOf(text) };
 }
 
 /**
- * What `trust` records: the file's contents, not its name or its date.
+ * A configured path, checked rather than rewritten.
  *
- * Contents, so that editing the file withdraws the trust it was given. That is
- * the whole mechanism — a `git pull` that changes the commands changes this,
- * and the commands stop running until somebody has read them again.
+ * Checked for a sharp reason: these paths are resolved twice, once against the
+ * worktree being filled and once against the one being read from, so a `..`
+ * that escaped would let a line in a config file copy `~/.ssh` into a directory
+ * somebody is about to commit from.
  */
-export function fingerprintOf(text: string): string {
-  return Bun.SHA256.hash(text, "hex");
-}
+export function checkedPath(key: "copy" | "link" | string, value: string): string {
+  const segments = value.split(/[/\\]/).filter((segment) => segment.length > 0 && segment !== ".");
+  const bad =
+    value.startsWith("/") ||
+    value.startsWith("\\") ||
+    /^[A-Za-z]:/.test(value) ||
+    segments.length === 0 ||
+    segments.some((segment) => segment === ".." || segment === ".git" || segment === BARE_DIR);
 
-const TRUST_KEY = "grove.trusted";
+  if (bad) {
+    throw new GroveError("usage", `${key}: ${JSON.stringify(value)} is not a usable path`, {
+      hint: "a relative path inside the worktree, such as `.env` or `config/local.json`",
+    });
+  }
+
+  return segments.join("/");
+}
 
 /**
- * Whether these exact contents have been trusted on this machine.
+ * Reads the repository's `.grove.toml`, with its paths checked.
  *
- * The one thing here that stays in git config, and it has to: a tracked file
- * cannot vouch for itself, so the record of having read it belongs somewhere
- * the repository cannot write to. `.bare/config` is local, per-repository, and
- * never pushed.
+ * **The trunk's copy, not the worktree being set up.** Both were tenable and
+ * this one is uniform: a branch cut last month has no file in it, and reading
+ * the local copy would mean the repository was configured for the worktrees
+ * made after Tuesday and not the ones made before. It is also where copies come
+ * from already, so there is one rule here rather than two.
+ *
+ * Paths are checked here rather than at the point of use, so a file with an
+ * unusable path in it is refused as a whole: a run that copied two of three
+ * paths and then explained the third would leave a worktree nobody can reason
+ * about.
  */
-export async function isTrusted(bare: string, fingerprint: string): Promise<boolean> {
-  const result = await runGit(["config", "--get-all", "--null", TRUST_KEY], { cwd: bare });
-  if (result.code !== 0) return false;
+export async function readHooks(worktree: string): Promise<Hooks> {
+  const hooks = await readHooksFile(worktree);
 
-  return result.stdout.split("\0").some((value) => value.trim() === fingerprint);
+  return {
+    ...hooks,
+    copy: hooks.copy.map((value) => checkedPath("copy", value)),
+    link: hooks.link.map((value) => checkedPath("link", value)),
+  };
 }
 
-/** Records these contents as read and agreed to. Replaces any earlier answer. */
-export async function trust(bare: string, fingerprint: string): Promise<void> {
-  await runGitOrThrow(["config", "--replace-all", TRUST_KEY, fingerprint], { cwd: bare });
+/**
+ * Where copies and links come from: the default branch's worktree.
+ *
+ * One rule, and a predictable one. "Whichever worktree you happen to be
+ * standing in" would mean the `.env` you get depends on where your shell was,
+ * and the trunk is the checkout that always exists and that nobody is
+ * experimenting in.
+ *
+ * `self` is the trunk setting itself up, which is not a failure and not worth a
+ * word — there is no third worktree to prefer, and the commands still run.
+ */
+export type Source =
+  | { readonly kind: "at"; readonly path: string }
+  | { readonly kind: "self" }
+  | { readonly kind: "none"; readonly trunk?: string };
+
+/** The default branch's worktree, which is what everything here reads from. */
+async function trunkWorktree(repo: RepoPaths): Promise<string | undefined> {
+  const source = await sourceWorktree(repo, "");
+
+  return source.kind === "at" ? source.path : undefined;
+}
+
+/**
+ * The repository's hooks: the trunk's file, or the worktree's own as a fallback.
+ *
+ * The fallback is for the one repository that has no trunk worktree — somebody
+ * removed it — where reading nothing at all would be a worse answer than
+ * reading what is in front of us.
+ */
+export async function repoHooks(repo: RepoPaths, fallback?: string): Promise<Hooks> {
+  const trunk = (await trunkWorktree(repo)) ?? fallback;
+
+  return trunk === undefined ? NO_HOOKS : readHooks(trunk);
+}
+
+export async function sourceWorktree(
+  repo: RepoPaths,
+  /** The worktree being filled, so the trunk can recognise itself in it. */
+  worktree: string,
+): Promise<Source> {
+  let trunk: string;
+  try {
+    trunk = await defaultBranch(repo.gitDir);
+  } catch {
+    // A repository whose remote advertises no HEAD. Everything else here still
+    // works, and failing the `add` this is running inside of would be a poor
+    // trade for a `.env` we could not find a source for anyway.
+    return { kind: "none" };
+  }
+
+  const worktrees = await listWorktrees(repo.gitDir);
+  const record = worktrees.find((entry) => entry.branch === trunk);
+
+  if (!record) return { kind: "none", trunk };
+  if (record.path === worktree) return { kind: "self" };
+
+  return { kind: "at", path: record.path };
 }

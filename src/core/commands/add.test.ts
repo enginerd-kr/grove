@@ -319,7 +319,7 @@ run = ["sh -c 'echo ok > ran.txt'"]
   }
 
   /**
-   * The on-disk half of `checkedSetupPath`, from the outside.
+   * The on-disk half of `checkedPath`, from the outside.
    *
    * `setup.test.ts` proves the refusal itself; what only `add` can show is what
    * it costs — the worktree is created before `.grove.toml` is read, so a
