@@ -63,6 +63,7 @@ Running `grove` with no arguments opens the screen above.
 
 - **Move**: `↑`/`↓` or `j`/`k`, `←`/`→` or `h`/`l` to fold a directory, `q` to quit.
 - **Act**: `a` adds, `r` removes — a folder takes everything under it — `s` syncs, `S` syncs all, `R` re-reads the list. Removals confirm, and say what they would discard.
+- **Discard**: `x` throws away what a dirty worktree has changed — `reset --hard` and `clean -fd`, so untracked files go too — leaving the directory and the branch. It is offered only where there is something to take, it counts the tracked changes and the untracked files apart before you answer, and there is no undo.
 - **Copy**: `Enter` puts the selected path on the clipboard, ready for another tab or an editor.
 - **Look**: the selected worktree's last few commits are drawn under the list (`L` puts the panel away), and its uncommitted files beside it, as the tree they sit in.
 - **Review**: `p` lists the repository's open pull requests and checks the one you pick out at `pr/<number>`. Needs [`gh`](https://cli.github.com), the only tool besides git that `grove` ever runs.

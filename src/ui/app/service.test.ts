@@ -333,6 +333,38 @@ describe("createWorktreeService", () => {
   );
 
   test(
+    "reset takes the tracked changes and the untracked files, and says what went",
+    async () => {
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
+
+        await service.add("feat/login");
+        const dir = join(root, "feat", "login");
+
+        // One of each kind, because the answer counts them apart: a tracked
+        // file the reset rewinds, and one git has never seen, which survives
+        // `reset --hard` and only `clean -fd` takes.
+        await Bun.write(join(dir, "README.md"), "changed\n");
+        await Bun.write(join(dir, "scratch.txt"), "half-finished\n");
+
+        expect(await service.reset("feat/login")).toBe(
+          "discarded 1 change and 1 untracked file in feat/login",
+        );
+        expect(await pathExists(join(dir, "scratch.txt"))).toBe(false);
+        // The worktree itself stays — this is not a removal wearing another key.
+        expect(await pathExists(dir)).toBe(true);
+
+        // Nothing left to take, said rather than reported as a discard of
+        // nothing: the screen draws this line where it drew the last one.
+        expect(await service.reset("feat/login")).toBe("feat/login had nothing to discard");
+      });
+    },
+    SLOW,
+  );
+
+  test(
     "sync fast-forwards a worktree the origin moved ahead of, one target or all of them",
     async () => {
       await withTempRepo(async (temp) => {

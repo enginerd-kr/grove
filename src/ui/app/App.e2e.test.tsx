@@ -327,6 +327,51 @@ describeUi("the app", () => {
   );
 
   test(
+    "x discards a worktree's changes through the real git, and leaves the worktree",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const worktree = join(root, "feat", "login");
+        const scratch = join(worktree, "scratch.txt");
+        const ui = await open(root);
+
+        try {
+          await press(ui, keys.down, (frame) => selected(frame) === "feat/");
+          await press(ui, keys.down, (frame) => selected(frame) === "login");
+
+          const asked = (frame: string) =>
+            frame.includes("discard 1 untracked file in feat/login? there is no undo");
+
+          await press(ui, "x", asked);
+          await press(ui, "n", (frame) => !asked(frame) && frame.includes("q quit"));
+          expect(await pathExists(scratch)).toBe(true);
+
+          await press(ui, "x", asked);
+          await press(ui, "y", (frame) => frame.includes("discarded 1 untracked file"));
+
+          // `git clean -fd` really ran: the file git had never been told about
+          // is what a `reset --hard` on its own would have left behind.
+          expect(await pathExists(scratch)).toBe(false);
+          // And the directory it was in is still there — this is the key that
+          // takes the changes, not the one that takes the worktree.
+          expect(await pathExists(worktree)).toBe(true);
+
+          // The dot follows, on the list's own schedule: a worktree still drawn
+          // dirty after you discarded its changes is the confusion the dot was
+          // added to prevent.
+          const cleanRow = (frame: string) =>
+            frame.split("\n").some((line) => /\blogin\b/.test(line) && line.includes("○"));
+
+          await ui.waitForFrame(cleanRow, WAIT);
+        } finally {
+          ui.kill();
+        }
+      });
+    },
+    SLOW,
+  );
+
+  test(
     "a opens the branch-name prompt, which takes typed characters and backspace",
     async () => {
       await withTempRepo(async (repo) => {

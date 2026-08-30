@@ -107,17 +107,23 @@ export type LayoutMode =
 /** Which of them it is, which is all the key bar needs to know. */
 export type ModeKind = LayoutMode["kind"];
 
+/**
+ * Which destructive key a confirmation is standing in front of.
+ *
+ * The same shape as the screen's own `Pending["kind"]`, spelled again here so
+ * the arithmetic does not have to import the component it lays out.
+ */
+export type ConfirmKind = "one" | "many" | "reset";
+
 // The keys each popup answers to. A mode that takes the keyboard says so here
 // rather than in `hintsFor` below, where only the list's own hints are decided.
+// `confirm` is the exception and is not in the table: it answers to the same two
+// keys either way, but `y` is spelled for the key that opened it.
 const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
   busy: [{ keys: "ctrl+c", action: "cancel" }],
   add: [
     { keys: "enter", action: "add" },
     { keys: "esc", action: "cancel" },
-  ],
-  confirm: [
-    { keys: "y", action: "remove" },
-    { keys: "n", action: "keep" },
   ],
   pick: [
     { keys: "↑↓", action: "move" },
@@ -141,7 +147,17 @@ export function hintsFor(
   modeKind: ModeKind,
   current: TreeRow | undefined,
   logOn: boolean,
+  confirming?: ConfirmKind,
 ): readonly Hint[] {
+  // What `y` does, said in the word the question used: a prompt that asks about
+  // discarding changes and offers `y remove` is two answers to one question.
+  if (modeKind === "confirm") {
+    return [
+      { keys: "y", action: confirming === "reset" ? "discard" : "remove" },
+      { keys: "n", action: "keep" },
+    ];
+  }
+
   const popup = MODE_HINTS[modeKind];
   if (popup !== undefined) return popup;
 
@@ -156,6 +172,11 @@ export function hintsFor(
     { keys: "enter", action: "copy path" },
     { keys: "a", action: group !== undefined ? `add under ${group.label}` : "add" },
     { keys: "r", action: group !== undefined ? `remove all ${group.leaves.length}` : "remove" },
+    // `x` only where it would do something. Offering it on a clean worktree
+    // would be a menu entry whose whole effect is to say "nothing to discard".
+    ...(current?.kind === "leaf" && current.summary.dirty
+      ? [{ keys: "x", action: "discard" }]
+      : []),
     { keys: "p", action: "review" },
     ...(group === undefined ? [{ keys: "s", action: "sync" }] : []),
     { keys: "S", action: "sync all" },

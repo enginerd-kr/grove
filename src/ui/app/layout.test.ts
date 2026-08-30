@@ -355,6 +355,35 @@ describe("hintsFor", () => {
     expect(hintsFor("confirm", leaf, true).map((hint) => hint.action)).toEqual(["remove", "keep"]);
   });
 
+  test("the confirmation spells `y` for the key that opened it", () => {
+    expect(hintsFor("confirm", leaf, true, "one").map((hint) => hint.action)).toEqual([
+      "remove",
+      "keep",
+    ]);
+    expect(hintsFor("confirm", leaf, true, "many").map((hint) => hint.action)).toEqual([
+      "remove",
+      "keep",
+    ]);
+    expect(hintsFor("confirm", leaf, true, "reset").map((hint) => hint.action)).toEqual([
+      "discard",
+      "keep",
+    ]);
+  });
+
+  test("`x` is offered on a worktree with something to throw away, and nowhere else", () => {
+    const dirty = TREE.find((row) => row.kind === "leaf" && row.summary.dirty);
+    const clean = TREE.find((row) => row.kind === "leaf" && !row.summary.dirty);
+    if (dirty === undefined || clean === undefined) {
+      throw new Error("the fixture tree needs one dirty worktree and one clean one");
+    }
+
+    expect(hintsFor("list", dirty, true)).toContainEqual({ keys: "x", action: "discard" });
+    expect(hintsFor("list", clean, true).map((hint) => hint.keys)).not.toContain("x");
+    // A folder is not a row `x` acts on: it discards one worktree's changes or
+    // none at all.
+    expect(hintsFor("list", group, true).map((hint) => hint.keys)).not.toContain("x");
+  });
+
   test("a folder offers what a folder can do, and not `s`", () => {
     if (group === undefined) throw new Error("the fixture tree has no folder in it");
 

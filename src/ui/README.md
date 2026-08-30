@@ -21,7 +21,7 @@ app/PullRequests.tsx  the open pull requests, as a list to pick one out of
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths, and one worktree's changed paths, as the trees they are
-app/service.ts    what the screens are allowed to do: add, sync, remove, check out a PR
+app/service.ts    what the screens are allowed to do: add, sync, remove, discard, check out a PR
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
 e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulated screen
@@ -177,8 +177,8 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   which is exactly what holding an arrow key does. The clamp lives in the updater too, so a list
   that shrank under the cursor cannot leave it past the end.
 - **The screen holds no git knowledge.** `App` takes a `WorktreeService` — add, sync, remove,
-  check out a pull request, and the reads behind them, each answering with the line to show
-  afterwards. It is still deliberately narrow: a stash, a bisect, a force-push stays on the
+  discard a worktree's changes, check out a pull request, and the reads behind them, each
+  answering with the line to show afterwards. It is still deliberately narrow: a stash, a bisect, a force-push stays on the
   command line, where it has to be typed out on purpose rather than reached with one finger. That
   is what lets `App.test.tsx` drive every key with a stub and no repository, and it is why a
   keystroke cannot grow a capability the command line does not have.

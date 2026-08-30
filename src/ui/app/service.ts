@@ -5,6 +5,7 @@ import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
+import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import {
   type SyncOutcome,
   failureFor as syncFailureFor,
@@ -18,7 +19,8 @@ import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../h
 import type { Reporter } from "../../report/reporter.ts";
 
 /**
- * What the screen is allowed to do: make a worktree, sync one, remove one.
+ * What the screen is allowed to do: make a worktree, sync one, remove one, and
+ * throw away what one has changed.
  *
  * The app talks to this rather than to `core/commands` directly, for the same
  * reason the components take props rather than reading state: a test can hand
@@ -95,6 +97,24 @@ export type WorktreeService = {
    * refuses does not stop the rest; the answer says how many did what.
    */
   readonly removeMany: (targets: readonly string[], discardDirty?: boolean) => Promise<string>;
+  /**
+   * Everything one worktree has changed, thrown away: `git reset --hard` and
+   * `git clean -fd`.
+   *
+   * Both halves, because "discard" that leaves files behind is a label that
+   * lies — and a worktree still marked dirty after you discarded its changes is
+   * exactly the confusion the dot was added to prevent. The confirmation is
+   * where the care goes: it counts the two kinds separately, so what is about to
+   * disappear is on screen before anyone answers.
+   *
+   * `.gitignore` still protects what it protects — `clean -fd` does not touch
+   * ignored files, only ones git was never told about.
+   *
+   * `--to` is the spelling that stays on the command line. Discarding changes is
+   * one thing; discarding commits is another, and only one of them belongs on a
+   * key.
+   */
+  readonly reset: (target: string) => Promise<string>;
   /**
    * The open pull requests, for the popup to pick one from.
    *
@@ -315,6 +335,19 @@ export function createWorktreeService(
       if (refusals.length === 0) return `removed ${removed} worktree${plural}`;
 
       return `removed ${removed} worktree${plural}, ${refusals.length} refused`;
+    },
+
+    reset: async (target) => {
+      // `clean: true` always, because the key says "discard": leaving untracked
+      // files behind would answer with a worktree the list still draws a dirty
+      // dot beside, which is the one outcome this key must not produce.
+      const result = await resetWorktree(repo, cwd, { target, clean: true }, reporter);
+
+      if (result.changed === 0) return `${result.dir} had nothing to discard`;
+
+      const tracked = result.changed - result.untracked;
+
+      return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
     },
 
     pullRequests: () => listPullRequests(repo),

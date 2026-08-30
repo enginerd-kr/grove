@@ -96,6 +96,7 @@ type Calls = {
   readonly added: { branch: string; from?: string }[];
   readonly removed: { target: string; discardDirty?: boolean }[];
   readonly removedMany: { targets: readonly string[]; discardDirty?: boolean }[];
+  readonly discarded: string[];
   readonly checkedOut: number[];
   readonly synced: (string | undefined)[];
   readonly trusted: string[];
@@ -112,6 +113,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     added: [],
     removed: [],
     removedMany: [],
+    discarded: [],
     checkedOut: [],
     synced: [],
     trusted: [],
@@ -153,6 +155,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       removeMany: async (targets, discardDirty) => {
         calls.removedMany.push({ targets, discardDirty });
         return `removed ${targets.length} worktrees`;
+      },
+      reset: async (target) => {
+        calls.discarded.push(target);
+        return `discarded 2 changes in ${target}`;
       },
       // Nothing open by default: the popup is the thing being tested when it is
       // being tested, and everywhere else `p` should be a message line.
@@ -277,11 +283,11 @@ const BUSY = (frame: string) => frame.includes("ctrl+c cancel");
 
 describe("describePending", () => {
   /**
-   * The question `r` asks, in all four of its wordings.
+   * The question `r` and `x` ask, in all five of their wordings.
    *
-   * This is the app's only destructive prompt, and the colour is decided with
-   * the words rather than beside them — so both are asserted together, as the
-   * one answer the function actually gives.
+   * These are the app's only destructive prompts, and the colour is decided
+   * with the words rather than beside them — so both are asserted together, as
+   * the one answer the function actually gives.
    */
   test("one clean worktree: what goes, what stays, and amber for a risk you can undo", () => {
     expect(describePending({ kind: "one", summary: summary({ dir: "feat/login" }) })).toEqual({
@@ -298,6 +304,17 @@ describe("describePending", () => {
 
     expect(describePending({ kind: "one", summary: dirty })).toEqual({
       text: "remove feat/login and discard 3 changes and 1 untracked file? the branch stays",
+      colour: theme.danger,
+    });
+  });
+
+  test("`x` names both kinds apart, promises no undo, and is always the red question", () => {
+    // Never softened by the worktree being otherwise tidy: `x` is red whether it
+    // takes four files or one, because nothing it takes comes back.
+    const dirty = summary({ dir: "feat/login", dirty: true, changed: 4, untracked: 1 });
+
+    expect(describePending({ kind: "reset", summary: dirty })).toEqual({
+      text: "discard 3 changes and 1 untracked file in feat/login? there is no undo",
       colour: theme.danger,
     });
   });
@@ -959,6 +976,61 @@ describe("the keys", () => {
     await settled(ui, (frame) => frame.includes("removed /repo/main"));
 
     expect(calls.removed).toEqual([{ target: "/repo/main", discardDirty: false }]);
+  });
+
+  /**
+   * `x` is the one key that takes work rather than a directory, so the whole of
+   * it is the question in front of it: what goes, that nothing brings it back,
+   * and a `y` spelled for what it is about to do.
+   */
+  test("`x` asks in red before discarding, and `y` throws the changes away", async () => {
+    const { service, calls } = stub({
+      list: async () => [
+        summary({ dir: "main", isDefault: true, current: true }),
+        summary({ dir: "feat/login", dirty: true, changed: 3, untracked: 1 }),
+      ],
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+
+    ui.stdin.write("x");
+    const asked = await settled(ui, (frame) =>
+      frame.includes("discard 2 changes and 1 untracked file in feat/login? there is no undo"),
+    );
+
+    // The word on the key bar is the word in the question. `y remove` under a
+    // prompt about discarding changes would be two answers to one question.
+    expect(asked).toContain("y discard");
+
+    ui.stdin.write("y");
+    await settled(ui, (frame) => frame.includes("discarded 2 changes in /repo/feat/login"));
+
+    expect(calls.discarded).toEqual(["/repo/feat/login"]);
+    // A discard is not a removal: the worktree stays, and nothing here may
+    // reach for the key that takes the directory.
+    expect(calls.removed).toEqual([]);
+  });
+
+  /**
+   * A confirmation that would do nothing is a prompt that teaches people to
+   * answer `y` without reading it, which is the last habit this key should be
+   * building — so on a clean worktree `x` is neither offered nor heard.
+   */
+  test("`x` on a clean worktree neither asks nor appears on the key bar", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    const before = await settled(ui, IN_LIST);
+
+    expect(before).not.toContain("x discard");
+
+    await press(ui, "x");
+
+    const after = await settled(ui, IN_LIST);
+
+    expect(after).not.toContain("there is no undo");
+    expect(calls.discarded).toEqual([]);
   });
 
   /**

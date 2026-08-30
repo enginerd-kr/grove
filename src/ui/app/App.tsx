@@ -53,11 +53,13 @@ import { buildTree, firstChildOf, parentOf, type TreeRow } from "./tree.ts";
  */
 
 /**
- * What `r` is about to do that cannot be undone, held until it is confirmed.
+ * What a destructive key is about to do that cannot be undone, held until it is
+ * confirmed.
  *
- * One worktree or a folder's worth of them, asked the same `y`/`n` either way:
- * the question is the same one — is this the row you meant — and the answer
- * should not depend on how many rows are behind it.
+ * One worktree, a folder's worth of them, or one worktree's changes, asked the
+ * same `y`/`n` every way: the question is the same one — is this the row you
+ * meant — and the answer should not depend on how many rows are behind it or on
+ * remembering which key you pressed.
  */
 type Pending =
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
@@ -67,7 +69,9 @@ type Pending =
       readonly paths: readonly string[];
       /** How many of `paths` are dirty — what makes this question a red one. */
       readonly dirty: number;
-    };
+    }
+  /** `x`: the directory stays, everything uncommitted in it does not. */
+  | { readonly kind: "reset"; readonly summary: WorktreeSummary };
 
 type Mode =
   | { readonly kind: "list" }
@@ -353,14 +357,15 @@ function StateCell({
 }
 
 /**
- * The question `r` asks, and what it costs to answer `y`.
+ * The question a destructive key asks, and what it costs to answer `y`.
  *
  * Each one says what survives, since that is what the person is actually
- * weighing: the directory goes, the branch stays, and any uncommitted changes
- * go with the directory.
+ * weighing: for `r` the directory goes, the branch stays, and any uncommitted
+ * changes go with the directory — and for `x` the honest answer is nothing, so
+ * it says that rather than something softer.
  *
  * How loudly to ask comes back with the words, because it is the same question
- * asked once: which of the four wordings this is decides the colour too.
+ * asked once: which of the five wordings this is decides the colour too.
  */
 export function describePending(target: Pending): {
   readonly text: string;
@@ -381,6 +386,20 @@ export function describePending(target: Pending): {
     }
 
     return { text: `remove ${dir}? the directory goes, the branch stays`, colour: theme.warn };
+  }
+
+  // Both kinds, counted apart. `x` deletes untracked files too, and one of
+  // those may be work git has never seen a copy of — folding it into "3
+  // changes" would be the sentence someone regrets having skimmed. Always red:
+  // discarding changes for good is a risk of a different kind from a removal,
+  // which leaves the branch and its commits where they were.
+  if (target.kind === "reset") {
+    const { dir, changed, untracked } = target.summary;
+
+    return {
+      text: `discard ${describeDiscard(changed - untracked, untracked)} in ${dir}? there is no undo`,
+      colour: theme.danger,
+    };
   }
 
   const all = `remove all ${target.paths.length} under ${target.label}?`;
@@ -1001,6 +1020,12 @@ export function App({
     if (mode.kind === "confirm") {
       const target = mode.target;
       if (input === "y" || input === "Y") {
+        if (target.kind === "reset") {
+          return void perform(`discarding changes in ${target.summary.dir}`, () =>
+            service.reset(target.summary.path),
+          );
+        }
+
         // `discardDirty` carries the answer just given: the question counted
         // the uncommitted changes, so the removal may now discard them.
         return void (target.kind === "one"
@@ -1106,6 +1131,12 @@ export function App({
         },
       });
     }
+    // Only where there is something to throw away. A confirmation for a reset
+    // that would do nothing is a prompt that teaches people to answer `y`
+    // without reading, which is the last habit this key should be building.
+    if (input === "x" && selected?.dirty === true) {
+      return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
+    }
     // Not aimed at the row under the cursor, unlike every other key here: it
     // asks the forge, and what comes back is a list of its own to move through.
     if (input === "p") return void openPrs();
@@ -1125,7 +1156,13 @@ export function App({
   // things people call it.
   const trunkName = rows.find((summary) => summary.isDefault)?.branch ?? "trunk";
 
-  const hints = useMemo(() => hintsFor(mode.kind, current, logOn), [mode.kind, current, logOn]);
+  // The confirmation's `y` is spelled for the key that opened it: `discard` and
+  // `remove` are not interchangeable words on a prompt that cannot be undone.
+  const confirming = mode.kind === "confirm" ? mode.target.kind : undefined;
+  const hints = useMemo(
+    () => hintsFor(mode.kind, current, logOn, confirming),
+    [mode.kind, current, logOn, confirming],
+  );
 
   const labelled = rows.length > 0;
   // Every section's height, worked out in `layout.ts` — see `regionsFor`, which
@@ -1198,8 +1235,8 @@ export function App({
         ? "no commits on this branch yet"
         : undefined;
 
-  // The removal question and its colour, decided together because they are the
-  // same answer: see `describePending`.
+  // The destructive question and its colour, decided together because they are
+  // the same answer: see `describePending`.
   const pending = mode.kind === "confirm" ? describePending(mode.target) : undefined;
 
   return (
@@ -1304,8 +1341,8 @@ export function App({
       ) : null}
 
       {pending !== undefined ? (
-        // Red for a removal that discards uncommitted changes, amber for a
-        // clean one, because they are not the same risk: a removed clean
+        // Red for anything that discards uncommitted changes, amber for a
+        // clean removal, because they are not the same risk: a removed clean
         // worktree leaves its branch and its commits behind and `grove add`
         // brings it back, while discarded changes leave nothing at all.
         <Text color={pending.colour} wrap="truncate">
