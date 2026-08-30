@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode } from "../../cli/exit-codes.ts";
-import { runCli } from "../../ui/e2e-utils.ts";
+import { runCli } from "../../cli/test-cli.ts";
 import { isGroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { repoPaths } from "../layout.ts";
@@ -58,6 +58,7 @@ const OPEN_PR: Readonly<Record<string, unknown>> = {
 
 type PrJson = {
   readonly path: string;
+  readonly dir: string;
   readonly branch: string;
   readonly number: number;
   readonly title: string;
@@ -354,6 +355,10 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
       const parsed = JSON.parse(result.stdout) as PrJson;
 
       expect(parsed.state).toBe("MERGED");
+      // Repo-root-relative and `/`-separated, taken from the `add` underneath
+      // rather than recomputed — the same field `path`, `reset` and `rename`
+      // answer with, so this row lines up with `grove list`.
+      expect(parsed.dir).toBe("pr/8");
       expect(parsed.pushable).toBe(false);
       expect(parsed.remote).toBeUndefined();
       expect(parsed.upstream).toBeUndefined();
@@ -390,6 +395,8 @@ describe.skipIf(!POSIX)("running it again", () => {
       const parsed = JSON.parse(caught.stdout) as PrJson;
       expect(parsed.updated).toBe("fast-forwarded");
       expect(parsed.alreadyPresent).toBe(true);
+      // Still named, on the path where the worktree was already there.
+      expect(parsed.dir).toBe("pr/42");
       expect(caught.stderr).toContain("caught up with pull request 42");
       // The move went through the worktree, so the files match the branch.
       expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("two\n");

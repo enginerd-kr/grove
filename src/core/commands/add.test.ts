@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode } from "../../cli/exit-codes.ts";
-import { runCli } from "../../ui/e2e-utils.ts";
+import { runCli } from "../../cli/test-cli.ts";
 import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
 
 /**
@@ -14,6 +14,7 @@ import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts
 
 type AddJson = {
   readonly path: string;
+  readonly dir: string;
   readonly branch: string;
   readonly source: "existing" | "remote" | "new";
   readonly upstream?: string;
@@ -92,6 +93,25 @@ describe("where the branch comes from", () => {
       // Idempotent, which is what makes it safe to put in a script.
       expect(again.alreadyPresent).toBe(true);
       expect(again.path).toBe(join(root, "feat", "login"));
+    });
+  }, 60_000);
+
+  test("--json names the directory the way the list does", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await clone(repo);
+
+      // Repo-root-relative and `/`-separated whatever the platform's separator
+      // is — the spelling `path`, `reset` and `rename` already answer with, so
+      // a `--json` reader can line this row up with `grove list` without
+      // re-deriving it from the absolute path beside it.
+      const nested = await add(root, ["feat/login"]);
+      expect(nested.dir).toBe("feat/login");
+      expect(nested.path).toBe(join(root, "feat", "login"));
+
+      // The command's other way out: a worktree that was already there answers
+      // with the same field rather than dropping it.
+      const again = await add(root, ["feat/login"]);
+      expect([again.alreadyPresent, again.dir]).toEqual([true, "feat/login"]);
     });
   }, 60_000);
 

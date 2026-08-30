@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { ExitCode } from "../../cli/exit-codes.ts";
-import { runCli } from "../../ui/e2e-utils.ts";
+import { runCli } from "../../cli/test-cli.ts";
 import { seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
 
 /**

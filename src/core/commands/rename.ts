@@ -57,8 +57,15 @@ export type RenameResult = {
    * discovery.
    */
   readonly upstreamNote?: string;
-  /** Set when the shell is standing in the directory that just moved. */
-  readonly standingNote?: string;
+  /**
+   * True when the shell is standing in the directory that just moved.
+   *
+   * A fact rather than the sentence about it: `--json` is a document programs
+   * read, and the `cd` line a person needs is prose with a shell command inside
+   * it — so the CLI composes that from this, and nothing has to parse it back
+   * out of a field.
+   */
+  readonly standingInOldPath: boolean;
 };
 
 export async function renameWorktree(
@@ -117,10 +124,8 @@ export async function renameWorktree(
     // A directory that moves takes the shell inside it along by inode, so
     // nothing breaks and `pwd` quietly starts lying. Saying where it went is
     // cheaper than letting somebody work that out from a path that no longer
-    // exists.
-    standingNote: contains(target.path, cwd)
-      ? `you are still standing in the old path: cd "$(grove path ${options.to})"`
-      : undefined,
+    // exists — the saying itself happens at the CLI edge.
+    standingInOldPath: contains(target.path, cwd),
   };
 }
 

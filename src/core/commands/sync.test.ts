@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { runCli } from "../../ui/e2e-utils.ts";
+import { runCli } from "../../cli/test-cli.ts";
 import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
 
 /**

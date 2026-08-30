@@ -50,6 +50,14 @@ export type RemoveOptions = {
 
 export type RemoveResult = {
   readonly path: string;
+  /**
+   * Relative to the root, `/`-separated — the name the list uses.
+   *
+   * Already what every message this command prints says; reported beside the
+   * absolute path so a `--json` reader can line this row up with `grove list`
+   * without re-deriving it, the way `path`, `reset` and `rename` do.
+   */
+  readonly dir: string;
   readonly branch?: string;
   readonly branchDeleted: boolean;
   /** Set when the branch was kept and holds commits the remote has not seen. */
@@ -110,11 +118,12 @@ export async function removeWorktree(
   if (options.deleteBranch && target.branch !== undefined) {
     await deleteBranch(repo.gitDir, target.branch, options.force, reporter);
 
-    return { path: target.path, branch: target.branch, branchDeleted: true, teardown };
+    return { path: target.path, dir, branch: target.branch, branchDeleted: true, teardown };
   }
 
   return {
     path: target.path,
+    dir,
     branch: target.branch,
     branchDeleted: false,
     unpushedWarning: await unpushedWarning(repo.gitDir, target.branch),

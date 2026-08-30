@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { runCli } from "../ui/e2e-utils.ts";
 import { ExitCode } from "./exit-codes.ts";
 import { isCompiledMain, isShell, SHELLS } from "./shell-init.ts";
+import { runCli } from "./test-cli.ts";
 
 /**
  * The function is generated from *this* invocation — `process.execPath` and

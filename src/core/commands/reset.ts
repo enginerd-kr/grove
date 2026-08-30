@@ -84,6 +84,14 @@ export async function resetWorktree(
   // half-applied and its own HEAD; resetting through that abandons them
   // somewhere only the reflog remembers, which is not what anybody typing
   // "throw away my changes" is asking for.
+  //
+  // The trunk is deliberately not the second. `remove` and `rename` both gate
+  // it, so its absence here reads like an oversight and is not: `--to` is the
+  // gesture, and `pr.ts` hands somebody `grove reset <branch> --to …` as the
+  // way out of a pull request that moved under them. Gating it would mean a
+  // `--force` this command does not have, to guard a ref the user spelled out
+  // by hand — so `grove reset main --to origin/main~5` rewinds the trunk, and
+  // is meant to.
   if (target.rebasing === true) {
     throw new GroveError("refused", `${dir} is in the middle of a rebase`, {
       hint: `finish or abandon it first: git -C ${target.path} rebase --abort`,

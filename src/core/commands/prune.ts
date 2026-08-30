@@ -49,7 +49,16 @@ export type PruneOptions = {
 export type PruneEntry = {
   readonly path: string;
   readonly dir: string;
-  readonly branch: string;
+  /**
+   * The branch this worktree is finished with.
+   *
+   * Optional the way every other payload here spells a branch, so a consumer
+   * that checks for `undefined` reads these rows the same as `list`'s and
+   * `remove`'s. In practice it is always set — `finished` is only ever computed
+   * for a branch, so a detached worktree never reaches this list — and saying
+   * that with the type costs nothing an empty string would not have cost more.
+   */
+  readonly branch?: string;
   readonly reason: Finished;
   /** Why it is still there. Absent means it went — or would have, on a dry run. */
   readonly skipped?: string;
@@ -151,8 +160,7 @@ export async function pruneWorktrees(
     const base = {
       path: summary.path,
       dir: summary.dir,
-      // Narrowed by the filter above: `finished` is only ever set for a branch.
-      branch: summary.branch ?? "",
+      branch: summary.branch,
       reason: summary.finished,
       branchDeleted: false,
     };
@@ -187,7 +195,7 @@ export async function pruneWorktrees(
       continue;
     }
 
-    if (!options.deleteBranch || base.branch.length === 0) {
+    if (!options.deleteBranch || base.branch === undefined) {
       entries.push(base);
       continue;
     }

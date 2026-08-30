@@ -8,7 +8,17 @@
 export type GroveErrorCode =
   /** Bad flags, wrong argument count, a branch name that cannot be a directory. */
   | "usage"
-  /** Nothing managed by this tool was found from the invocation directory. */
+  /**
+   * Nothing to act on was found: no managed repository from the invocation
+   * directory, or no worktree in it matching the target that was named.
+   *
+   * Two facts under one code, which is worth knowing before scripting against
+   * it. They are not the same question — `discover.ts` asks the first,
+   * `resolveTarget` the second — and a script cannot tell them apart from the
+   * exit status alone. Splitting them would be the tidier model and would also
+   * change an exit code that is advertised as a contract, for a distinction
+   * nobody has yet needed; the stderr line says which it was.
+   */
   | "not-a-repo"
   /** The request was understood and declined: dirty tree, unsafe removal. */
   | "refused"

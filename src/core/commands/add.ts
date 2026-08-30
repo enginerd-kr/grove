@@ -56,6 +56,14 @@ export type AddOptions = {
 
 export type AddResult = {
   readonly path: string;
+  /**
+   * Relative to the root, `/`-separated — the name the list uses.
+   *
+   * The directory this command already names in `added <dir>`; reported beside
+   * the absolute path so a `--json` reader can line this row up with `grove
+   * list` without re-deriving it, the way `path`, `reset` and `rename` do.
+   */
+  readonly dir: string;
   readonly branch: string;
   /** How the branch was obtained, which is the part worth reporting back. */
   readonly source: "existing" | "remote" | "new";
@@ -142,6 +150,7 @@ export async function addWorktree(
 
   return {
     path,
+    dir,
     branch: options.branch,
     source: origin.kind,
     upstream: origin.kind === "new" && !options.push ? undefined : `${REMOTE}/${options.branch}`,
@@ -254,7 +263,7 @@ async function checkAlreadyThere(
   if (!holder) return undefined;
 
   if (holder.path === path) {
-    return { path, branch, source: "existing", alreadyPresent: true };
+    return { path, dir: worktreeDir(root, path), branch, source: "existing", alreadyPresent: true };
   }
 
   // Same branch, different directory. git would refuse this anyway, but its

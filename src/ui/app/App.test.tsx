@@ -1,0 +1,1189 @@
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { render } from "ink-testing-library";
+import type { WorktreeSummary } from "../../core/commands/list.ts";
+import type { PullRequest } from "../../core/commands/pr.ts";
+import { GroveError } from "../../core/errors.ts";
+import type { Commit } from "../../core/history.ts";
+import { LineStore } from "../../report/lines.ts";
+import { keys, nextFrame, plain, waitFor } from "../test-utils.ts";
+import { theme } from "../theme.ts";
+import { App, describePending, pathOf } from "./App.tsx";
+import type { WorktreeService } from "./service.ts";
+import { buildTree, type TreeRow } from "./tree.ts";
+
+/**
+ * The screen, driven by keystrokes against a stubbed service.
+ *
+ * No git, no repository, no terminal: what is checked here is that a key
+ * reaches the action it claims to, that the mode machine ends up where it says,
+ * and that what comes back is drawn. Whether the actions themselves do the
+ * right thing is `core/commands`' own tests, and whether the arithmetic adds up
+ * is `layout.test.ts`'s.
+ *
+ * `App.e2e.test.tsx` already drives the keys that decide what the app *is*
+ * through a real pseudo-terminal — the list paints, the cursor moves, `r` asks
+ * first, `a` opens the prompt, `L` toggles the panel, ctrl-c exits 130 — so
+ * none of that is repeated here. What is here is the half a PTY suite cannot
+ * afford to reach: every wording of the removal question, the caret inside the
+ * add prompt, and the transitions between the four modes.
+ *
+ * Colours are asserted through `describePending`, which hands its colour back
+ * as a value, and nowhere else: chalk writes no escape sequences into a frame
+ * rendered without a terminal, so a colour is simply not in the text these
+ * tests read.
+ */
+
+/**
+ * How long a frame is given to arrive, and how long a whole test is.
+ *
+ * Generous on purpose. `waitFor`'s own default is a second, which is right for
+ * a predicate that has already failed — but every wait here is on a React
+ * render behind a promise behind a timer, and a machine with a test suite of
+ * its own running beside this one can spend a second not scheduling any of
+ * them. Being slow is not the same as being wrong, and a suite that goes red
+ * when the laptop is busy is a suite nobody trusts.
+ */
+const WAIT = 10_000;
+setDefaultTimeout(30_000);
+
+function summary(overrides: Partial<WorktreeSummary> & { readonly dir: string }): WorktreeSummary {
+  return {
+    path: `/repo/${overrides.dir}`,
+    branch: overrides.dir,
+    detached: false,
+    dirty: false,
+    changed: 0,
+    untracked: 0,
+    files: [],
+    // Tracking by default, because git only reports ahead/behind for a branch
+    // that has an upstream — a summary with counts and no upstream is a state
+    // no repository can be in.
+    upstream: `origin/${overrides.dir}`,
+    ahead: 0,
+    behind: 0,
+    locked: false,
+    rebasing: false,
+    isDefault: false,
+    current: false,
+    ...overrides,
+  };
+}
+
+// Drawn as `main`, `feat/`, `login`, `search` — four rows the cursor walks, of
+// which one is a folder.
+const ROWS: readonly WorktreeSummary[] = [
+  summary({ dir: "main", isDefault: true, current: true }),
+  summary({ dir: "feat/login", ahead: 2, trunk: { ahead: 5, behind: 3 } }),
+  summary({ dir: "feat/search", trunk: { ahead: 1, behind: 0 } }),
+];
+
+function pullRequest(number: number, overrides: Partial<PullRequest> = {}): PullRequest {
+  return {
+    number,
+    title: `Change number ${number}`,
+    author: "someone",
+    isDraft: false,
+    headRefName: `feat/pr-${number}`,
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+type Calls = {
+  fetched: number;
+  readonly logged: string[];
+  readonly copied: string[];
+  readonly added: { branch: string; from?: string }[];
+  readonly removed: { target: string; discardDirty?: boolean }[];
+  readonly removedMany: { targets: readonly string[]; discardDirty?: boolean }[];
+  readonly checkedOut: number[];
+  readonly synced: (string | undefined)[];
+  readonly trusted: string[];
+};
+
+function stub(overrides: Partial<WorktreeService> = {}): {
+  service: WorktreeService;
+  calls: Calls;
+} {
+  const calls: Calls = {
+    fetched: 0,
+    logged: [],
+    copied: [],
+    added: [],
+    removed: [],
+    removedMany: [],
+    checkedOut: [],
+    synced: [],
+    trusted: [],
+  };
+
+  return {
+    calls,
+    service: {
+      // A fresh array per call, as the real service gives: it rebuilds every
+      // summary from git each time. Returning the same reference would let
+      // React skip the re-render and quietly make the polling tests prove
+      // nothing.
+      list: async () => [...ROWS],
+      // Answering "nothing changed" keeps the background fetch out of every
+      // other test: no re-read, so no frame nobody was waiting for.
+      fetch: async () => {
+        calls.fetched += 1;
+        return false;
+      },
+      // No commits by default, so the panel under the list draws its
+      // `no commits on this branch yet` note and never a subject a
+      // `not.toContain` would trip over.
+      log: async (path): Promise<readonly Commit[]> => {
+        calls.logged.push(path);
+        return [];
+      },
+      copyPath: async (path) => {
+        calls.copied.push(path);
+        return `copied ${path}`;
+      },
+      add: async (branch, from) => {
+        calls.added.push({ branch, from });
+        return `added ${branch}`;
+      },
+      remove: async (target, discardDirty) => {
+        calls.removed.push({ target, discardDirty });
+        return `removed ${target}`;
+      },
+      removeMany: async (targets, discardDirty) => {
+        calls.removedMany.push({ targets, discardDirty });
+        return `removed ${targets.length} worktrees`;
+      },
+      // Nothing open by default: the popup is the thing being tested when it is
+      // being tested, and everywhere else `p` should be a message line.
+      pullRequests: async () => [],
+      checkoutPr: async (number) => {
+        calls.checkedOut.push(number);
+        return `added pr/${number} — Change number ${number}`;
+      },
+      sync: async (target) => {
+        calls.synced.push(target);
+        return "1 up-to-date";
+      },
+      // Nothing waiting by default, which is every repository with no
+      // `.grove.toml` and every one whose file is already trusted: nothing runs
+      // after `a`, and the other tests never see a second action.
+      pendingCommands: async () => [],
+      trustAndRun: async (branch) => {
+        calls.trusted.push(branch);
+        return `1 run in ${branch}`;
+      },
+      ...overrides,
+    },
+  };
+}
+
+/**
+ * Every screen a test opened, unmounted once it is over.
+ *
+ * The app holds two intervals — the refresh clock and the tip rotation — and an
+ * `ink-testing-library` instance that is never unmounted leaves both of them
+ * ticking against a component nobody is looking at any more, into the next
+ * test's run.
+ */
+const opened: { unmount: () => void }[] = [];
+
+afterEach(() => {
+  for (const instance of opened.splice(0)) instance.unmount();
+});
+
+/**
+ * The app at a size nothing here has to reason about.
+ *
+ * Pinned rather than left to `useWindowSize`: `ink-testing-library`'s stub
+ * stdout never reports a row count, so Ink falls back to asking the real
+ * terminal running the tests — and a banner that turns roomy or narrow with
+ * whatever window happens to be open is not a size any test meant to assert
+ * against. 24 rows keeps the banner in its one-line form; 100 columns is wide
+ * enough for every column of the list to survive.
+ */
+function mount(
+  service: WorktreeService,
+  { refreshMs, store = new LineStore(), columns = 100 }: MountOptions = {},
+) {
+  const instance = render(
+    <App
+      service={service}
+      repoRoot="/repo"
+      store={store}
+      refreshMs={refreshMs}
+      columns={columns}
+      rows={24}
+    />,
+  );
+  opened.push(instance);
+
+  return { ...instance, frame: () => plain(instance.lastFrame()) };
+}
+
+type MountOptions = {
+  readonly refreshMs?: number;
+  readonly store?: LineStore;
+  readonly columns?: number;
+};
+
+/** The app, opened and holding a list — where every keystroke test starts. */
+async function opened_with(service: WorktreeService, options?: MountOptions) {
+  const ui = mount(service, options);
+  await settled(ui, (frame) => frame.includes("login"));
+
+  return ui;
+}
+
+type Driven = { readonly stdin: { readonly write: (data: string) => void } };
+
+/**
+ * One key, and the frame it caused, before the next one is sent.
+ *
+ * Not politeness, but not correctness either any more: every popup edit now
+ * resolves its mode inside the `setMode` updater, the way `move` always has
+ * for the cursor, so a frame carrying several keys keeps all of them — which
+ * is what "the add prompt keeps every key of a frame" pins. Sending one key
+ * per frame is what makes a test read like the thing it describes, and it is
+ * how `App.e2e.test.tsx` drives the real binary too.
+ *
+ * Driving a key per frame is what keeps the tests below about the caret rather
+ * than about that difference — which is pinned on its own, once, in `the keys`.
+ */
+async function press(ui: Driven, key: string): Promise<void> {
+  ui.stdin.write(key);
+  await nextFrame();
+}
+
+/** `waitFor` against a screen, on the deadline every wait here shares. */
+function settled(
+  ui: { readonly lastFrame: () => string | undefined },
+  predicate: (frame: string) => boolean,
+): Promise<string> {
+  return waitFor(ui.lastFrame, predicate, { timeoutMs: WAIT });
+}
+
+/** Walks the cursor down onto `feat/login`, two rows below `main`. */
+async function toLogin(ui: Driven & { lastFrame: () => string | undefined }) {
+  await press(ui, keys.down);
+  await press(ui, keys.down);
+  await settled(ui, (frame) => /▸ +login/.test(frame));
+}
+
+/** `q quit` is on the key bar in `list` and in no other mode — see `MODE_HINTS`. */
+const IN_LIST = (frame: string) => frame.includes("q quit");
+/** `ctrl+c cancel` is the whole of the key bar while an action is out. */
+const BUSY = (frame: string) => frame.includes("ctrl+c cancel");
+
+describe("describePending", () => {
+  /**
+   * The question `r` asks, in all four of its wordings.
+   *
+   * This is the app's only destructive prompt, and the colour is decided with
+   * the words rather than beside them — so both are asserted together, as the
+   * one answer the function actually gives.
+   */
+  test("one clean worktree: what goes, what stays, and amber for a risk you can undo", () => {
+    expect(describePending({ kind: "one", summary: summary({ dir: "feat/login" }) })).toEqual({
+      text: "remove feat/login? the directory goes, the branch stays",
+      colour: theme.warn,
+    });
+  });
+
+  test("one dirty worktree counts what `y` discards, and asks in red", () => {
+    // Counted the way the reset counts them: tracked changes and untracked
+    // files apart, because one of those may be work git has never seen a copy
+    // of. `changed` is the total, so the tracked half is what is left of it.
+    const dirty = summary({ dir: "feat/login", dirty: true, changed: 4, untracked: 1 });
+
+    expect(describePending({ kind: "one", summary: dirty })).toEqual({
+      text: "remove feat/login and discard 3 changes and 1 untracked file? the branch stays",
+      colour: theme.danger,
+    });
+  });
+
+  test("a folder of clean worktrees asks once, in the plural, and still in amber", () => {
+    const target = {
+      kind: "many",
+      label: "feat/",
+      paths: ["/repo/feat/login", "/repo/feat/search"],
+      dirty: 0,
+    } as const;
+
+    expect(describePending(target)).toEqual({
+      text: "remove all 2 under feat/? the directories go, the branches stay",
+      colour: theme.warn,
+    });
+  });
+
+  test("a folder with anything uncommitted in it is the red question, counted and agreeing", () => {
+    const under = (dirty: number) =>
+      describePending({
+        kind: "many",
+        label: "feat/",
+        paths: ["/repo/feat/login", "/repo/feat/search"],
+        dirty,
+      });
+
+    expect(under(1)).toEqual({
+      text: "remove all 2 under feat/? 1 has uncommitted changes, which go too — the branches stay",
+      colour: theme.danger,
+    });
+    // The verb follows the count, because the sentence is read aloud in the
+    // head before `y` is pressed and a `1 have` is a sentence you re-read.
+    expect(under(2).text).toContain("2 have uncommitted changes");
+    expect(under(2).colour).toBe(theme.danger);
+  });
+});
+
+describe("pathOf", () => {
+  const tree = buildTree(ROWS, new Set());
+  const group = tree.find(
+    (row): row is Extract<TreeRow, { kind: "group" }> => row.kind === "group",
+  );
+  const leaf = tree.find((row) => row.kind === "leaf");
+
+  test("a worktree answers with its own path, whatever the repository root says", () => {
+    if (leaf === undefined) throw new Error("the fixture tree has no worktree in it");
+
+    // The path came from git; the root is only there for the rows that have no
+    // path of their own.
+    expect(pathOf(leaf, "/somewhere/else")).toBe("/repo/main");
+  });
+
+  test("a folder answers with the directory, without the slash it is drawn with", () => {
+    if (group === undefined) throw new Error("the fixture tree has no folder in it");
+
+    // `feat/` is how the row is labelled — the trailing slash is what makes it
+    // read as a folder. A path handed around as a location should not carry it.
+    expect(group.key).toBe("feat/");
+    expect(pathOf(group, "/repo")).toBe("/repo/feat");
+  });
+});
+
+describe("the list", () => {
+  test("the two drifts are separate columns, and a branch with no upstream says so", async () => {
+    const { service } = stub({
+      list: async () => [
+        summary({ dir: "main", isDefault: true, current: true }),
+        summary({ dir: "feat/login", ahead: 2, behind: 1, trunk: { ahead: 5, behind: 3 } }),
+        summary({ dir: "feat/local", upstream: undefined, trunk: { ahead: 1, behind: 0 } }),
+      ],
+    });
+    const ui = await opened_with(service);
+    const frame = ui.frame();
+
+    // Two questions, two columns, one shape: what is there to push, and how far
+    // the trunk has moved out from under you.
+    expect(frame).toMatch(/login\s+↑2 ↓1\s+↑5 ↓3\s+○/);
+    // A branch that was never pushed has no answer to give about its remote —
+    // `↑0 ↓0` there would claim it is in step with something — but it still has
+    // one about the trunk.
+    expect(frame).toMatch(/local\s+no upstream\s+↑1 ↓0/);
+    // Nothing to compare the trunk against but itself, so its column is blank
+    // rather than a `↑0 ↓0` answering a question nobody asked.
+    expect(frame).toMatch(/main\s+↑0 ↓0\s+○/);
+    // The drift is said once per column, in the columns that exist for it.
+    expect(frame).not.toContain("2 ahead");
+  });
+
+  test("the working tree is a dot, and only the unusual states are still words", async () => {
+    const { service } = stub({
+      list: async () => [
+        summary({ dir: "main", isDefault: true, current: true }),
+        summary({ dir: "feat/login", dirty: true, changed: 2, untracked: 0 }),
+        summary({ dir: "chore/old", finished: "merged" }),
+        summary({ dir: "ops/box", rebasing: true, locked: true }),
+      ],
+    });
+    const ui = await opened_with(service);
+    const frame = ui.frame();
+
+    // Filled has changes in it, hollow does not — the word `clean` was true of
+    // almost every row almost all the time.
+    expect(frame).toMatch(/login\s+↑0 ↓0\s+●/);
+    expect(frame).toMatch(/main\s+↑0 ↓0\s+○/);
+    expect(frame).not.toContain("clean");
+    expect(frame).not.toContain("dirty");
+    // The three that a dot cannot say, in the order `noteParts` puts them.
+    expect(frame).toContain("merged");
+    expect(frame).toMatch(/box\s+↑0 ↓0\s+○ rebasing, locked/);
+  });
+
+  test("a state column too narrow for its words is truncated rather than allowed to shear", async () => {
+    const { service } = stub({
+      list: async () => [
+        summary({ dir: "main", isDefault: true, current: true }),
+        summary({ dir: "ops/box", detached: true, branch: undefined, locked: true }),
+      ],
+    });
+
+    // Wide first, so what the narrow one loses is visible as a difference
+    // rather than asserted as an absence.
+    const roomy = mount(service, { columns: 100 });
+    expect(await settled(roomy, (frame) => frame.includes("box"))).toContain("detached, locked");
+
+    // At 30 columns the drift columns are dropped whole — that is
+    // `columnWidths`' own decision, covered in `layout.test.ts` — and the state
+    // column is left with less room than it asked for. This is the one cell
+    // that gives up characters instead of disappearing, because the dot beside
+    // it is the thing the column exists for.
+    const cramped = mount(service, { columns: 30 });
+    const frame = await settled(cramped, (each) => each.includes("box"));
+
+    expect(frame).not.toContain("detached, locked");
+    expect(frame).toContain("detached, l…");
+    // And every row still ends inside the terminal it was drawn for.
+    for (const line of frame.split("\n")) expect(line.length).toBeLessThanOrEqual(30);
+  });
+
+  test("an empty grove says what to press instead of drawing an empty table", async () => {
+    const { service } = stub({ list: async () => [] });
+    const ui = mount(service);
+
+    const frame = await settled(ui, (each) => each.includes("no worktrees here yet"));
+
+    expect(frame).toContain("press a to add one");
+    // No column headings over nothing: they are drawn once there are rows.
+    expect(frame).not.toContain("worktree    origin");
+  });
+
+  /**
+   * The failure this prevents: a worktree created in another terminal appears
+   * above the selected one, the selection slides down a row on its own, and the
+   * next `r` is aimed at something the user never pointed at.
+   */
+  test("the cursor stays on the row it was on when the list changes underneath", async () => {
+    let listed: readonly WorktreeSummary[] = ROWS;
+    const { service } = stub({ list: async () => listed });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+
+    // `chore/` sorts before `feat/`, so this pushes `login` two rows down. Read
+    // back through `R` rather than through the timer, so what is under test is
+    // the cursor and not the polling.
+    listed = [...ROWS, summary({ dir: "chore/deps" })];
+    ui.stdin.write("R");
+
+    const frame = await settled(ui, (each) => each.includes("deps"));
+
+    expect(frame).toMatch(/▸ +login/);
+    expect(frame).not.toMatch(/▸ +deps/);
+  });
+
+  /**
+   * The state column is about a working tree, and a working tree is edited from
+   * somewhere else. Waiting for `R` would make the screen a photograph of
+   * whenever you last pressed a key.
+   */
+  test("the list keeps up with the worktrees without a keypress", async () => {
+    let listed: readonly WorktreeSummary[] = ROWS;
+    const { service, calls } = stub({ list: async () => listed });
+    const ui = await opened_with(service, { refreshMs: 50 });
+    expect(ui.frame()).not.toContain("●");
+
+    // What another terminal doing the editing looks like from in here.
+    listed = ROWS.map((row) => (row.dir === "feat/login" ? { ...row, dirty: true } : row));
+
+    expect(await settled(ui, (each) => each.includes("●"))).toMatch(/login\s+↑2 ↓0\s+↑5 ↓3\s+●/);
+    // The remote half of the answer is fetched, not merely re-read: without it
+    // a colleague's push never arrives at all.
+    expect(calls.fetched).toBeGreaterThan(0);
+  });
+
+  /**
+   * The list re-reads itself on a timer. A fold held by row rather than by key
+   * would spring every folder open on the next tick, under the cursor.
+   */
+  test("a fold survives the list re-reading itself", async () => {
+    let listed: readonly WorktreeSummary[] = ROWS;
+    const { service } = stub({ list: async () => listed });
+    const ui = await opened_with(service, { refreshMs: 50 });
+
+    ui.stdin.write(keys.down);
+    await settled(ui, (each) => /▸ +feat\//.test(each));
+    ui.stdin.write(keys.left);
+    await settled(ui, (each) => /▸ +feat\/\s+2/.test(each));
+
+    // Something only a refresh can bring in, so what follows is an assertion
+    // about a tick that demonstrably happened rather than one that may not
+    // have: waiting and then finding the fold intact would pass just as well if
+    // the timer had never fired.
+    listed = [...ROWS, summary({ dir: "zebra" })];
+    await settled(ui, (each) => each.includes("zebra"));
+
+    expect(ui.frame()).not.toContain("login");
+    expect(ui.frame()).toMatch(/▸ +feat\/\s+2/);
+  });
+});
+
+describe("the add prompt", () => {
+  /** Opens `a` on `main` and returns the screen with the prompt up. */
+  async function prompting(service: WorktreeService) {
+    const ui = await opened_with(service);
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("new branch from main"));
+
+    return ui;
+  }
+
+  /**
+   * The caret is drawn as an inverse block over the character it sits on, which
+   * is a colour and not a character — so it is invisible in a frame read as
+   * plain text. Every test below asks where the caret is by typing at it, which
+   * is also the only thing anybody uses it for.
+   */
+  test("the caret walks back into the name, and what is typed lands where it stopped", async () => {
+    const { service, calls } = stub();
+    const ui = await prompting(service);
+
+    await press(ui, "abc");
+    await settled(ui, (frame) => frame.includes("abc"));
+    await press(ui, keys.left);
+    await press(ui, keys.left);
+    await press(ui, "X");
+
+    await settled(ui, (frame) => frame.includes("aXbc"));
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("added aXbc"));
+
+    // And the name that was built is the name that was asked for — the prompt
+    // is not a display of one string over a different one.
+    expect(calls.added).toEqual([{ branch: "aXbc", from: "main" }]);
+  });
+
+  test("the caret stops at both ends rather than wrapping round", async () => {
+    const { service } = stub();
+    const ui = await prompting(service);
+
+    await press(ui, "abc");
+    await settled(ui, (frame) => frame.includes("abc"));
+
+    // Five presses against a three-character name: a caret that wrapped, or one
+    // that went negative, would put the next character somewhere else.
+    for (let at = 0; at < 5; at += 1) await press(ui, keys.left);
+    await press(ui, "<");
+    await settled(ui, (frame) => frame.includes("<abc"));
+
+    for (let at = 0; at < 9; at += 1) await press(ui, keys.right);
+    await press(ui, ">");
+    await settled(ui, (frame) => frame.includes("<abc>"));
+  });
+
+  test("backspace takes the character the caret sits after, wherever that is", async () => {
+    const { service } = stub();
+    const ui = await prompting(service);
+
+    await press(ui, "abcd");
+    await settled(ui, (frame) => frame.includes("abcd"));
+    await press(ui, keys.left);
+    await press(ui, keys.backspace);
+    // `c`, not `d`: backspace is aimed at the caret and not at the end of the
+    // name. The caret follows it back, so the next character typed lands there.
+    await settled(ui, (frame) => frame.includes("abd") && !frame.includes("abcd"));
+
+    await press(ui, "Z");
+    await settled(ui, (frame) => frame.includes("abZd"));
+  });
+
+  test("backspace at the start of the name does nothing, rather than the mode ending", async () => {
+    const { service } = stub();
+    const ui = await prompting(service);
+
+    await press(ui, "ab");
+    await settled(ui, (frame) => frame.includes("ab"));
+    // Twice as many backspaces as there are characters: the caret clamps at
+    // zero, and the two presses past the start have nothing left to take.
+    for (let at = 0; at < 4; at += 1) await press(ui, keys.backspace);
+    await settled(ui, (frame) => !frame.includes("ab"));
+
+    // The prompt is still up and still taking text: an empty name is a thing to
+    // type into, not a cancel.
+    await press(ui, "ok");
+    expect(await settled(ui, (frame) => frame.includes("ok"))).toContain("new branch");
+  });
+
+  /**
+   * The key labelled Backspace is not the only one that reaches this: the
+   * forward-delete key arrives as `key.delete`, and it is spelled the same way
+   * here on purpose — a forward delete is not worth losing the mac's Backspace
+   * to, on the terminals that report it that way.
+   */
+  test("the forward-delete key is a backspace too", async () => {
+    const { service } = stub();
+    const ui = await prompting(service);
+
+    await press(ui, "abc");
+    await settled(ui, (frame) => frame.includes("abc"));
+    // What a terminal actually sends for the key labelled Delete.
+    await press(ui, `${String.fromCharCode(27)}[3~`);
+
+    await settled(ui, (frame) => frame.includes("ab") && !frame.includes("abc"));
+  });
+
+  /**
+   * The failure this prevents: an arrow key, or any other control sequence,
+   * typing itself into the branch name. The filter is printable ASCII only, and
+   * a name outside it is silently refused rather than mangled — git would take
+   * it, but nobody could type it back at a terminal to find the worktree again.
+   */
+  test("a name that is not printable ASCII is refused without a word", async () => {
+    const { service, calls } = stub();
+    const ui = await prompting(service);
+
+    await press(ui, "café");
+    await press(ui, "브랜치");
+    // Nothing to wait for — the point is that nothing happened — so a printable
+    // name is typed after them and the frame is read once it lands.
+    await press(ui, "plain");
+    const frame = await settled(ui, (each) => each.includes("plain"));
+
+    expect(frame).not.toContain("café");
+    expect(frame).not.toContain("브랜치");
+
+    await press(ui, keys.enter);
+    await settled(ui, (each) => each.includes("added plain"));
+    expect(calls.added).toEqual([{ branch: "plain", from: "main" }]);
+  });
+
+  // The failure this prevents: `a` opening the prompt and the very next
+  // keypress being read as a command instead of as text.
+  test("keys typed into the prompt are text, not commands", async () => {
+    const { service, calls } = stub();
+    const ui = await prompting(service);
+
+    ui.stdin.write("s");
+    await settled(ui, (frame) => /new branch from main\s+s/.test(frame));
+
+    expect(calls.synced).toEqual([]);
+  });
+
+  test("enter on an empty name is a cancel, not a refusal", async () => {
+    const { service, calls } = stub();
+    const ui = await prompting(service);
+
+    // Whitespace as well as nothing: the name is trimmed before it is weighed,
+    // so a space bar pressed while thinking is still an empty prompt.
+    await press(ui, "   ");
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => !frame.includes("new branch"));
+
+    expect(calls.added).toEqual([]);
+    expect(IN_LIST(ui.frame())).toBe(true);
+  });
+
+  test("a new branch starts from the worktree the cursor is on", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    ui.stdin.write("a");
+    // Said on the prompt, not left to be discovered from the result: `a` on one
+    // row and `a` on another start the branch in different places.
+    await settled(ui, (frame) => frame.includes("new branch from feat/login"));
+
+    await press(ui, "feat/login-part-2");
+    await settled(ui, (frame) => frame.includes("feat/login-part-2"));
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("added feat/login-part-2"));
+
+    expect(calls.added).toEqual([{ branch: "feat/login-part-2", from: "feat/login" }]);
+  });
+
+  // Nothing to carry on from: a detached HEAD has no branch name to pass, so
+  // the base falls back to the remote's default rather than being invented.
+  test("a detached worktree offers no base", async () => {
+    const { service, calls } = stub({
+      list: async () => [
+        summary({ dir: "main", isDefault: true, detached: true, branch: undefined }),
+      ],
+    });
+    const ui = mount(service);
+    await settled(ui, (frame) => frame.includes("main"));
+
+    ui.stdin.write("a");
+    const frame = await settled(ui, (each) => each.includes("new branch"));
+    expect(frame).not.toContain("new branch from");
+
+    await press(ui, "fix/crash");
+    await settled(ui, (each) => each.includes("fix/crash"));
+    await press(ui, keys.enter);
+    await settled(ui, (each) => each.includes("added fix/crash"));
+
+    expect(calls.added).toEqual([{ branch: "fix/crash", from: undefined }]);
+  });
+
+  test("`a` on a folder starts the name inside it, with the caret after it", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write(keys.down);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("new branch feat/"));
+
+    // Typed straight on the end, which is what a caret parked at `value.length`
+    // is for — reaching for `a` on a folder is how you say "another one of
+    // these".
+    await press(ui, "chat");
+    await settled(ui, (frame) => frame.includes("feat/chat"));
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("added feat/chat"));
+
+    // A folder is not a branch, so there is nothing to carry on from.
+    expect(calls.added).toEqual([{ branch: "feat/chat", from: undefined }]);
+  });
+
+  /**
+   * The price of a configuration that travels with the project: `copy` and
+   * `link` move files already on the disk, and a command came in with a pull.
+   * `grove add` on the command line has to behave the same in a pipe as under a
+   * terminal, so it prints them and skips; the screen just made the worktree
+   * itself, so it runs them right after, the way `--trust` would.
+   */
+  test("`a` runs the commands the new worktree's file wants to run", async () => {
+    const { service, calls } = stub({
+      pendingCommands: async () => ["bun install", "./scripts/postinstall.sh"],
+    });
+    const ui = await opened_with(service);
+
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("new branch"));
+    await press(ui, "feat/new");
+    await settled(ui, (frame) => frame.includes("feat/new"));
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("1 run in"));
+
+    // The worktree was made, and the commands ran right after it — nothing
+    // asked, because the keystroke that made it was the asking.
+    expect(calls.added).toEqual([{ branch: "feat/new", from: "main" }]);
+    expect(calls.trusted).toEqual(["feat/new"]);
+  });
+
+  // Every ordinary repository: no file, or one whose commands already ran as
+  // part of `add` itself.
+  test("nothing runs a second time when nothing is waiting", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("new branch"));
+    await press(ui, "feat/new");
+    await settled(ui, (frame) => frame.includes("feat/new"));
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("added feat/new"));
+
+    expect(calls.trusted).toEqual([]);
+  });
+});
+
+describe("the keys", () => {
+  /**
+   * Keys arrive faster than React commits, which is exactly what holding an
+   * arrow key down does: both presses reach the handler before the first has
+   * been rendered. A cursor read off the rendered row would leave the second
+   * one with nowhere to go — `move` resolves the previous row inside the
+   * `setCursorKey` updater instead, and that is the only reason holding `↓`
+   * travels rather than moving one row and stopping.
+   *
+   * This is the one place in the file where two keys are deliberately sent
+   * inside one frame; everywhere else they are driven a frame apart.
+   */
+  test("two arrows inside one frame both count, which is what holding one down is", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write(keys.down);
+    ui.stdin.write(keys.down);
+
+    await settled(ui, (frame) => /▸ +login/.test(frame));
+  });
+
+  test("the add prompt keeps every key of a frame, not just the last one", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("branch"));
+
+    // Written without awaiting between them, which is what typing quickly and
+    // holding a key actually look like: ink delivers them to one handler call.
+    // Reading the mode out of the render rather than the updater lost all but
+    // the last of these — `ab` typed at speed used to arrive as `b`.
+    ui.stdin.write("f");
+    ui.stdin.write("e");
+    ui.stdin.write("a");
+    ui.stdin.write("t");
+    await settled(ui, (frame) => frame.includes("feat"));
+
+    // Two `←` in one frame move the caret twice, then a character lands
+    // between the `e` and the `a`.
+    ui.stdin.write(keys.left);
+    ui.stdin.write(keys.left);
+    ui.stdin.write("X");
+    await settled(ui, (frame) => frame.includes("feXat"));
+
+    // And backspace twice in one frame takes two characters, not one.
+    ui.stdin.write(keys.backspace);
+    ui.stdin.write(keys.backspace);
+    await settled(ui, (frame) => /f(?!eXat)/.test(frame) && frame.includes("at"));
+  });
+
+  test("`enter` copies the path of whatever the cursor is on, folder included", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    ui.stdin.write(keys.enter);
+    await settled(ui, (frame) => frame.includes("copied /repo/feat/login"));
+
+    // A folder is a real directory on disk, and a key that works on some rows
+    // and not others is one you have to look at the screen to use.
+    ui.stdin.write(keys.up);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+    ui.stdin.write(keys.enter);
+    await settled(ui, (frame) => frame.includes("copied /repo/feat"));
+
+    expect(calls.copied).toEqual(["/repo/feat/login", "/repo/feat"]);
+  });
+
+  test("`s` syncs the row under the cursor and `S` syncs every worktree", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    ui.stdin.write("s");
+    await settled(ui, (frame) => frame.includes("1 up-to-date"));
+
+    ui.stdin.write("S");
+    await settled(ui, (frame) => IN_LIST(frame) && frame.includes("1 up-to-date"));
+
+    // The one action with no target, which is what `undefined` says here.
+    expect(calls.synced).toEqual(["/repo/feat/login", undefined]);
+  });
+
+  test("`s` on a folder does nothing, because a folder is not a worktree", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write(keys.down);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+    // The key bar already says so — `layout.test.ts` pins that — and the
+    // dispatcher has to agree with it, which is what this asserts.
+    expect(ui.frame()).not.toMatch(/\bs sync\b/);
+
+    await press(ui, "s");
+    // `S` after it, so the wait has something to land on: a key that did
+    // nothing leaves no frame to wait for, and the sync that follows is proof
+    // the screen was reading keys the whole time.
+    await press(ui, "S");
+    await settled(ui, (frame) => frame.includes("1 up-to-date"));
+
+    expect(calls.synced).toEqual([undefined]);
+  });
+
+  test("`R` re-reads the list and says it did", async () => {
+    let reads = 0;
+    const { service } = stub({
+      list: async () => {
+        reads += 1;
+        return [...ROWS];
+      },
+    });
+    const ui = await opened_with(service);
+    const before = reads;
+
+    ui.stdin.write("R");
+    await settled(ui, (frame) => frame.includes("refreshed"));
+
+    // Not a promise the screen makes and does not keep: the word is on the
+    // message line because a read happened behind it.
+    expect(reads).toBeGreaterThan(before);
+  });
+
+  /**
+   * `y` carries the answer that was just given: the question counted the
+   * uncommitted changes, so the removal is allowed to discard them. Anything
+   * else would be a prompt that asked about one thing and did another.
+   */
+  test("`y` removes with the permission the question asked for", async () => {
+    const { service, calls } = stub({
+      list: async () => [
+        summary({ dir: "main", isDefault: true, current: true }),
+        summary({ dir: "feat/login", dirty: true, changed: 2, untracked: 1 }),
+      ],
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    ui.stdin.write("r");
+    await settled(ui, (frame) => frame.includes("remove feat/login and discard"));
+    ui.stdin.write("y");
+    await settled(ui, (frame) => frame.includes("removed /repo/feat/login"));
+
+    expect(calls.removed).toEqual([{ target: "/repo/feat/login", discardDirty: true }]);
+  });
+
+  test("a clean worktree is removed without that permission", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("r");
+    await settled(ui, (frame) => frame.includes("remove main?"));
+    ui.stdin.write("y");
+    await settled(ui, (frame) => frame.includes("removed /repo/main"));
+
+    expect(calls.removed).toEqual([{ target: "/repo/main", discardDirty: false }]);
+  });
+
+  /**
+   * The failure this prevents: folding a folder quietly changing what `r` there
+   * does, because what it removes was read off rows the fold had taken away.
+   */
+  test("`r` on a folder removes every worktree under it in one call, folded or not", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write(keys.down);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+    ui.stdin.write(keys.left);
+    await settled(ui, (frame) => /▸ +feat\/\s+2/.test(frame));
+
+    ui.stdin.write("r");
+    await settled(ui, (frame) => frame.includes("remove all 2 under feat/"));
+    ui.stdin.write("y");
+    await settled(ui, (frame) => frame.includes("removed 2 worktrees"));
+
+    expect(calls.removedMany).toEqual([
+      { targets: ["/repo/feat/login", "/repo/feat/search"], discardDirty: false },
+    ]);
+    // Never one at a time behind the user's back: the loop and its refusals
+    // live in the service, where the command's own checks still apply to each.
+    expect(calls.removed).toEqual([]);
+  });
+
+  /**
+   * `p` is the one key that leaves the machine for something that is not git,
+   * so it is the one key with a wait worth drawing. It borrows `busy` rather
+   * than going through `perform`, because there is no outcome to report — and
+   * borrowing it is what drops the keys while `gh` is out.
+   */
+  test("`p` takes the keyboard while the forge is out, then opens the picker", async () => {
+    let answer: (prs: readonly PullRequest[]) => void = () => {};
+    const asked = new Promise<readonly PullRequest[]>((resolve) => {
+      answer = resolve;
+    });
+    const { service } = stub({ pullRequests: () => asked });
+    const ui = await opened_with(service);
+
+    ui.stdin.write("p");
+    await settled(ui, BUSY);
+
+    // A key pressed while the forge is out is dropped, not queued: the cursor
+    // is where it was when the popup finally arrives.
+    ui.stdin.write("j");
+    ui.stdin.write("r");
+    expect(ui.frame()).toMatch(/▸ \* main/);
+    expect(ui.frame()).not.toContain("remove main?");
+
+    answer([pullRequest(12), pullRequest(34, { isDraft: true })]);
+    const popup = await settled(ui, (frame) => frame.includes("pull requests"));
+
+    expect(popup).toContain("feat/pr-12");
+    expect(popup).toContain("Change number 34");
+    expect(popup).toContain("enter check out");
+  });
+
+  // An empty list is an answer, not a popup: one there is nothing to pick from
+  // is chrome, so it goes where the other answers to a keypress go.
+  test("`p` with nothing open says so on the message line", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("p");
+    const frame = await settled(ui, (each) => each.includes("no open pull requests"));
+
+    expect(frame).not.toContain("pull requests   0");
+    expect(IN_LIST(frame)).toBe(true);
+  });
+
+  test("a forge that refuses is a red line, not a dead session", async () => {
+    const { service } = stub({
+      pullRequests: async () => {
+        throw new GroveError("refused", "gh is not installed", {
+          hint: "install it from cli.github.com",
+        });
+      },
+    });
+    const ui = await opened_with(service);
+
+    ui.stdin.write("p");
+    const frame = await settled(ui, (each) => each.includes("gh is not installed"));
+
+    // The refusal brought its advice with it, and the screen is still a screen.
+    expect(frame).toContain("cli.github.com");
+    expect(IN_LIST(frame)).toBe(true);
+  });
+
+  test("the picker moves with the arrows, stops at both ends, and enter checks one out", async () => {
+    const { service, calls } = stub({
+      pullRequests: async () => [pullRequest(12), pullRequest(34)],
+      pendingCommands: async () => ["bun install"],
+    });
+    const ui = await opened_with(service);
+
+    ui.stdin.write("p");
+    await settled(ui, (frame) => frame.includes("pull requests"));
+
+    // Up from the top row: clamped, rather than wrapping to the bottom of a
+    // list you would then have to look at the screen to find. Then down twice
+    // against two rows, which clamps at the other end for the same reason.
+    await press(ui, keys.up);
+    await press(ui, keys.up);
+    await press(ui, "j");
+    await press(ui, keys.down);
+    await settled(ui, (frame) => /▸ +34/.test(frame));
+
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("1 run in"));
+
+    expect(calls.checkedOut).toEqual([34]);
+    // The file's commands run after the worktree exists, under the name the
+    // checkout gave it — `pr/<n>`, not the branch the pull request came from.
+    expect(calls.trusted).toEqual(["pr/34"]);
+  });
+
+  test("esc closes every popup, and leaves the list exactly as it was", async () => {
+    const { service, calls } = stub({ pullRequests: async () => [pullRequest(12)] });
+    const ui = await opened_with(service);
+
+    // The prompt.
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("new branch"));
+    await press(ui, "x");
+    await press(ui, keys.esc);
+    await settled(ui, (frame) => !frame.includes("new branch") && IN_LIST(frame));
+
+    // The removal question — where any key but `y` is a no, and `esc` is the
+    // one everybody presses.
+    ui.stdin.write("r");
+    await settled(ui, (frame) => frame.includes("remove main?"));
+    ui.stdin.write(keys.esc);
+    await settled(ui, (frame) => !frame.includes("remove main?") && IN_LIST(frame));
+
+    // The picker.
+    ui.stdin.write("p");
+    await settled(ui, (frame) => frame.includes("pull requests"));
+    ui.stdin.write(keys.esc);
+    await settled(ui, (frame) => !frame.includes("pull requests") && IN_LIST(frame));
+
+    expect(calls.added).toEqual([]);
+    expect(calls.removed).toEqual([]);
+    expect(calls.checkedOut).toEqual([]);
+    // And the cursor never moved: a popup that leaked its keystrokes into the
+    // list would be worse than no popup.
+    expect(ui.frame()).toMatch(/▸ \* main/);
+  });
+
+  /**
+   * Whatever mode an action started in, it ends in the list.
+   *
+   * `perform` is the one shape every action has — clear the lines, take the
+   * keys, say what happened, re-read, hand the keys back — and the handing back
+   * is the part a mode could quietly keep hold of.
+   */
+  test("every action lands back in the list, whichever mode it started in", async () => {
+    const { service } = stub({ pullRequests: async () => [pullRequest(12)] });
+    const ui = await opened_with(service);
+
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("new branch"));
+    await press(ui, "from-add");
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("added from-add") && IN_LIST(frame));
+
+    ui.stdin.write("r");
+    await settled(ui, (frame) => frame.includes("remove main?"));
+    ui.stdin.write("y");
+    await settled(ui, (frame) => frame.includes("removed /repo/main") && IN_LIST(frame));
+
+    ui.stdin.write("p");
+    await settled(ui, (frame) => frame.includes("pull requests"));
+    ui.stdin.write(keys.enter);
+    await settled(ui, (frame) => frame.includes("added pr/12") && IN_LIST(frame));
+
+    // And from `busy` itself, which every one of those passed through.
+    expect(BUSY(ui.frame())).toBe(false);
+  });
+
+  /**
+   * A sync that stopped on a conflict is not a sync that worked, and the screen
+   * draws what an action returns in the same accent colour it draws `rebased`
+   * in — so the service raises it instead. What is pinned here is the screen's
+   * half: a raised refusal reaches the message line rather than the session.
+   */
+  test("a refused action is reported on the screen instead of ending the app", async () => {
+    const { service } = stub({
+      sync: async () => {
+        throw new GroveError("rebase-conflict", "feat/login stopped on a conflict", {
+          hint: "fix it and run `grove sync` again",
+          details: ["CONFLICT (content): Merge conflict in src/app.ts"],
+        });
+      },
+    });
+    const ui = await opened_with(service);
+
+    ui.stdin.write("S");
+    const frame = await settled(ui, (each) => each.includes("stopped on a conflict"));
+
+    // Everything the refusal carried, and a screen that is still a screen: the
+    // list and the keys are both still there.
+    expect(frame).toContain("Merge conflict in src/app.ts");
+    expect(frame).toContain("fix it and run `grove sync` again");
+    expect(frame).toContain("feat/");
+    expect(IN_LIST(frame)).toBe(true);
+  });
+
+  // The list is re-read even after a failure: a refusal often happens half-way,
+  // and a stale screen is how someone acts on the wrong row.
+  test("a failed action still leaves the list up to date", async () => {
+    let reads = 0;
+    const { service } = stub({
+      list: async () => {
+        reads += 1;
+        return [...ROWS];
+      },
+      remove: async () => {
+        throw new GroveError("refused", "main is the default branch's worktree");
+      },
+    });
+    const ui = await opened_with(service);
+    const before = reads;
+
+    ui.stdin.write("r");
+    await settled(ui, (frame) => frame.includes("remove main?"));
+    ui.stdin.write("y");
+    await settled(ui, (frame) => frame.includes("default branch"));
+
+    expect(reads).toBeGreaterThan(before);
+  });
+
+  // A screen that could not read the repository has one thing to say, and it is
+  // not a tip about which key to press next.
+  test("a first read that fails keeps the message line", async () => {
+    const { service } = stub({
+      list: async () => {
+        throw new GroveError("refused", "fatal: not a grove");
+      },
+    });
+    const ui = mount(service);
+
+    const frame = await settled(ui, (each) => each.includes("fatal: not a grove"));
+
+    expect(frame).not.toContain("tip:");
+    // Still interactive rather than stuck reading: the mode falls back to the
+    // list whether the read worked or not.
+    expect(IN_LIST(frame)).toBe(true);
+  });
+});

@@ -86,6 +86,14 @@ export type PrOptions = {
 
 export type PrResult = {
   readonly path: string;
+  /**
+   * Relative to the root, `/`-separated — the name the list uses.
+   *
+   * Taken from the `add` this command delegates to rather than recomputed, so
+   * a `--json` reader can line this row up with `grove list` without
+   * re-deriving it, the way `path`, `reset` and `rename` do.
+   */
+  readonly dir: string;
   /** Always `pr/<number>`: the directory is the branch, the same as everywhere else. */
   readonly branch: string;
   readonly number: number;
@@ -558,6 +566,7 @@ export async function checkoutPullRequest(
 
   return {
     path: result.path,
+    dir: result.dir,
     branch,
     number: detail.number,
     title: detail.title,

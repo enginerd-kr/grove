@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli } from "../ui/e2e-utils.ts";
 import { ExitCode } from "./exit-codes.ts";
 import { detectShell, rcFileFor } from "./install.ts";
 import type { Shell } from "./shell-init.ts";
+import { runCli } from "./test-cli.ts";
 
 /**
  * `install` writes to a shell's rc file, which is the one thing in this tool

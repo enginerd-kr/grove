@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { runCli } from "../../ui/e2e-utils.ts";
+import { runCli } from "../../cli/test-cli.ts";
 import { pathExists } from "../fs.ts";
 import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
 
@@ -13,6 +13,20 @@ import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts
  * two are found by different questions and a fixture that faked either would
  * pass while the real one did not.
  */
+
+/** The half of `PruneResult` these tests read back out of `--json`. */
+type PruneJson = {
+  readonly entries: readonly {
+    readonly path: string;
+    readonly dir: string;
+    readonly branch?: string;
+    readonly reason: "gone" | "merged";
+    readonly skipped?: string;
+    readonly branchDeleted: boolean;
+    readonly branchKept?: string;
+  }[];
+  readonly dryRun: boolean;
+};
 
 async function managed(repo: TempRepo): Promise<string> {
   const clone = await runCli(["clone", repo.originUrl], { cwd: repo.work });
@@ -186,6 +200,44 @@ describe("grove prune", () => {
       expect(branches).toContain("shipped");
     });
   });
+
+  test("--json spells the branch the way every other payload does", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await managed(repo);
+      const landed = await proposed(root, "landed", "landed.txt");
+      await landOnOrigin(repo, "landed", "merge");
+
+      const dry = await runCli(["prune", "--dry-run", "--json"], { cwd: root });
+      expect(dry.exitCode).toBe(0);
+
+      const planned = JSON.parse(dry.stdout) as PruneJson;
+      expect(planned.dryRun).toBe(true);
+      expect(planned.entries.map((entry) => entry.branch)).toEqual(["landed"]);
+      expect(await pathExists(landed)).toBe(true);
+
+      const pruned = await runCli(["prune", "--delete-branch", "--json"], { cwd: root });
+      expect(pruned.exitCode).toBe(0);
+
+      const [entry] = (JSON.parse(pruned.stdout) as PruneJson).entries;
+      expect(entry).toMatchObject({
+        dir: "landed",
+        branch: "landed",
+        reason: "merged",
+        branchDeleted: true,
+      });
+      // An optional field, the way `list`, `remove` and `reset` spell a branch:
+      // a row without one is absent from the document rather than an empty
+      // string, which a consumer checking `=== undefined` would read as a name.
+      expect(Object.keys(entry ?? {}).toSorted()).toEqual([
+        "branch",
+        "branchDeleted",
+        "dir",
+        "path",
+        "reason",
+      ]);
+      expect(await localBranches(root)).not.toContain("landed");
+    });
+  }, 60_000);
 
   test("--delete-branch takes a pull request's remote with its pr/<n> branch", async () => {
     await withTempRepo(async (repo) => {

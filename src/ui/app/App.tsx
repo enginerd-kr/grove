@@ -214,7 +214,7 @@ const GENERAL_TIPS: readonly Message[] = [
  * their trailing slash (it is how they are drawn); a path handed around as a
  * location should not.
  */
-function pathOf(row: TreeRow, repoRoot: string): string {
+export function pathOf(row: TreeRow, repoRoot: string): string {
   return row.kind === "group" ? join(repoRoot, row.key.replace(/\/+$/, "")) : row.summary.path;
 }
 
@@ -362,7 +362,10 @@ function StateCell({
  * How loudly to ask comes back with the words, because it is the same question
  * asked once: which of the four wordings this is decides the colour too.
  */
-function describePending(target: Pending): { readonly text: string; readonly colour: string } {
+export function describePending(target: Pending): {
+  readonly text: string;
+  readonly colour: string;
+} {
   // A dirty worktree is not refused any more — it is asked about instead, and
   // the question has to carry what `y` now costs: the uncommitted changes go
   // with the directory, counted the same way the reset counts them. A removal
@@ -877,10 +880,16 @@ export function App({
       // took with it back.
       if (key.escape || input === "q") return setMode({ kind: "list" });
       if (key.upArrow || input === "k") {
-        return setMode({ ...mode, index: Math.max(0, mode.index - 1) });
+        return setMode((now) =>
+          now.kind === "pick" ? { ...now, index: Math.max(0, now.index - 1) } : now,
+        );
       }
       if (key.downArrow || input === "j") {
-        return setMode({ ...mode, index: Math.min(mode.prs.length - 1, mode.index + 1) });
+        return setMode((now) =>
+          now.kind === "pick"
+            ? { ...now, index: Math.min(now.prs.length - 1, now.index + 1) }
+            : now,
+        );
       }
       if (key.return) {
         const pr = mode.prs[mode.index];
@@ -908,36 +917,56 @@ export function App({
           runPendingCommands(value),
         );
       }
-      // The caret moves through the name, and stops at either end rather than
-      // wrapping: a key that jumps from the start to the end is one you have
-      // to look at the screen to use.
+      /*
+       * Every edit below reads the mode it is changing out of the updater, not
+       * out of the render this handler was built in — the same guard `move`
+       * puts on the cursor, for the same reason. A frame can carry several
+       * keys, and `{ ...mode }` would have each of them start from the value
+       * as it was before any of them landed, so only the last would survive:
+       * typing `ab` quickly gave `b`, and two `←` in one frame moved the caret
+       * once. Typing fast is not an edge case, and neither is holding a key.
+       *
+       * The caret itself moves through the name and stops at either end rather
+       * than wrapping: a key that jumps from the start to the end is one you
+       * have to look at the screen to use.
+       */
       if (key.leftArrow) {
-        return setMode({ ...mode, caret: Math.max(0, mode.caret - 1) });
+        return setMode((now) =>
+          now.kind === "add" ? { ...now, caret: Math.max(0, now.caret - 1) } : now,
+        );
       }
       if (key.rightArrow) {
-        return setMode({ ...mode, caret: Math.min(mode.value.length, mode.caret + 1) });
+        return setMode((now) =>
+          now.kind === "add" ? { ...now, caret: Math.min(now.value.length, now.caret + 1) } : now,
+        );
       }
       // Backspace takes the character the caret sits after, wherever that is,
       // and the caret follows it back so the next one takes its neighbour.
       // Both keys mean backspace here: the key labelled Backspace arrives as
       // `delete` on a mac, and a forward delete is not worth losing that to.
       if (key.backspace || key.delete) {
-        if (mode.caret === 0) return;
+        return setMode((now) => {
+          if (now.kind !== "add" || now.caret === 0) return now;
 
-        return setMode({
-          ...mode,
-          value: mode.value.slice(0, mode.caret - 1) + mode.value.slice(mode.caret),
-          caret: mode.caret - 1,
+          return {
+            ...now,
+            value: now.value.slice(0, now.caret - 1) + now.value.slice(now.caret),
+            caret: now.caret - 1,
+          };
         });
       }
       // Control sequences arrive here as multi-character strings; taking only
       // printable input keeps an arrow key from typing itself into the name.
       if (input.length > 0 && !key.ctrl && !key.meta && /^[\x20-\x7e]+$/.test(input)) {
-        return setMode({
-          ...mode,
-          value: mode.value.slice(0, mode.caret) + input + mode.value.slice(mode.caret),
-          caret: mode.caret + input.length,
-        });
+        return setMode((now) =>
+          now.kind !== "add"
+            ? now
+            : {
+                ...now,
+                value: now.value.slice(0, now.caret) + input + now.value.slice(now.caret),
+                caret: now.caret + input.length,
+              },
+        );
       }
 
       return;

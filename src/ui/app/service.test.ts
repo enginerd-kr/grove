@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
+import { runCli } from "../../cli/test-cli.ts";
 import { isGroveError } from "../../core/errors.ts";
 import { pathExists } from "../../core/fs.ts";
 import { repoPaths } from "../../core/layout.ts";
 import { seedGit, type TempRepo, withTempRepo } from "../../core/test-utils.ts";
 import type { Reporter, Step } from "../../report/reporter.ts";
-import { runCli } from "../e2e-utils.ts";
 import { createSetupService, createWorktreeService, type WorktreeService } from "./service.ts";
 
 /**

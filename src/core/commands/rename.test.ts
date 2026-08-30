@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { runCli } from "../../ui/e2e-utils.ts";
+import { runCli } from "../../cli/test-cli.ts";
 import { pathExists } from "../fs.ts";
 import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
 
@@ -27,7 +27,7 @@ type RenameJson = {
   readonly moved: boolean;
   readonly pushed: boolean;
   readonly upstreamNote?: string;
-  readonly standingNote?: string;
+  readonly standingInOldPath: boolean;
 };
 
 async function managed(repo: TempRepo): Promise<string> {
@@ -303,6 +303,32 @@ describe("grove rename", () => {
       // Printed relative to where the shell is, which is no longer inside it.
       expect(renamed.stdout.trim()).toBe("../elsewhere\telsewhere");
       expect(await pathExists(join(root, "elsewhere"))).toBe(true);
+    });
+  });
+
+  test("--json reports standing in the old path as a fact, not as the sentence", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await managed(repo);
+      expect((await runCli(["add", "solo"], { cwd: root })).exitCode).toBe(0);
+
+      const inside = await runCli(["rename", "solo", "elsewhere", "--json"], {
+        cwd: join(root, "solo"),
+      });
+      expect(inside.exitCode).toBe(0);
+
+      const parsed = JSON.parse(inside.stdout) as RenameJson;
+      expect(parsed.standingInOldPath).toBe(true);
+      // The document is for programs: the `cd` line still goes to the person on
+      // stderr, and the shell command it contains is nowhere inside the JSON.
+      expect(inside.stdout).not.toContain("grove path");
+      expect(inside.stderr).toContain('cd "$(grove path elsewhere)"');
+
+      // Present and false from anywhere else, rather than an absent field —
+      // "you are not standing in it" is an answer worth being able to read.
+      const outside = await runCli(["rename", "elsewhere", "back", "--json"], { cwd: root });
+      expect(outside.exitCode).toBe(0);
+      expect((JSON.parse(outside.stdout) as RenameJson).standingInOldPath).toBe(false);
+      expect(outside.stderr).not.toContain("still standing");
     });
   });
 });

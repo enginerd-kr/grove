@@ -186,7 +186,12 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       const result = await renameWorktree(repo, cwd, options, reporter);
 
       if (result.upstreamNote) reporter.info(result.upstreamNote);
-      if (result.standingNote) reporter.info(result.standingNote);
+      // Composed here rather than carried in the result: the sentence has a
+      // shell command inside it, and a shell command is not something `--json`
+      // should be handing a program as data. The result says the fact.
+      if (result.standingInOldPath) {
+        reporter.info(`you are still standing in the old path: cd "$(grove path ${command.to})"`);
+      }
 
       report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.to}`));
       return;

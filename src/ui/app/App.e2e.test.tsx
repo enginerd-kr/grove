@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { runCli } from "../../cli/test-cli.ts";
 import { pathExists } from "../../core/fs.ts";
 import { type TempRepo, withTempRepo } from "../../core/test-utils.ts";
-import { runCli, startUi, type UiSession } from "../e2e-utils.ts";
+import { startUi, type UiSession } from "../e2e-utils.ts";
 import { keys } from "../test-utils.ts";
 
 /**

@@ -7,11 +7,11 @@ import { pathExists } from "../core/fs.ts";
 import { traceGit } from "../core/git.ts";
 import { probeGit, type TempRepo, withTempRepo } from "../core/test-utils.ts";
 import { createPlainReporter, type Reporter } from "../report/reporter.ts";
-import { runCli } from "../ui/e2e-utils.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
 import { ExitCode, errorToExitCode } from "./exit-codes.ts";
 import { SUBCOMMANDS } from "./help.ts";
 import { runCommand } from "./run.ts";
+import { runCli } from "./test-cli.ts";
 
 /**
  * The wiring between a parsed command line and a command.

@@ -3,8 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GroveErrorCode } from "../core/errors.ts";
-import { runCli } from "../ui/e2e-utils.ts";
 import { ExitCode, type ExitCodeValue, errorToExitCode } from "./exit-codes.ts";
+import { runCli } from "./test-cli.ts";
 
 /**
  * These numbers are the interface a wrapper script reads, so the test is

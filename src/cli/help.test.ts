@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { runCli } from "../ui/e2e-utils.ts";
 import { parseCliArgs } from "./args.ts";
 import {
   BIN_NAME,
@@ -11,6 +10,7 @@ import {
   SUBCOMMANDS,
   type SubcommandSpec,
 } from "./help.ts";
+import { runCli } from "./test-cli.ts";
 
 /**
  * Help and the parser are generated from the same table, and the interesting

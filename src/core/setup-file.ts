@@ -23,7 +23,9 @@ import { runGit, runGitOrThrow } from "./git.ts";
  * The cost of travelling is `run`: a `git pull` can now hand you a command that
  * executes on your machine. So `copy` and `link` apply on sight — they move
  * files that are already on your disk, inside a directory you asked to be
- * created — and `run` does not, until `grove trust` says so. See `trust.ts`.
+ * created — and `run` does not, until `--trust` says so. See `isTrusted` and
+ * `trust` below: the record is a fingerprint of these exact contents, kept in
+ * the bare repository's config, so an edit withdraws it.
  *
  * `copy` takes a directory as readily as a file — `certs` above. A file already
  * in the worktree is overwritten with the trunk's copy, and a directory the

@@ -25,6 +25,7 @@ app/service.ts    what the screens are allowed to do: add, sync, remove, check o
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
 e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
+                  its piped sibling is ../cli/test-cli.ts, which is not a UI concern
 ```
 
 ## Things worth knowing
@@ -227,7 +228,7 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
 `test-utils.ts` strips the escape sequences. `app/App.test.tsx` drives the whole screen this
 way — arrows, `a` and a typed branch name, `r` then `y` — against a stubbed service.
 
-**A PTY** (`app/App.e2e.test.ts`, `src/report/ink-reporter.e2e.test.ts`) runs the real binary
+**A PTY** (`app/App.e2e.test.tsx`) runs the real binary
 via `Bun.spawn({ terminal })` — native since Bun 1.3.5, so no `node-pty`, whose C++ addon Bun
 cannot load. It exists because `ink-testing-library` fakes stdout with `columns` pinned to 100
 and no `isTTY`, and both "is the Ink reporter selected at all" and "does a bare `grove` open

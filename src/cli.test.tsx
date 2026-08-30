@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { version } from "../package.json";
 import { ExitCode, type ExitCodeValue } from "./cli/exit-codes.ts";
+import { runCli } from "./cli/test-cli.ts";
 import { seedGit, withTempRepo } from "./core/test-utils.ts";
-import { runCli, startUi } from "./ui/e2e-utils.ts";
+import { startUi } from "./ui/e2e-utils.ts";
 
 /**
  * The entry point, run as the binary.

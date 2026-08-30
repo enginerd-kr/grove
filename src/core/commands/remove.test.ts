@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { runCli } from "../../ui/e2e-utils.ts";
+import { runCli } from "../../cli/test-cli.ts";
 import { pathExists } from "../fs.ts";
 import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
 
@@ -14,6 +14,14 @@ import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts
 
 /** Exit codes from `cli/exit-codes.ts`, spelled out so a change to them is loud. */
 const REFUSED = 4;
+
+/** The half of `RemoveResult` these tests read back out of `--json`. */
+type RemoveJson = {
+  readonly path: string;
+  readonly dir: string;
+  readonly branch?: string;
+  readonly branchDeleted: boolean;
+};
 
 /** The cheapest managed repository: a clone of the fixture origin. */
 async function managed(repo: TempRepo): Promise<string> {
@@ -156,6 +164,38 @@ describe("grove remove", () => {
       expect((await probeGit(worktree, ["rebase", "--abort"])).code).toBe(0);
     });
   });
+
+  test("--json names the directory it removed, the way the list does", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await managed(repo);
+      for (const branch of ["fix/bug#7", "chore/tidy@up"]) {
+        expect((await runCli(["add", branch], { cwd: root })).exitCode).toBe(0);
+      }
+
+      const removed = await runCli(["remove", "fix/bug#7", "--json"], { cwd: root });
+      expect(removed.exitCode).toBe(0);
+
+      // The name every message this command prints already used, reported
+      // rather than left to be re-derived: repo-root-relative and
+      // `/`-separated, the spelling `path`, `reset` and `rename` answer with.
+      const parsed = JSON.parse(removed.stdout) as RemoveJson;
+      expect([parsed.dir, parsed.branch, parsed.branchDeleted]).toEqual([
+        "fix/bug-7",
+        "fix/bug#7",
+        false,
+      ]);
+      expect(await pathExists(join(root, "fix", "bug-7"))).toBe(false);
+
+      // The command's other way out answers with the same field.
+      const deleted = await runCli(["remove", "chore/tidy@up", "--delete-branch", "--json"], {
+        cwd: root,
+      });
+      expect(deleted.exitCode).toBe(0);
+
+      const parsedDeleted = JSON.parse(deleted.stdout) as RemoveJson;
+      expect([parsedDeleted.dir, parsedDeleted.branchDeleted]).toEqual(["chore/tidy-up", true]);
+    });
+  }, 60_000);
 
   test("--delete-branch takes the branch with the directory", async () => {
     await withTempRepo(async (repo) => {
