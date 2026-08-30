@@ -4,6 +4,12 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.4.0 — 2026-08-30
+
+- `.grove.toml` takes an `open`: the editor, or whatever else you were going to start in the new worktree anyway. It was a `run` line before, and every part of that was wrong — `run` commands are awaited, so `grove add` stood behind an editor nobody had quit; they share a process group, so the next Ctrl-C closed it; and their output went to a pipe nothing read. `open` is watched just long enough to catch a line that falls over immediately, which is what a misspelled editor does, and then let go of — it outlives the terminal `grove` was typed into, and Ctrl-C aimed at the setup cannot reach it
+- `open` can be written once per platform, since `open -a` is macOS only and `code` reaches a Linux PATH long before macOS installs the shim: `[setup.open]` takes `macos`, `linux` and `windows`, and a platform the table leaves out opens nothing and says so. A bare `open = "code ."` still covers all three
+- It waits for the same `--trust` the `run` commands do, does not run when a `run` command failed, and is skipped where there is no terminal to open into — `grove add | tee`, or CI
+
 ## 0.3.8 — 2026-08-30
 
 - `grove pr 42` gives a pull request a worktree of its own at `pr/42`, on a real local branch, so reviewing somebody's change becomes running it rather than reading it — and a plain `git push` from there goes back to the pull request's own branch, fork or not. `p` in the app picks from what is open, since the number is the one part you cannot supply without leaving to look it up
