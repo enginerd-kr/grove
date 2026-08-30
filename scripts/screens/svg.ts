@@ -53,6 +53,121 @@ const PAD_X = 18;
 const PAD_Y = 14;
 const TITLE_H = 30;
 
+/**
+ * The characters a terminal paints with rather than writes with.
+ *
+ * A block or a rule is not a letter. It is the cell, filled — and it only
+ * means anything if it meets its neighbours exactly. A font cannot promise
+ * that: the glyph is drawn inside an em box hung off the baseline, so at
+ * `FONT_SIZE` in a `LINE_H` line it comes up five pixels short, and every row
+ * boundary becomes a seam. The banner's logo arrived as three floating bars
+ * with daylight between them, and the card's left rule as a dashed line.
+ *
+ * So they are drawn as geometry instead. The cell is what they are measured
+ * against, and the cell is the one thing this file knows exactly.
+ */
+
+/** A rectangle inside one cell, in fractions of it: x, y, width, height. */
+type Fill = readonly [number, number, number, number];
+
+const UL: Fill = [0, 0, 0.5, 0.5];
+const UR: Fill = [0.5, 0, 0.5, 0.5];
+const LL: Fill = [0, 0.5, 0.5, 0.5];
+const LR: Fill = [0.5, 0.5, 0.5, 0.5];
+
+/** The block elements, as the parts of a cell each one covers. */
+const BLOCKS: Readonly<Record<string, readonly Fill[]>> = {
+  "▀": [[0, 0, 1, 0.5]],
+  "▄": [[0, 0.5, 1, 0.5]],
+  "█": [[0, 0, 1, 1]],
+  "▌": [[0, 0, 0.5, 1]],
+  "▐": [[0.5, 0, 0.5, 1]],
+  "▖": [LL],
+  "▗": [LR],
+  "▘": [UL],
+  "▝": [UR],
+  "▙": [UL, LL, LR],
+  "▚": [UL, LR],
+  "▛": [UL, UR, LL],
+  "▜": [UL, UR, LR],
+  "▞": [UR, LL],
+  "▟": [UR, LL, LR],
+};
+
+/**
+ * How thick a light box-drawing line is, and how tight its rounded corner.
+ *
+ * Thin enough to read as a rule rather than a bar, and a radius because the
+ * card asks for one — `borderStyle="round"` is what draws ╭╮╰╯, and a square
+ * corner here would be the wrong border rendered accurately.
+ */
+const STROKE = 1.3;
+const RADIUS = 3;
+
+/**
+ * One box-drawing character as the stroke it is, or `undefined` for anything
+ * that is not one.
+ *
+ * Every arm runs from the middle of the cell to the edge it points at, so a
+ * character meets whatever is in the next cell exactly on the boundary — which
+ * is what makes a row of them one rule and a column of them one line.
+ *
+ * `cells` is how many of the same character sit here in a row. A divider is a
+ * hundred `─` and is drawn as one segment: cheaper, and a single segment is
+ * the only kind that cannot have a seam in it.
+ */
+function boxPath(char: string, x: number, y: number, cells: number): string | undefined {
+  // Rounded to the two places the fills use. A coordinate carrying
+  // `958.8000000000001` is float noise in a committed file that a re-shoot has
+  // to reproduce byte for byte.
+  const at = (value: number) => value.toFixed(2);
+
+  const left = at(x);
+  const right = at(x + cells * CELL_W);
+  const top = at(y);
+  const bottom = at(y + LINE_H);
+  // The middle of the *first* cell: a run is one segment, but a corner is
+  // always a single cell and pivots on its own middle.
+  const cx = at(x + CELL_W / 2);
+  const cy = at(y + LINE_H / 2);
+  // Where the corner's arc leaves the arm it came up, and where it rejoins the
+  // one it turns into.
+  const above = at(y + LINE_H / 2 - RADIUS);
+  const below = at(y + LINE_H / 2 + RADIUS);
+  const rightOfCentre = at(x + CELL_W / 2 + RADIUS);
+  const leftOfCentre = at(x + CELL_W / 2 - RADIUS);
+
+  switch (char) {
+    case "─":
+      return `M${left} ${cy}H${right}`;
+    case "│":
+      return `M${cx} ${top}V${bottom}`;
+    case "╭":
+      return `M${cx} ${bottom}V${below}Q${cx} ${cy} ${rightOfCentre} ${cy}H${right}`;
+    case "╮":
+      return `M${cx} ${bottom}V${below}Q${cx} ${cy} ${leftOfCentre} ${cy}H${left}`;
+    case "╰":
+      return `M${cx} ${top}V${above}Q${cx} ${cy} ${rightOfCentre} ${cy}H${right}`;
+    case "╯":
+      return `M${cx} ${top}V${above}Q${cx} ${cy} ${leftOfCentre} ${cy}H${left}`;
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Painted shapes of one colour, gathered into one path each.
+ *
+ * One path rather than one per cell, and that is not only for the file size:
+ * two rectangles that share an edge are antialiased separately and leave a
+ * hairline of background between them, while two subpaths of the same path are
+ * filled as the single region they add up to. The logo is nothing but shapes
+ * sharing edges.
+ */
+type Ink = { readonly fill: string; readonly opacity: string };
+
+const inkKey = ({ fill, opacity }: Ink): string => `${fill} ${opacity}`;
+
 type Style = {
   fg?: string;
   bg?: string;
@@ -185,6 +300,15 @@ export function toSvg(frame: string, { columns, title = "grove" }: ShotOptions):
 
   const rects: string[] = [];
   const texts: string[] = [];
+  // Keyed by colour so that everything one ink paints is one path — see `Ink`.
+  const filled = new Map<string, { ink: Ink; d: string[] }>();
+  const stroked = new Map<string, { ink: Ink; d: string[] }>();
+
+  const paint = (into: Map<string, { ink: Ink; d: string[] }>, ink: Ink, d: string) => {
+    const open = into.get(inkKey(ink)) ?? { ink, d: [] };
+    open.d.push(d);
+    into.set(inkKey(ink), open);
+  };
 
   lines.forEach((runs, row) => {
     const y = TITLE_H + PAD_Y + row * LINE_H;
@@ -193,25 +317,109 @@ export function toSvg(frame: string, { columns, title = "grove" }: ShotOptions):
       const fg = style.inverse ? (style.bg ?? SCREEN) : (style.fg ?? DEFAULT_FG);
       const bg = style.inverse ? (style.fg ?? DEFAULT_FG) : style.bg;
       const x = PAD_X + column * CELL_W;
-      const cells = width(text);
 
       if (bg !== undefined) {
         rects.push(
-          `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(cells * CELL_W).toFixed(1)}" height="${LINE_H}" fill="${bg}"/>`,
+          `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(width(text) * CELL_W).toFixed(1)}" height="${LINE_H}" fill="${bg}"/>`,
         );
       }
 
       if (text.trim() === "") continue;
 
+      const ink: Ink = { fill: fg, opacity: style.dim ? "0.6" : "1" };
       const weight = style.bold ? ' font-weight="600"' : "";
       const opacity = style.dim ? ' opacity="0.6"' : "";
-      texts.push(
-        `<text x="${x.toFixed(1)}" y="${(y + BASELINE).toFixed(1)}" fill="${fg}"${weight}${opacity}` +
-          ` textLength="${(cells * CELL_W).toFixed(1)}" lengthAdjust="spacingAndGlyphs"` +
-          ` xml:space="preserve">${escapeText(text)}</text>`,
-      );
+
+      /**
+       * The run, split where it stops being text.
+       *
+       * Letters keep their `<text>` and their `textLength`, which is what
+       * holds the grid together under whatever font the reader falls back to.
+       * Blocks and rules become geometry, because a font cannot make them meet
+       * — see `BLOCKS` above. Both halves count cells the same way, so the two
+       * kinds land in the same columns.
+       */
+      const chars = [...text];
+      let cell = 0;
+      let buffer = "";
+      let bufferAt = 0;
+
+      const flush = () => {
+        if (buffer.trim() !== "") {
+          texts.push(
+            `<text x="${(x + bufferAt * CELL_W).toFixed(1)}" y="${(y + BASELINE).toFixed(1)}" fill="${fg}"${weight}${opacity}` +
+              ` textLength="${(width(buffer) * CELL_W).toFixed(1)}" lengthAdjust="spacingAndGlyphs"` +
+              ` xml:space="preserve">${escapeText(buffer)}</text>`,
+          );
+        }
+        buffer = "";
+      };
+
+      for (let at = 0; at < chars.length; at += 1) {
+        const char = chars[at] ?? "";
+        const fills = BLOCKS[char];
+        // How many of this same character sit here in a row, and how many
+        // cells one shape covers. Only `─` is stretched: a divider is a
+        // hundred of them and wants to be one segment rather than a hundred.
+        // Everything else gets a copy per cell — a stretched `│` would be one
+        // line where two were asked for.
+        let span = 1;
+        while (chars[at + span] === char) span += 1;
+        const stretch = char === "─" ? span : 1;
+
+        if (fills !== undefined) {
+          flush();
+          for (let copy = 0; copy < span; copy += 1) {
+            for (const [fx, fy, fw, fh] of fills) {
+              const left = x + (cell + copy + fx) * CELL_W;
+              const top = y + fy * LINE_H;
+              paint(
+                filled,
+                ink,
+                `M${left.toFixed(2)} ${top.toFixed(2)}h${(fw * CELL_W).toFixed(2)}v${(fh * LINE_H).toFixed(2)}h${(-fw * CELL_W).toFixed(2)}z`,
+              );
+            }
+          }
+          cell += span;
+          at += span - 1;
+          continue;
+        }
+
+        // Built before anything is committed, so that "is this a rule" and
+        // "where do its segments go" are the same question asked once.
+        const rules: string[] = [];
+        for (let copy = 0; copy < span; copy += stretch) {
+          const line = boxPath(char, x + (cell + copy) * CELL_W, y, stretch);
+          if (line === undefined) break;
+          rules.push(line);
+        }
+
+        if (rules.length > 0) {
+          flush();
+          for (const rule of rules) paint(stroked, ink, rule);
+          cell += span;
+          at += span - 1;
+          continue;
+        }
+
+        if (buffer === "") bufferAt = cell;
+        buffer += char;
+        cell += width(char);
+      }
+
+      flush();
     }
   });
+
+  const paths = [
+    ...[...filled.values()].map(
+      ({ ink, d }) => `<path fill="${ink.fill}" opacity="${ink.opacity}" d="${d.join("")}"/>`,
+    ),
+    ...[...stroked.values()].map(
+      ({ ink, d }) =>
+        `<path fill="none" stroke="${ink.fill}" stroke-width="${STROKE}" opacity="${ink.opacity}" d="${d.join("")}"/>`,
+    ),
+  ];
 
   const lights = ["#ff5f57", "#febc2e", "#28c840"]
     .map(
@@ -226,6 +434,7 @@ export function toSvg(frame: string, { columns, title = "grove" }: ShotOptions):
 ${lights}
 <text x="${w / 2}" y="${TITLE_H / 2 + 4}" fill="#8b8f98" font-size="12" text-anchor="middle">${escapeText(title)}</text>
 ${rects.join("\n")}
+${paths.join("\n")}
 ${texts.join("\n")}
 </svg>
 `;
