@@ -377,6 +377,16 @@ describe("hintsFor", () => {
       "discard",
       "keep",
     ]);
+    // `keep` would be an answer to a question nobody asked: a sync that does
+    // not run takes nothing away, it leaves the branch where it stands.
+    expect(hintsFor("confirm", leaf, "sync").map((hint) => hint.action)).toEqual([
+      "sync",
+      "leave it",
+    ]);
+    expect(hintsFor("confirm", leaf, "sync-all").map((hint) => hint.action)).toEqual([
+      "sync",
+      "leave it",
+    ]);
   });
 
   test("`x` is offered on a worktree with something to throw away, and nowhere else", () => {

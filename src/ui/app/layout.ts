@@ -127,7 +127,7 @@ export type ModeKind = LayoutMode["kind"];
  * The same shape as the screen's own `Pending["kind"]`, spelled again here so
  * the arithmetic does not have to import the component it lays out.
  */
-export type ConfirmKind = "one" | "many" | "reset";
+export type ConfirmKind = "one" | "many" | "reset" | "sync" | "sync-all";
 
 // The keys each popup answers to. A mode that takes the keyboard says so here
 // rather than in `hintsFor` below, where only the list's own hints are decided.
@@ -154,6 +154,40 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
 };
 
 /**
+ * What `y` and `n` do, said in the words the question used.
+ *
+ * A prompt that asks about discarding changes and offers `y remove` is two
+ * answers to one question. `n` is spelled the same way: it is `keep` where
+ * something was about to be taken away, and `leave it` where nothing was —
+ * a sync that does not happen leaves the branch where it stands.
+ *
+ * A record rather than a chain of ternaries, so a new confirmation cannot be
+ * added without deciding what its two keys say.
+ */
+const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
+  one: [
+    { keys: "y", action: "remove" },
+    { keys: "n", action: "keep" },
+  ],
+  many: [
+    { keys: "y", action: "remove" },
+    { keys: "n", action: "keep" },
+  ],
+  reset: [
+    { keys: "y", action: "discard" },
+    { keys: "n", action: "keep" },
+  ],
+  sync: [
+    { keys: "y", action: "sync" },
+    { keys: "n", action: "leave it" },
+  ],
+  "sync-all": [
+    { keys: "y", action: "sync" },
+    { keys: "n", action: "leave it" },
+  ],
+};
+
+/**
  * What the key bar says, given the mode and the row under the cursor.
  *
  * Deliberately not derived from the key handler, and not a table the handler
@@ -175,13 +209,8 @@ export function hintsFor(
   current: TreeRow | undefined,
   confirming?: ConfirmKind,
 ): readonly Hint[] {
-  // What `y` does, said in the word the question used: a prompt that asks about
-  // discarding changes and offers `y remove` is two answers to one question.
   if (modeKind === "confirm") {
-    return [
-      { keys: "y", action: confirming === "reset" ? "discard" : "remove" },
-      { keys: "n", action: "keep" },
-    ];
+    return CONFIRM_WORDS[confirming ?? "one"];
   }
 
   const popup = MODE_HINTS[modeKind];

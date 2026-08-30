@@ -72,7 +72,11 @@ type Pending =
       readonly dirty: number;
     }
   /** `x`: the directory stays, everything uncommitted in it does not. */
-  | { readonly kind: "reset"; readonly summary: WorktreeSummary };
+  | { readonly kind: "reset"; readonly summary: WorktreeSummary }
+  /** `s`, where the sync it starts would rewrite commits the remote already has. */
+  | { readonly kind: "sync"; readonly summary: WorktreeSummary }
+  /** `/sync-all`, where `count` of the worktrees would. */
+  | { readonly kind: "sync-all"; readonly count: number };
 
 type Mode =
   | { readonly kind: "list" }
@@ -375,6 +379,45 @@ function StateCell({
 }
 
 /**
+ * Whether syncing this worktree would rewrite commits the remote already has.
+ *
+ * The question `s` has to answer before it acts, and it is answered from the
+ * numbers already on the screen rather than by asking git a second time — the
+ * caller has just refetched, so these are as fresh as the push itself will be.
+ *
+ * It mirrors what `syncOne` does, in the same order, and every `false` here is
+ * a case that command handles without a force-push. Getting one of them wrong
+ * costs a prompt in front of something harmless, or — the direction that
+ * matters — no prompt in front of something that is not.
+ */
+export function wouldForcePush(summary: WorktreeSummary): boolean {
+  // The trunk is the one branch `sync` pushes plainly: after its rebase it is
+  // strictly ahead, so there is nothing on the remote to overwrite. A detached
+  // HEAD has no branch to move at all.
+  if (summary.isDefault || summary.branch === undefined) return false;
+
+  // Both of these `sync` skips before it touches anything, so a prompt here
+  // would stand in front of a command that is about to decline — which is the
+  // prompt that teaches people to answer `y` without reading it.
+  if (summary.dirty || summary.rebasing) return false;
+
+  // Nothing published is nothing to overwrite. `publish` returns early on
+  // exactly this, which is its own problem and not one a prompt can fix.
+  if (summary.upstream === undefined) return false;
+
+  // Absent means git could not answer — 2.41 for `%(ahead-behind:)` — and an
+  // unanswered question about a force-push is asked rather than assumed away.
+  const trunk = summary.trunk;
+  if (trunk === undefined) return true;
+
+  // Nothing of its own is nothing to rewrite; and level with both the trunk
+  // and its own remote is a rebase that moves no commit anywhere.
+  if (trunk.ahead === 0) return false;
+
+  return trunk.behind > 0 || summary.behind > 0;
+}
+
+/**
  * The question a destructive key asks, and what it costs to answer `y`.
  *
  * Each one says what survives, since that is what the person is actually
@@ -417,6 +460,32 @@ export function describePending(target: Pending): {
     return {
       text: `discard ${describeDiscard(changed - untracked, untracked)} in ${dir}? there is no undo`,
       colour: theme.danger,
+    };
+  }
+
+  // Both spellings of the same question, and the number is the point of it:
+  // "3 commits rewritten" is something to weigh, "this force-pushes" is
+  // something to wave through. `warn` rather than `danger` because a
+  // force-push is recoverable from the reflog and `x` is recoverable from
+  // nothing — keeping the two colours apart is what makes either mean
+  // anything.
+  if (target.kind === "sync") {
+    const { dir, trunk, upstream } = target.summary;
+    // No count where git is too old to have given one; see `wouldForcePush`.
+    const rewritten = trunk === undefined ? "commits" : plural(trunk.ahead, "commit");
+
+    return {
+      text: `sync ${dir}? ${rewritten} rewritten and force-pushed to ${upstream}`,
+      colour: theme.warn,
+    };
+  }
+
+  if (target.kind === "sync-all") {
+    const branches = `${target.count} ${target.count === 1 ? "branch is" : "branches are"}`;
+
+    return {
+      text: `sync every worktree? ${branches} force-pushed`,
+      colour: theme.warn,
     };
   }
 
@@ -646,6 +715,90 @@ export function App({
     },
     [refresh, store],
   );
+
+  /**
+   * Refetch and re-read, and hand the rows back as well as drawing them.
+   *
+   * `catchUp` below does the same two calls on a timer and keeps nothing; this
+   * is for the one caller that has to *decide* on what came back, before the
+   * screen is drawn from it.
+   */
+  const reread = useCallback(async (): Promise<readonly WorktreeSummary[]> => {
+    // Reports `false` rather than throwing when it cannot reach the remote, and
+    // that is left alone here on purpose: offline, the push at the end of the
+    // sync fails too, so no force-push anybody was not asked about reaches
+    // anything. What is stale is the question, not the answer.
+    await service.fetch();
+    const summaries = await service.list();
+    setRows(summaries);
+
+    return summaries;
+  }, [service]);
+
+  /**
+   * `s`: fetch, then decide whether this is a question or just a command.
+   *
+   * The fetch has to come first and it has to come *before* anything is
+   * touched. The numbers on the screen are from the last background tick, and
+   * deciding on those would mean the one case that matters — a trunk that moved
+   * since — is the case the prompt misses. And a rebase already done is not a
+   * decision anybody can still be offered: answering `no` there would leave the
+   * branch rewritten and adrift from its remote, which is the exact state
+   * `sync` learned to push in order to prevent. So: fetch, ask, then everything
+   * or nothing.
+   *
+   * It costs a second round trip, since `syncWorktrees` fetches again when it
+   * runs. That is the price of the question being about what is there now
+   * rather than about what was there a minute ago, and a fetch that finds
+   * nothing new is the cheap half of this screen's existing timer anyway.
+   */
+  const beginSync = useCallback(
+    async (summary: WorktreeSummary) => {
+      store.clear();
+      setMessage(undefined);
+      setMode({ kind: "busy", label: `checking ${summary.dir}` });
+
+      const run = () => void perform(`syncing ${summary.dir}`, () => service.sync(summary.path));
+
+      let fresh: readonly WorktreeSummary[];
+      try {
+        fresh = await reread();
+      } catch {
+        // The read failed, so there is nothing to decide on. `sync` is about to
+        // do the same reads and will say what went wrong in its own words.
+        return run();
+      }
+
+      // Gone from under the cursor between the keystroke and the fetch. Run it
+      // anyway: `sync` resolves the target itself and says so properly.
+      const now = fresh.find((row) => row.path === summary.path);
+      if (now === undefined || !wouldForcePush(now)) return run();
+
+      return setMode({ kind: "confirm", target: { kind: "sync", summary: now } });
+    },
+    [perform, reread, service, store],
+  );
+
+  /** The same question for `/sync-all`, asked once for however many it covers. */
+  const beginSyncAll = useCallback(async () => {
+    store.clear();
+    setMessage(undefined);
+    setMode({ kind: "busy", label: "checking every worktree" });
+
+    const run = () => void perform("syncing every worktree", () => service.sync());
+
+    let fresh: readonly WorktreeSummary[];
+    try {
+      fresh = await reread();
+    } catch {
+      return run();
+    }
+
+    const count = fresh.filter(wouldForcePush).length;
+    if (count === 0) return run();
+
+    return setMode({ kind: "confirm", target: { kind: "sync-all", count } });
+  }, [perform, reread, service, store]);
 
   /**
    * What follows an `a` that made a worktree whose file wants to run commands.
@@ -928,7 +1081,7 @@ export function App({
           if (!selected) return;
           return void perform(`filling in ${selected.dir}`, () => service.setup(selected.path));
         case "sync-all":
-          return void perform("syncing every worktree", () => service.sync());
+          return void beginSyncAll();
         case "review":
           return void openPrs();
         case "refresh":
@@ -939,7 +1092,7 @@ export function App({
           return setLogOn((on) => !on);
       }
     },
-    [perform, openPrs, selected, service],
+    [perform, beginSyncAll, openPrs, selected, service],
   );
 
   useInput((input, key) => {
@@ -1157,6 +1310,19 @@ export function App({
           );
         }
 
+        // Both sync answers run the command unchanged: the question was about
+        // whether to start it, and `syncWorktrees` decides the rest exactly as
+        // it does from the command line.
+        if (target.kind === "sync") {
+          return void perform(`syncing ${target.summary.dir}`, () =>
+            service.sync(target.summary.path),
+          );
+        }
+
+        if (target.kind === "sync-all") {
+          return void perform("syncing every worktree", () => service.sync());
+        }
+
         // `discardDirty` carries the answer just given: the question counted
         // the uncommitted changes, so the removal may now discard them.
         return void (target.kind === "one"
@@ -1269,7 +1435,7 @@ export function App({
       return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
     }
     if (input === "s" && selected) {
-      return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
+      return void beginSync(selected);
     }
     // The one key here not aimed at the row under the cursor, and the reason
     // the others are still few: everything that acts on the repository rather

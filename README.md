@@ -45,7 +45,7 @@ grove clone <url> [dir]     # Clone a repository as a bare clone and set up its 
 grove add <branch>          # Create a new worktree for a branch, tracking its remote counterpart
 grove pr <number>           # Create a worktree for reviewing a pull request, on a branch you can push back from
 grove list                  # List all worktrees along with their git status and sync drift
-grove sync [target]         # Fetch and bring all worktrees up-to-date by rebasing them
+grove sync [target]         # Fetch, rebase a worktree up to date, and push the result back
 grove exec <command>...     # Run one command in every worktree
 grove prune                 # Remove every worktree whose branch is merged or gone from the remote
 grove rename <target> <new> # Rename a branch and move its worktree directory to match
@@ -59,6 +59,8 @@ grove doctor                # Check the repository for the traps that break a la
 grove completion <shell>    # Print the tab-completion script (`grove install` writes it for you)
 ```
 
+`sync` is the one that does more than its name suggests, and it is worth reading once. It fetches, rebases the branch onto its own remote and then onto the trunk, and **pushes the result back** — with `--force-with-lease --force-if-includes`, because the rebase gave every commit it moved a new sha and the branch is otherwise left adrift from the remote it tracks with nothing able to close the gap. The trunk is the exception and never gets a force: after its rebase it is strictly ahead, so a plain push does. `--no-push` leaves the rebase local.
+
 Three flags worth knowing:
 
 - `grove add <branch> --take` moves the changes you have been making in the current worktree into the new one — staged still staged, untracked carried across — without going near the shared stash stack.
@@ -70,7 +72,7 @@ Three flags worth knowing:
 Running `grove` with no arguments opens the screen above.
 
 - **Move**: `↑`/`↓` or `j`/`k`, `←`/`→` or `h`/`l` to fold a directory, `q` to quit.
-- **Act**: `a` adds, `r` removes — a folder takes everything under it — and `s` syncs the row under the cursor. Removals confirm, and say what they would discard.
+- **Act**: `a` adds, `r` removes — a folder takes everything under it — and `s` syncs the row under the cursor. Removals confirm, and say what they would discard. So does a sync that would force-push: it refetches first, then asks — naming the branch and counting the commits it is about to rewrite — and where the sync would not rewrite anything published, it simply runs.
 - **Discard**: `x` throws away what a dirty worktree has changed — `reset --hard` and `clean -fd`, so untracked files go too — leaving the directory and the branch. It is offered only where there is something to take, it counts the tracked changes and the untracked files apart before you answer, and there is no undo.
 - **Copy**: `Enter` puts the selected path on the clipboard, ready for another tab or an editor.
 - **Look**: the selected worktree's last few commits are drawn under the list, and its uncommitted files beside it, as the tree they sit in.

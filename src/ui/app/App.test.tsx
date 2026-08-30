@@ -7,7 +7,7 @@ import type { Commit } from "../../core/history.ts";
 import { LineStore } from "../../report/lines.ts";
 import { keys, nextFrame, plain, waitFor } from "../test-utils.ts";
 import { theme } from "../theme.ts";
-import { App, describePending, pathOf } from "./App.tsx";
+import { App, describePending, pathOf, wouldForcePush } from "./App.tsx";
 import { commandsFor } from "./Menu.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, type TreeRow } from "./tree.ts";
@@ -332,11 +332,13 @@ const BUSY = (frame: string) => frame.includes("ctrl+c cancel");
 
 describe("describePending", () => {
   /**
-   * The question `r` and `x` ask, in all five of their wordings.
+   * The question `r`, `x` and `s` ask, in every one of their wordings.
    *
-   * These are the app's only destructive prompts, and the colour is decided
-   * with the words rather than beside them — so both are asserted together, as
-   * the one answer the function actually gives.
+   * These are the app's only prompts, and the colour is decided with the words
+   * rather than beside them — so both are asserted together, as the one answer
+   * the function actually gives. Amber and red are a distinction the words
+   * cannot make on their own: a removal and a force-push can be walked back
+   * from, and what `x` takes cannot.
    */
   test("one clean worktree: what goes, what stays, and amber for a risk you can undo", () => {
     expect(describePending({ kind: "one", summary: summary({ dir: "feat/login" }) })).toEqual({
@@ -399,6 +401,119 @@ describe("describePending", () => {
     // head before `y` is pressed and a `1 have` is a sentence you re-read.
     expect(under(2).text).toContain("2 have uncommitted changes");
     expect(under(2).colour).toBe(theme.danger);
+  });
+
+  test("`s` counts the commits it would rewrite, names where they go, and asks in amber", () => {
+    // `trunk.ahead` is the count, because those are the commits the rebase
+    // replays and therefore the ones that come out with new shas.
+    const behind = summary({ dir: "feat/login", ahead: 2, trunk: { ahead: 5, behind: 3 } });
+
+    expect(describePending({ kind: "sync", summary: behind })).toEqual({
+      text: "sync feat/login? 5 commits rewritten and force-pushed to origin/feat/login",
+      colour: theme.warn,
+    });
+    // Amber and not red: the commits are in the reflog either side of this, so
+    // it is the `r` kind of risk rather than the `x` kind.
+    expect(describePending({ kind: "sync", summary: behind }).colour).not.toBe(theme.danger);
+  });
+
+  test("one commit is said in the singular, and no count at all when git could not give one", () => {
+    const one = summary({ dir: "feat/login", trunk: { ahead: 1, behind: 2 } });
+    expect(describePending({ kind: "sync", summary: one }).text).toContain("1 commit rewritten");
+
+    // git older than 2.41 answers nothing for the trunk column, and a sentence
+    // that made a number up would be worse than one that leaves it out.
+    const unknown = summary({ dir: "feat/login" });
+    expect(describePending({ kind: "sync", summary: unknown }).text).toBe(
+      "sync feat/login? commits rewritten and force-pushed to origin/feat/login",
+    );
+  });
+
+  test("`/sync-all` asks once, counting the branches rather than the worktrees", () => {
+    expect(describePending({ kind: "sync-all", count: 3 })).toEqual({
+      text: "sync every worktree? 3 branches are force-pushed",
+      colour: theme.warn,
+    });
+    // The verb follows the count here for the same reason it does above.
+    expect(describePending({ kind: "sync-all", count: 1 }).text).toContain(
+      "1 branch is force-pushed",
+    );
+  });
+});
+
+/**
+ * The test `s` runs before it decides whether to ask.
+ *
+ * Every `false` here has to be a case `syncWorktrees` really does handle
+ * without rewriting anything on the remote, because a `false` that is wrong is
+ * a force-push nobody was asked about — the whole reason this function exists.
+ * A wrong `true` only costs a prompt.
+ */
+describe("wouldForcePush", () => {
+  test("the trunk never does: after its rebase it is ahead, so the push is a plain one", () => {
+    expect(
+      wouldForcePush(summary({ dir: "main", isDefault: true, trunk: { ahead: 2, behind: 3 } })),
+    ).toBe(false);
+  });
+
+  test("a branch behind the trunk with commits of its own does", () => {
+    expect(wouldForcePush(summary({ dir: "feat/login", trunk: { ahead: 5, behind: 3 } }))).toBe(
+      true,
+    );
+  });
+
+  test("so does one whose own remote gained a commit, even with the trunk level", () => {
+    // The rebase onto `origin/feat/login` replays this branch's commits over a
+    // colleague's, which rewrites them just as surely as the trunk would.
+    expect(
+      wouldForcePush(summary({ dir: "feat/login", behind: 1, trunk: { ahead: 2, behind: 0 } })),
+    ).toBe(true);
+  });
+
+  test("level with both is a rebase that moves nothing, so there is nothing to ask", () => {
+    expect(wouldForcePush(summary({ dir: "feat/login", trunk: { ahead: 2, behind: 0 } }))).toBe(
+      false,
+    );
+  });
+
+  test("a branch with nothing of its own has nothing to rewrite", () => {
+    expect(wouldForcePush(summary({ dir: "feat/login", trunk: { ahead: 0, behind: 4 } }))).toBe(
+      false,
+    );
+  });
+
+  test("nothing published is nothing to overwrite", () => {
+    expect(
+      wouldForcePush(
+        summary({ dir: "feat/login", upstream: undefined, trunk: { ahead: 2, behind: 3 } }),
+      ),
+    ).toBe(false);
+  });
+
+  test("the two states `sync` skips are not asked about, because it will decline anyway", () => {
+    const base = { dir: "feat/login", trunk: { ahead: 2, behind: 3 } } as const;
+
+    expect(wouldForcePush(summary({ ...base, dirty: true, changed: 1 }))).toBe(false);
+    expect(wouldForcePush(summary({ ...base, rebasing: true }))).toBe(false);
+  });
+
+  test("a detached HEAD has no branch to move", () => {
+    expect(
+      wouldForcePush(
+        summary({
+          dir: "feat/login",
+          branch: undefined,
+          detached: true,
+          trunk: { ahead: 2, behind: 3 },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  test("an unanswered question is asked rather than assumed away", () => {
+    // No trunk drift at all is git too old to have answered. The prompt is the
+    // safe direction, and it is the direction with the cheaper mistake.
+    expect(wouldForcePush(summary({ dir: "feat/login", ahead: 2 }))).toBe(true);
   });
 });
 
