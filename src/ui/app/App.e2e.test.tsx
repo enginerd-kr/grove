@@ -83,6 +83,9 @@ function stateDot(ui: UiSession, label: string): Cell {
   return cell;
 }
 
+/** The app's opening `busy` label, which is also the row that says the keyboard is blocked. */
+const FIRST_READ = "reading worktrees";
+
 /**
  * Starts the app and waits until it is reading keys.
  *
@@ -90,10 +93,17 @@ function stateDot(ui: UiSession, label: string): Cell {
  * the first paint, so a key sent into that window is eaten by the line
  * discipline. `R` is the one key worth resending — it refreshes however often
  * it arrives — and the activity line it leaves is proof the app took it.
+ *
+ * The first read has to be waited out before that key is sent, and the column
+ * heading is not the signal for it: the heading is drawn while the app is still
+ * `busy`, and `perform` blocks the keyboard for as long as it is. An `R` sent
+ * there is dropped rather than queued, so what followed was a resend landing on
+ * an app that had just started reading the first one — and the test's next key
+ * arriving inside that second refresh, to be dropped in turn.
  */
 async function open(cwd: string, cols = 100, rows = 30): Promise<UiSession> {
   const ui = startUi({ cwd, cols, rows });
-  await ui.waitForFrame((frame) => frame.includes("worktree"), WAIT);
+  await ui.waitForFrame((frame) => frame.includes("worktree") && !frame.includes(FIRST_READ), WAIT);
   await ui.pressUntil("R", (frame) => frame.includes("refreshed"), WAIT);
 
   return ui;

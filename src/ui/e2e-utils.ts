@@ -72,7 +72,24 @@ export type UiSession = {
   readonly kill: () => void;
 };
 
-/** Gap between resends: long enough that a delivered key has repainted first. */
+/**
+ * How long a resend waits for the child to say something first.
+ *
+ * A resend is for the one key that was never read — raw mode is enabled from an
+ * effect that runs after the first paint, and a key sent into that window is
+ * eaten by the line discipline. It is *not* for a key that landed and is taking
+ * a while to answer, and telling the two apart matters more than it looks: the
+ * app blocks the keyboard while a command runs and drops what arrives, so a
+ * second copy of a key sent during the first one's work is not a retry, it is a
+ * key queued behind a refresh that will swallow the test's next press. That is
+ * how two of these tests failed on a runner and nowhere else — `open`'s `R`
+ * resent while the first refresh was still fetching, and the `L` that followed
+ * landed inside the second refresh and was discarded.
+ *
+ * So a resend needs silence as well as time: anything at all from the child
+ * proves the key was read, and only a screen that has said nothing since the
+ * write is one that never heard it.
+ */
 const RETRY_MS = 250;
 
 /**
@@ -136,6 +153,8 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
   // as settled while a write is still queued.
   let pendingWrites = 0;
   let heardSinceClear = true;
+  // Whether the child has spoken since the last key was written; see RETRY_MS.
+  let heardSinceWrite = true;
 
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
     cwd,
@@ -177,6 +196,7 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
         });
         lastDataAt = Date.now();
         heardSinceClear = true;
+        heardSinceWrite = true;
       },
     },
   });
@@ -217,6 +237,7 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
 
   const write = (input: string) => {
     try {
+      heardSinceWrite = false;
       proc.terminal?.write(input);
     } catch {
       // The process can exit between the check and the write; nothing to send to.
@@ -285,6 +306,7 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
     waitForFrame,
     pressUntil: async (input, predicate, timeoutMs = 5000) => {
       const deadline = Date.now() + timeoutMs;
+      let sent = false;
       let lastWrite = 0;
 
       for (;;) {
@@ -297,8 +319,10 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
           );
         }
 
-        if (Date.now() - lastWrite >= RETRY_MS) {
+        // The first one goes out at once; the rest only into silence.
+        if (!sent || (!heardSinceWrite && Date.now() - lastWrite >= RETRY_MS)) {
           write(input);
+          sent = true;
           lastWrite = Date.now();
         }
 

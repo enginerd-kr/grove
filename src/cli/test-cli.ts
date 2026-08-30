@@ -15,6 +15,26 @@
 
 const ENTRY = `${import.meta.dir}/../cli.tsx`;
 
+/**
+ * The child's environment.
+ *
+ * `process.env` is spread rather than left to `Bun.spawn`'s default, and that
+ * is the whole of the isolation these tests claim. `withTempRepo` installs the
+ * pinned git identity and `GIT_CONFIG_GLOBAL=/dev/null` on `process.env` for
+ * the duration of a test, but Bun's default inherits the environment the
+ * runner started with, so a child spawned without this saw none of it and read
+ * whoever's `~/.gitconfig` was there instead.
+ *
+ * It passed on a laptop for exactly the reason it had to fail on a runner: a
+ * developer's global config supplies `user.email`, so a rebase inside `sync`
+ * committed happily; on a machine with no global config git cannot auto-detect
+ * an identity and the rebase dies with `Committer identity unknown`, which
+ * `sync` can only report as a conflict.
+ */
+function childEnv(env: RunCliOptions["env"]): Record<string, string | undefined> {
+  return { ...process.env, ...env };
+}
+
 type RunCliOptions = {
   /**
    * Where the child starts.
@@ -34,7 +54,7 @@ export async function runCli(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: childEnv(env),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
@@ -100,7 +120,7 @@ export type LiveCli = {
 export function startCli(args: readonly string[] = [], { cwd, env }: RunCliOptions = {}): LiveCli {
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
     cwd,
-    env: env ? { ...process.env, ...env } : undefined,
+    env: childEnv(env),
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
