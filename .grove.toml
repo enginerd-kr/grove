@@ -8,5 +8,17 @@
 # faster and wrong the moment two branches disagree about a dependency — and
 # with a lockfile, `bun install` in a fresh worktree is seconds. `dist` is a
 # build output, which is never a thing to share.
+#
+# The editor is `open` and not a second `run` line. A `run` line is awaited, so
+# `grove add` would sit here until the window was closed, and it is killable, so
+# the next Ctrl-C would close it.
+#
+# Written per platform because neither line works on the other machine: `open`
+# is a macOS program, and `code` is on a Linux PATH long before macOS has been
+# asked to install the shell command.
 [setup]
-run = ["bun install", "open -a \"Visual Studio Code\" ."]
+run = ["bun install"]
+
+[setup.open]
+macos = 'open -a "Visual Studio Code" .'
+linux = "code ."

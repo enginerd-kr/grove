@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode } from "../../cli/exit-codes.ts";
 import { runCli } from "../../cli/test-cli.ts";
+import { entryExists } from "../fs.ts";
 import { managedRepo, withTempRepo } from "../test-utils.ts";
 
 /**
@@ -12,13 +13,17 @@ import { managedRepo, withTempRepo } from "../test-utils.ts";
  * `addWorktree` directly and holds the `AddResult` and the `GroveError` that a
  * process throws away. What is left here is the three things only a process
  * has: the `--json` document as a program actually receives it, the sentence
- * `cli/run.ts` composes about a `--take` that emptied somebody's directory, and
- * the number the shell is left holding when the command refuses.
+ * `cli/run.ts` composes about a `--take` that emptied somebody's directory, the
+ * number the shell is left holding when the command refuses, and what `[setup]
+ * open` decides when nobody is watching the run.
  *
- * None of the three could move in-process, because none of them exists there:
+ * None of the four could move in-process, because none of them exists there:
  * the document is `JSON.stringify` in `run.ts`, the sentence is built in
- * `run.ts` out of `took.stash`, and an exit code is what `cli.tsx` makes of a
- * `GroveError` on its way out. The repository these run against is still built
+ * `run.ts` out of `took.stash`, an exit code is what `cli.tsx` makes of a
+ * `GroveError` on its way out — and whether there is a terminal to open into is
+ * a fact about a process's own stdout, which `run.ts` reads and hands down. A
+ * test that called `runSetup` would be choosing the answer rather than finding
+ * it out. The repository these run against is still built
  * in-process — `managedRepo` rather than `grove clone` — because a fixture is
  * never what a test is about.
  */
@@ -108,6 +113,32 @@ describe("grove add", () => {
       expect(nowhere.exitCode).toBe(ExitCode.usage);
       expect(nowhere.stderr).toContain('cannot start a branch from "nowhere"');
       expect(nowhere.stdout).toBe("");
+    });
+  }, 60_000);
+
+  test("runs the commands but opens nothing when nobody is watching", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const root = repo.root;
+
+      await Bun.write(
+        join(root, "main", ".grove.toml"),
+        '[setup]\nrun = ["touch ran.txt"]\nopen = "touch opened.txt"\n',
+      );
+
+      // `runCli` gives the child pipes, which is the whole point: this is
+      // `grove add | tee` and CI, and it is the one place the tool is allowed
+      // to behave differently under a terminal.
+      const added = await runCli(["add", "feat/login", "--trust"], { cwd: root });
+
+      expect([added.exitCode, added.stderr]).toEqual([ExitCode.ok, added.stderr]);
+
+      const worktree = join(root, "feat", "login");
+      // `run` is unaffected. Only the key whose subject is a person is skipped,
+      // and it says so rather than leaving the silence to be worked out.
+      expect(await entryExists(join(worktree, "ran.txt"))).toBe(true);
+      expect(await entryExists(join(worktree, "opened.txt"))).toBe(false);
+      expect(added.stderr).toContain("did not open: this is not a terminal");
     });
   }, 60_000);
 });

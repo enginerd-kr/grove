@@ -44,6 +44,14 @@ export type AddOptions = {
    */
   readonly trust: boolean;
   /**
+   * Whether `[setup] open` may start the app it names. Defaults to allowed.
+   *
+   * The one place this tool does look at the terminal, and `cli/run.ts` is
+   * where that is decided — see `openWhatItAsksFor` for why `open` gets the
+   * exception the rule above denies everything else.
+   */
+  readonly open?: boolean;
+  /**
    * Carry the uncommitted changes of the worktree you are standing in into the
    * new one, leaving that one clean.
    *
@@ -145,7 +153,14 @@ export async function addWorktree(
   const took = source === undefined ? undefined : await take(source, path, dir, reporter);
 
   const setup = plan
-    ? await setUpWorktree(repo, path, options.branch, options.trust ? undefined : plan, reporter)
+    ? await setUpWorktree(
+        repo,
+        path,
+        options.branch,
+        options.trust ? undefined : plan,
+        reporter,
+        options.open,
+      )
     : undefined;
 
   return {
@@ -226,12 +241,13 @@ async function setUpWorktree(
   /** Absent when `--trust` was passed: the plan is re-read after it is recorded. */
   plan: SetupPlan | undefined,
   reporter: Reporter,
+  open?: boolean,
 ): Promise<SetupResult> {
   const target = { path, branch };
   const result =
     plan === undefined
-      ? await trustAndRun(repo, target, reporter)
-      : await runSetup(repo, target, { plan }, reporter);
+      ? await trustAndRun(repo, target, reporter, { open })
+      : await runSetup(repo, target, { plan, open }, reporter);
   const failure = failureFor(result);
 
   if (failure) {

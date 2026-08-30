@@ -18,6 +18,7 @@ import { runGit, runGitOrThrow } from "./git.ts";
  * link = ["node_modules"]
  * env  = { UV_INDEX_USERNAME = "PLACE_HOLDER" }
  * run  = ["uv sync"]
+ * open = "code ."
  * ```
  *
  * The cost of travelling is `run`: a `git pull` can now hand you a command that
@@ -32,6 +33,48 @@ import { runGit, runGitOrThrow } from "./git.ts";
  * branch already checked out is merged entry by entry, the trunk winning where
  * both have one. See `copyEntry` and `takeOne` in `setup.ts` for why `link`
  * does not follow that rule.
+ *
+ * `open` is the last line of the file's story and the one thing here that is not
+ * about the worktree: `run` makes a checkout runnable, and `open` is the editor
+ * you were going to start anyway. It is a separate key because it cannot be a
+ * `run` line. Those go through `runShell`, which is `detached` so that a
+ * cancelled `bun install && bun run build` takes its whole tree down with it —
+ * and a process group is exactly what an editor must not be in, because the
+ * next Ctrl-C would close it. They are also awaited, which would leave `grove
+ * add` sitting behind an editor nobody has quit yet, and their output is piped
+ * somewhere nobody reads. `openShell` in `git.ts` does the opposite of all
+ * three: started, watched only for the moment a mistake would show, and then
+ * let go of.
+ *
+ * It is a command line like `run`'s, and it runs in the worktree, so `.` is the
+ * worktree. What it is not is a line that works everywhere: `open -a` is macOS
+ * and `xdg-open` is not, and `code` is on a Linux PATH long before macOS has
+ * been asked to install the shim. A file whose whole claim is that it travels
+ * cannot pick one of those, so `[setup.open]` writes it once per platform:
+ *
+ * ```toml
+ * [setup.open]
+ * macos = 'open -a "Visual Studio Code" .'
+ * linux = "code ."
+ * ```
+ *
+ * A platform the table leaves out opens nothing, and the run says so rather
+ * than leaving somebody to wonder why their editor was the one that did not
+ * appear. A bare `open = "code ."` fills all three, for the file whose team is
+ * all on one kind of machine.
+ *
+ * One line and not a list, because the shell it is handed to already spells
+ * "and this too" as `&&` — and because a list is what somebody reaches for when
+ * what they wanted was the table above, which is where the refusal points them.
+ *
+ * Letting go is the price, and it is paid in what can be reported. No stream is
+ * kept — a pipe nobody drains stops the writer, and one somebody drains holds
+ * `grove` here for an editor's whole lifetime — so a line's own words are lost.
+ * What survives is the exit code, if there is one inside the moment `openShell`
+ * watches for: `open -a "Visual Stuio Code" .` answers in about a sixth of a
+ * second, and a misspelled editor that opened nothing and said nothing was the
+ * worst thing this key could do. Past that moment a line is one that means to
+ * keep running, which is what opening something looks like.
  *
  * TOML because Bun parses it with no dependency, and because a file people are
  * expected to read and review deserves comments. It is read out of the trunk's
@@ -68,6 +111,36 @@ export type TeardownPlan = {
   readonly commands: readonly string[];
 };
 
+/** The platforms `[setup.open]` can name, which is every one grove runs on. */
+export type OpenTarget = "macos" | "linux" | "windows";
+
+/** One command line per platform, run in the worktree. `""` means "not here". */
+export type OpenPlan = Readonly<Record<OpenTarget, string>>;
+
+/**
+ * Which key a running platform answers to.
+ *
+ * Named for what people write on a config line rather than for what Node calls
+ * them: `macos` and not `darwin`, `windows` and not `win32`. `linux` catches
+ * every other Unix too, which is the honest reading — the rule there is "the
+ * name is the command", and that is as true on FreeBSD as on Ubuntu. Not named
+ * per distribution: `process.platform` cannot tell Ubuntu from Fedora, so an
+ * `ubuntu` key would be a promise this could not keep.
+ */
+export function openTargetFor(platform: NodeJS.Platform): OpenTarget {
+  if (platform === "darwin") return "macos";
+  if (platform === "win32") return "windows";
+
+  return "linux";
+}
+
+export const NO_OPEN: OpenPlan = { macos: "", linux: "", windows: "" };
+
+/** Whether the file asked to open anything at all, on any platform. */
+export function wantsOpen(open: OpenPlan): boolean {
+  return open.macos !== "" || open.linux !== "" || open.windows !== "";
+}
+
 export type SetupPlan = {
   /** Paths taken from the trunk, each a file or a whole directory. */
   readonly copy: readonly string[];
@@ -76,6 +149,25 @@ export type SetupPlan = {
   readonly env: readonly SetupEnv[];
   /** Command lines, run in the order the file lists them. */
   readonly commands: readonly string[];
+  /**
+   * What to open the finished worktree with, per platform, as a command line.
+   *
+   * `""` is "nothing to open on that one" — either because the file said
+   * nothing at all, or because it named the platforms it knew about and this
+   * was not one of them. Run in the worktree, so `.` is the worktree.
+   *
+   * Three lines and not one, because there is no one line. `open -a` is macOS
+   * and `code` is what is on a Linux PATH, and a file whose whole claim is that
+   * it travels cannot pick one of those and be right on the other. A bare
+   * `open = "code ."` fills all three, which is the common case and stays a
+   * single line.
+   *
+   * Held apart from `commands` all the way down rather than merged with a flag:
+   * every rule that applies to one is the opposite of the rule for the other —
+   * awaited against watched-briefly-then-released, killable against not, part
+   * of what `add` reports against beside it.
+   */
+  readonly open: OpenPlan;
   /**
    * `[teardown]`, carried on the same plan.
    *
@@ -98,17 +190,29 @@ export const EMPTY_PLAN: SetupPlan = {
   link: [],
   env: [],
   commands: [],
+  open: NO_OPEN,
   teardown: EMPTY_TEARDOWN,
 };
 
 /** How much of the file asked for something. Zero means there is nothing to do. */
 export function plannedCount(plan: SetupPlan): number {
-  return plan.copy.length + plan.link.length + plan.commands.length;
+  // `open` counts once however many arguments or platforms spell it: it is one
+  // application, and the rest is how to start it rather than more work. Counted
+  // even when this platform is not one it named, because the question here is
+  // whether the file asked for anything — "nothing to do" and "no file at all"
+  // are different answers and this is what tells them apart.
+  return (
+    plan.copy.length + plan.link.length + plan.commands.length + (wantsOpen(plan.open) ? 1 : 0)
+  );
 }
 
 /** What each key's error says to write instead, so the advice is about that key. */
 const EXAMPLES: Readonly<Record<string, string>> = {
   run: "bun install",
+  open: "code .",
+  macos: 'open -a "Visual Studio Code" .',
+  linux: "code .",
+  windows: "code .",
   env: "UV_INDEX_USERNAME=PLACE_HOLDER",
 };
 
@@ -136,7 +240,85 @@ function stringsAt(
   return value as readonly string[];
 }
 
-const KNOWN = new Set(["copy", "link", "env", "run"]);
+/**
+ * `open`, in either of the two shapes it is written in.
+ *
+ * One name covers every platform, which is what most files want and what keeps
+ * them one line long. A table names them apart, for the editor that is `Visual
+ * Studio Code` to macOS and `code` to a Linux PATH — and each side keeps its
+ * own arguments, which is the thing a `"macos:..."` prefix inside one string
+ * could not have done without splitting on spaces and taking the quoting
+ * problem back.
+ *
+ * A platform the table does not mention gets `[]` and opens nothing. That is
+ * the whole of the rule: this file is written by whoever knows which machines
+ * the team is on, and inventing a name for a platform they left out would be
+ * guessing at an application that is not installed.
+ */
+function openAt(setup: Record<string, unknown>): OpenPlan {
+  const value = setup.open;
+  if (value === undefined) return NO_OPEN;
+
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const table = value as Record<string, unknown>;
+    for (const key of Object.keys(table)) {
+      if (OPEN_TARGETS.has(key)) continue;
+
+      throw new GroveError(
+        "usage",
+        `${SETUP_FILE}: [setup.open] has no key named ${JSON.stringify(key)}`,
+        { hint: `the keys are ${[...OPEN_TARGETS].join(", ")}` },
+      );
+    }
+
+    return {
+      macos: commandAt("setup.open", table, "macos"),
+      linux: commandAt("setup.open", table, "linux"),
+      windows: commandAt("setup.open", table, "windows"),
+    };
+  }
+
+  const line = commandAt("setup", setup, "open");
+
+  return { macos: line, linux: line, windows: line };
+}
+
+/**
+ * One command line, or nothing — the shape `open` is written in.
+ *
+ * A list is refused rather than read as several: `open` is one line, and the
+ * shell it is handed to already spells "and then this too" as `&&`. The refusal
+ * points at `[setup.open]`, because a list is what somebody reaches for when
+ * what they actually wanted was to name the platforms apart.
+ *
+ * An empty string is refused for a different reason: `open = ""` reads as "open
+ * nothing", and what it would do is start a shell that exits, which grove would
+ * report as having opened something.
+ */
+function commandAt(section: string, table: Record<string, unknown>, key: string): string {
+  const value = table[key];
+  if (value === undefined) return "";
+
+  if (typeof value !== "string") {
+    throw new GroveError("usage", `${SETUP_FILE}: ${section}.${key} must be one command line`, {
+      hint:
+        `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)} — ` +
+        "and [setup.open] to say it differently per platform",
+    });
+  }
+
+  if (value.trim().length === 0) {
+    throw new GroveError("usage", `${SETUP_FILE}: ${section}.${key} has nothing to open`, {
+      hint: `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)}`,
+    });
+  }
+
+  return value;
+}
+
+const OPEN_TARGETS: ReadonlySet<string> = new Set<OpenTarget>(["macos", "linux", "windows"]);
+
+const KNOWN = new Set(["copy", "link", "env", "run", "open"]);
 const KNOWN_TEARDOWN = new Set(["env", "run"]);
 
 /** A name a shell would accept, which is the only kind worth passing to one. */
@@ -254,6 +436,7 @@ export function parseSetupFile(text: string): SetupPlan {
     link: stringsAt("setup", setup, "link"),
     env: envAt("setup", setup),
     commands: stringsAt("setup", setup, "run"),
+    open: openAt(setup),
     teardown: {
       env: envAt("teardown", teardown),
       commands: stringsAt("teardown", teardown, "run"),

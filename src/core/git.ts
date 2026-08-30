@@ -353,6 +353,68 @@ export async function runShell(
 }
 
 /**
+ * How long to watch an `open` line before letting go of it for good.
+ *
+ * Long enough for a launcher to have failed: `open -a` answers in about 150ms
+ * whether it found the application or not, and a slow machine wants room on top
+ * of that. Short enough that the lines which never exit — an application
+ * started directly rather than through a launcher — cost half a second at the
+ * very end of an `add` and nothing else.
+ */
+const OPEN_SETTLES_WITHIN = 500;
+
+/**
+ * Starts a configured `open` line and, mostly, lets go of it.
+ *
+ * The deliberate opposite of `runShell`, because it is for the opposite kind of
+ * thing: `run` prepares a worktree and this opens the editor you were going to
+ * open anyway. So the child is **not** added to `running` — `killRunningGit`
+ * reaches into that set on Ctrl-C, and a first Ctrl-C that closed the editor it
+ * had just opened would be a strange tool to use twice — and `detached` here
+ * buys `setsid()` rather than a process group to signal, so the editor outlives
+ * the terminal `grove` was typed into.
+ *
+ * The "mostly" is the exit code, and it is worth the wait it costs. An `open`
+ * line is usually a launcher — `open -a …`, `code .` — which starts something
+ * and returns in about a sixth of a second, so watching that long tells a
+ * misspelled application from one that opened. Past the deadline the line is
+ * one that means to keep running, and it is released: `undefined` comes back
+ * and the child carries on with nothing holding it.
+ *
+ * Every stream is dropped, which is what makes the watching safe. A pipe nobody
+ * drains stops the writer, and a pipe somebody drains keeps this process here
+ * until the last grandchild holding it closes it — an editor's whole lifetime.
+ * The cost is that only the number survives, not the sentence beside it; the
+ * caller quotes the line itself instead, which is where the misspelling is.
+ */
+export async function openShell(
+  command: string,
+  { cwd, env }: GitOptions = {},
+): Promise<number | undefined> {
+  const child = Bun.spawn(["sh", "-c", command], {
+    cwd,
+    env: { ...process.env, ...SHELL_ENV, ...env },
+    detached: true,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+
+  const settled = await Promise.race([
+    child.exited,
+    Bun.sleep(OPEN_SETTLES_WITHIN).then(() => undefined),
+  ]);
+
+  // After the race, not before: until it settles this is the only thing keeping
+  // the wait honest, and after it the child must not keep `grove` here.
+  child.unref();
+
+  trace?.(`sh -c ${quote(command)} → ${settled === undefined ? "opened" : `exited ${settled}`}`);
+
+  return settled;
+}
+
+/**
  * Runs git and returns its stdout, turning a failure into a classified error.
  *
  * Use this wherever a non-zero exit has no meaning worth branching on. Where it

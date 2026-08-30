@@ -134,10 +134,22 @@ copy = [".env", "certs"]       # Copied files or folders from the default branch
 link = ["node_modules"]        # Symlinked, so packages are only installed once
 env  = { PORT = "3000" }       # Environment variables passed to the run commands below
 run  = ["bun install"]         # Shell commands to run inside the new worktree
+open = "code ."                # What to open the finished worktree with
 
 [teardown]
 env = { COMPOSE_PROJECT_NAME = "acme" }
 run = ["docker compose down"]  # Shell commands run inside the worktree just before it is removed
+```
+
+One line rarely works on every machine — `open -a` is macOS only, and `code` reaches a Linux PATH long before macOS installs the shim — so `open` can be written once per platform. A platform the table leaves out opens nothing:
+
+```toml
+[setup]
+run = ["bun install"]
+
+[setup.open]
+macos = 'open -a "Visual Studio Code" .'
+linux = "code ."
 ```
 
 ### How it works:
@@ -145,6 +157,7 @@ run = ["docker compose down"]  # Shell commands run inside the worktree just bef
 - **Safe local actions**: The `copy` and `link` steps run immediately because they only reference files already present on your local disk.
 - **Secure execution**: Because the `run` commands come from repository code that could be modified in pull requests, `grove` CLI prints and skips them by default for security, until you pass the `--trust` flag. One `--trust` covers both sections, and one edit to the file withdraws both.
 - **Interactive UI**: When adding a worktree through the interactive UI, these commands are run automatically since using the UI is considered explicit consent.
+- **Opening is not part of the setup**: `open` is what you were going to start in the new worktree anyway, so `grove` starts it and lets go — it is not waited for, a `Ctrl-C` aimed at the setup will not close it, and it outlives the shell you typed `grove add` into. It is watched just long enough to catch a line that falls over immediately, which is what a misspelled editor does, and then released; a line still running is what opening something looks like. It waits for the same `--trust` the `run` commands do, it does not run if a `run` command failed, and it is skipped where there is no terminal to open into — `grove add | tee`, or CI — which is the one place `grove` behaves differently under a terminal, because it is the one key whose subject is a person rather than a worktree.
 - **Teardown never blocks a removal**: whatever `[setup]` started is still running when the directory it was started in is about to go, which is what `[teardown]` is for. A command that fails there is reported loudly and the worktree is still removed — a broken `docker compose down` should not leave you unable to delete a directory you have finished with. `grove remove --no-teardown` skips the section outright.
 
 Pressing `a` and typing a branch name is the whole of it — the worktree appears, and the file fills it in underneath:

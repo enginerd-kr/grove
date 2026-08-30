@@ -6,6 +6,7 @@ import {
   gitOutput,
   gitSucceeds,
   killRunningGit,
+  openShell,
   parseGitProgress,
   runGit,
   runGitOrThrow,
@@ -422,6 +423,93 @@ describe("runShell", () => {
 
     expect(lines).toEqual(["one", "two"]);
     expect(result.stderr).toBe("one\ntwo\n");
+  });
+});
+
+describe("openShell", () => {
+  /** Waits on the disk, because nothing here hands back a process to wait on. */
+  async function waitForEntry(path: string, timeout = 5_000): Promise<boolean> {
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      if (await Bun.file(path).exists()) return true;
+      await Bun.sleep(20);
+    }
+
+    return false;
+  }
+
+  test("a launcher that fails fast is caught, which is the point of watching", async () => {
+    // The shape of a misspelled application: `open -a` answers in about a sixth
+    // of a second, and dropping that answer left a typo looking exactly like an
+    // editor that opened.
+    expect(await openShell("exit 3")).toBe(3);
+    expect(await openShell("true")).toBe(0);
+  });
+
+  test("a line that keeps running is released rather than waited for", async () => {
+    await withTempRepo(async (repo) => {
+      const app = await clone(repo);
+
+      const startedAt = Date.now();
+      // Longer than the deadline: this is the editor nobody has quit, and it
+      // must not be what `grove add` is standing behind.
+      const code = await openShell("sleep 30 && : > never.txt", { cwd: app });
+      const waited = Date.now() - startedAt;
+
+      expect(code).toBeUndefined();
+      // Released at the deadline, not at the end of `sleep 30`.
+      expect(waited).toBeLessThan(2_000);
+      expect(await Bun.file(join(app, "never.txt")).exists()).toBe(false);
+    });
+  });
+
+  test("the child outlives the wait, and every stream it had is gone", async () => {
+    await withTempRepo(async (repo) => {
+      const app = await clone(repo);
+
+      // No pipe anywhere: a pipe nobody drains stops the writer, and a pipe
+      // somebody drains keeps this process here until the last grandchild
+      // holding it lets go — which for an editor is its whole lifetime.
+      const code = await openShell("(sleep 1 && : > late.txt) & exit 0", { cwd: app });
+
+      expect(code).toBe(0);
+      expect(await Bun.file(join(app, "late.txt")).exists()).toBe(false);
+      expect(await waitForEntry(join(app, "late.txt"))).toBe(true);
+    });
+  });
+
+  test("is out of reach of Ctrl-C, unlike every other child here", async () => {
+    await withTempRepo(async (repo) => {
+      const app = await clone(repo);
+
+      const started = openShell("sleep 1 && : > survived.txt", { cwd: app });
+      // What `runShell` registers in `running` this deliberately does not: an
+      // editor that closed on the first Ctrl-C after `grove add` would make the
+      // key useless. `killRunningGit` therefore has nothing of ours to find.
+      killRunningGit("SIGKILL");
+      await started;
+
+      expect(await waitForEntry(join(app, "survived.txt"))).toBe(true);
+    });
+  });
+
+  test("goes through a shell, so a configured line reads the way it was written", async () => {
+    await withTempRepo(async (repo) => {
+      const app = await clone(repo);
+
+      // `.` is the worktree because that is the cwd, which is what lets the
+      // same line be written the way somebody would type it in that directory.
+      expect(await openShell('test "$(pwd)" = "$(cd . && pwd)"', { cwd: app })).toBe(0);
+    });
+  });
+
+  test("env reaches it, and the prompt switch is pinned like a setup command's", async () => {
+    expect(
+      await openShell('test "$GROVE_TEST_TOKEN" = injected && test "$GIT_TERMINAL_PROMPT" = 0', {
+        env: { GROVE_TEST_TOKEN: "injected" },
+      }),
+    ).toBe(0);
   });
 });
 

@@ -231,7 +231,18 @@ export function createWorktreeService(
         // worktree somebody is working in is not something a single keystroke
         // should be able to do. `grove add <branch> --take` is where that is
         // typed out on purpose.
-        { branch, from, fetch: true, push: false, setup: true, trust: false, take: false },
+        // `open: true` needs no test: the screen only draws on a terminal, so
+        // there is always one to open into.
+        {
+          branch,
+          from,
+          fetch: true,
+          push: false,
+          setup: true,
+          trust: false,
+          open: true,
+          take: false,
+        },
         reporter,
       );
 
@@ -318,7 +329,7 @@ export function createWorktreeService(
       const result = await checkoutPullRequest(
         repo,
         cwd,
-        { pr: String(number), setup: true, trust: false },
+        { pr: String(number), setup: true, trust: false, open: true },
         reporter,
       );
 
@@ -345,6 +356,7 @@ export function createWorktreeService(
         repo,
         { path: record.path, branch: record.branch },
         reporter,
+        { open: true },
       );
 
       const failure = failureFor(result);

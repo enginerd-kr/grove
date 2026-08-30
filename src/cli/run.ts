@@ -47,6 +47,23 @@ function display(cwd: string, path: string): string {
 export async function runCommand(command: GroveCommand, context: CommandContext): Promise<void> {
   const { cwd, global, reporter } = context;
 
+  /**
+   * Whether there is a terminal for `[setup] open` to open into.
+   *
+   * Worked out here because this is the layer that knows about a process at
+   * all, and once, because `add` and `pr` must not be able to disagree about
+   * it. `stdout` and not `stdin`: what is being asked is whether a person is
+   * watching this run, and `grove add | tee` redirects the half they would be
+   * watching.
+   *
+   * Deliberately not also `--headless`. That flag chooses how progress is
+   * drawn, which is a different question from whether anybody is there to see
+   * it — somebody who wants plain lines instead of a spinner still wants their
+   * editor, and reading it as "no person here" would make one flag mean two
+   * things.
+   */
+  const canOpen = process.stdout.isTTY === true;
+
   // Every command answers `--json` the same way — one document on stdout — so
   // the choice is made once here rather than restated in thirteen places.
   const report = (value: unknown, prose: () => void): void => {
@@ -69,7 +86,7 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "add": {
       const { name, ...options } = command;
       const repo = await findRepoRoot(cwd, global.repo);
-      const result = await addWorktree(repo, cwd, options, reporter);
+      const result = await addWorktree(repo, cwd, { ...options, open: canOpen }, reporter);
 
       if (result.alreadyPresent) reporter.info(`${command.branch} already has a worktree`);
       // Said out loud rather than left to be discovered: `--take` emptied a
@@ -87,7 +104,7 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "pr": {
       const { name, ...options } = command;
       const repo = await findRepoRoot(cwd, global.repo);
-      const result = await checkoutPullRequest(repo, cwd, options, reporter);
+      const result = await checkoutPullRequest(repo, cwd, { ...options, open: canOpen }, reporter);
 
       // A worktree that was already there is only "nothing happened" when the
       // branch did not move either; catching up with the pull request is the

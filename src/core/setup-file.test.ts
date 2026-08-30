@@ -6,6 +6,7 @@ import {
   EMPTY_TEARDOWN,
   fingerprintOf,
   isTrusted,
+  openTargetFor,
   parseSetupFile,
   plannedCount,
   readSetupFile,
@@ -45,13 +46,83 @@ copy = [".env", "certs"]
 link = ["node_modules"]
 env = { UV_INDEX_USERNAME = "PLACE_HOLDER" }
 run = ["bun install", "bun run build"]
+open = "code ."
 `);
 
     expect(plan.copy).toEqual([".env", "certs"]);
     expect(plan.link).toEqual(["node_modules"]);
     expect(plan.env).toEqual([{ name: "UV_INDEX_USERNAME", value: "PLACE_HOLDER" }]);
     expect(plan.commands).toEqual(["bun install", "bun run build"]);
+    expect(plan.open).toEqual({ macos: "code .", linux: "code .", windows: "code ." });
     expect(plan.teardown).toEqual(EMPTY_TEARDOWN);
+  });
+
+  test("open is one line, and a list points at the table instead", () => {
+    const error = refusalFrom(() => parseSetupFile('[setup]\nopen = ["code .", "idea ."]\n'));
+
+    // A list is what somebody reaches for when what they wanted was to say it
+    // differently per platform, so the refusal says where that lives. Two apps
+    // on one platform is what the shell already spells `&&`.
+    expect(error.message).toContain("setup.open must be one command line");
+    expect(error.hint).toContain("[setup.open]");
+  });
+
+  test("[setup.open] writes the line once per platform", () => {
+    const plan = parseSetupFile(`
+[setup]
+run = ["bun install"]
+
+[setup.open]
+macos = 'open -a "Visual Studio Code" .'
+linux = "code . --new-window"
+`);
+
+    // The reason the table exists: one line cannot be right on both. `open -a`
+    // is macOS only, and `code` is not on a macOS PATH until somebody installs
+    // the shim.
+    expect(plan.open.macos).toBe('open -a "Visual Studio Code" .');
+    expect(plan.open.linux).toBe("code . --new-window");
+    // A platform the file did not mention opens nothing, rather than being
+    // guessed at with an application that may not be installed.
+    expect(plan.open.windows).toBe("");
+    expect(plan.commands).toEqual(["bun install"]);
+  });
+
+  test("[setup.open] refuses a platform it does not have", () => {
+    // `ubuntu` is the tempting one to write and the one that cannot work:
+    // `process.platform` says `linux` and never which distribution.
+    const error = refusalFrom(() => parseSetupFile('[setup.open]\nubuntu = "code ."\n'));
+
+    expect(error.message).toContain('[setup.open] has no key named "ubuntu"');
+    expect(error.hint).toBe("the keys are macos, linux, windows");
+  });
+
+  test("open is a line or a table, and says so when it is neither", () => {
+    const error = refusalFrom(() => parseSetupFile("[setup]\nopen = 42\n"));
+
+    expect(error.code).toBe("usage");
+    expect(error.message).toContain("setup.open must be one command line");
+  });
+
+  test("an empty line is refused where it can still be read", () => {
+    const error = refusalFrom(() => parseSetupFile('[setup]\nopen = ""\n'));
+
+    // It would otherwise start a shell that exits at once, which grove would
+    // read as having opened something.
+    expect(error.code).toBe("usage");
+    expect(error.message).toContain("setup.open has nothing to open");
+
+    // The same check reaches inside the table, and names the key it was about.
+    const inTable = refusalFrom(() => parseSetupFile('[setup.open]\nmacos = "  "\n'));
+    expect(inTable.message).toContain("setup.open.macos has nothing to open");
+    expect(inTable.hint).toContain("open -a");
+  });
+
+  test("[teardown] has no open — there is nothing to open in a worktree that is going", () => {
+    const error = refusalFrom(() => parseSetupFile('[teardown]\nopen = "code ."\n'));
+
+    expect(error.message).toContain('[teardown] has no key named "open"');
+    expect(error.hint).toBe("the keys are env, run");
   });
 
   test("takes a bare string where a list would do", () => {
@@ -184,7 +255,7 @@ env = { PORT = 3000, DEBUG = true }
 
       expect(error.code).toBe("usage");
       expect(error.message).toContain('[setup] has no key named "cpoy"');
-      expect(error.hint).toBe("the keys are copy, link, env, run");
+      expect(error.hint).toBe("the keys are copy, link, env, run, open");
     });
 
     test("a [setup]-only key written under [teardown]", () => {
@@ -216,6 +287,10 @@ env = { PORT = 3000, DEBUG = true }
       expect(refusalFrom(() => parseSetupFile('[setup]\nrun = ["ok", 5]\n')).hint).toContain(
         '"bun install"',
       );
+
+      const inTable = refusalFrom(() => parseSetupFile("[setup.open]\nlinux = 5\n"));
+      expect(inTable.message).toContain("setup.open.linux must be one command line");
+      expect(inTable.hint).toContain('"code ."');
     });
 
     test("TOML it cannot parse, quoting what the parser said", () => {
@@ -229,6 +304,18 @@ env = { PORT = 3000, DEBUG = true }
   });
 });
 
+describe("openTargetFor", () => {
+  test("names platforms the way a config line does, not the way Node does", () => {
+    expect(openTargetFor("darwin")).toBe("macos");
+    expect(openTargetFor("win32")).toBe("windows");
+    // Everything else is "the name is the command", which is as true on
+    // FreeBSD as on Ubuntu — and `process.platform` could not tell the
+    // distributions apart to do better.
+    expect(openTargetFor("linux")).toBe("linux");
+    expect(openTargetFor("freebsd")).toBe("linux");
+  });
+});
+
 describe("plannedCount", () => {
   test("counts the work, and an empty plan has none", () => {
     expect(plannedCount(EMPTY_PLAN)).toBe(0);
@@ -236,15 +323,27 @@ describe("plannedCount", () => {
     expect(EMPTY_TEARDOWN).toEqual({ env: [], commands: [] });
   });
 
-  test("adds copy, link and run together", () => {
+  test("adds copy, link, run and open together", () => {
     const plan = parseSetupFile(`
 [setup]
 copy = [".env", "certs"]
 link = ["node_modules"]
 run = ["bun install"]
+open = "code ."
 `);
 
-    expect(plannedCount(plan)).toBe(4);
+    expect(plannedCount(plan)).toBe(5);
+  });
+
+  test("a file that only opens something has still asked for something", () => {
+    // Zero here would reach `describeSetup` as "no .grove.toml", about a file
+    // that is sitting right there and that just opened an editor.
+    expect(plannedCount(parseSetupFile('[setup]\nopen = "code ."\n'))).toBe(1);
+    // Platforms are not more work either: still one thing, said for three
+    // machines because it cannot be said once.
+    expect(
+      plannedCount(parseSetupFile('[setup.open]\nmacos = "a"\nlinux = "b"\nwindows = "c"\n')),
+    ).toBe(1);
   });
 
   test("counts neither env nor teardown — neither is work in this worktree", () => {

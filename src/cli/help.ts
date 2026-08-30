@@ -82,6 +82,8 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "The new worktree is then filled in from .grove.toml, if the default",
       "branch's worktree has one: `copy` and `link` apply on sight, and `run`",
       "commands are printed and skipped until --trust says you have read them.",
+      "`open` then starts what the file says to open it with — written per",
+      "platform — and is skipped when there is no terminal to open into.",
       "",
       "--take carries the uncommitted changes of the worktree you are standing",
       "in over to the new one, and leaves that one clean — the stash-and-pop",

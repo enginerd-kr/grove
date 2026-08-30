@@ -4,17 +4,19 @@ import type { Reporter } from "../report/reporter.ts";
 import { defaultBranch } from "./branches.ts";
 import { GroveError, isGroveError } from "./errors.ts";
 import { entryExists, isDirectoryEntry } from "./fs.ts";
-import { runGit, runShell } from "./git.ts";
+import { openShell, runGit, runShell } from "./git.ts";
 import { BARE_DIR, type RepoPaths } from "./layout.ts";
 import {
   EMPTY_PLAN,
   isTrusted,
+  openTargetFor,
   plannedCount,
   readSetupFile,
   SETUP_FILE,
   type SetupEnv,
   type SetupPlan,
   trust,
+  wantsOpen,
 } from "./setup-file.ts";
 import { listWorktrees, worktreeDir } from "./worktrees.ts";
 
@@ -43,6 +45,16 @@ export type SetupTarget = {
 export type SetupOptions = {
   /** A plan already read, for a caller that had to read it before this ran. */
   readonly plan?: SetupPlan;
+  /**
+   * Whether `open` may run. `false` is "there is no terminal to open into".
+   *
+   * Passed in rather than worked out here, because working it out means reading
+   * `process.stdout`, and the rule for this directory is that it knows about a
+   * `Reporter` and not about the process it is running in. The command line
+   * decides it once, in `cli/run.ts`; the screen is a terminal by definition and
+   * says so.
+   */
+  readonly open?: boolean;
 };
 
 export type SetupFailure = {
@@ -59,6 +71,14 @@ export type SetupResult = {
   readonly copied: readonly string[];
   readonly linked: readonly string[];
   readonly ran: readonly string[];
+  /**
+   * The application that was started, if one was — which is all that can be
+   * known.
+   *
+   * "Started" and not "opened": nothing is awaited, so an application this
+   * machine does not have is reported here exactly like one that worked.
+   */
+  readonly opened?: string;
   /** Configured, but not in the source worktree — there was nothing to take. */
   readonly missing: readonly string[];
   /** `link` paths already in this worktree, so left exactly as they were. */
@@ -141,9 +161,15 @@ export async function pendingCommands(
   fallback?: string,
 ): Promise<readonly string[]> {
   const plan = await repoSetupPlan(repo, fallback);
-  if (plan.commands.length === 0 || plan.fingerprint === undefined) return [];
+  // `open` is in here with the rest, because the question is "what would this
+  // file run on your machine" and the answer has to be the whole answer. It is
+  // the same shell on the same line; that grove stops watching it afterwards
+  // makes it more worth listing rather than less.
+  const opening = openHere(plan);
+  const waiting = opening === "" ? plan.commands : [...plan.commands, opening];
+  if (waiting.length === 0 || plan.fingerprint === undefined) return [];
 
-  return (await isTrusted(repo.gitDir, plan.fingerprint)) ? [] : plan.commands;
+  return (await isTrusted(repo.gitDir, plan.fingerprint)) ? [] : waiting;
 }
 
 /**
@@ -157,11 +183,13 @@ export async function trustAndRun(
   repo: RepoPaths,
   target: SetupTarget,
   reporter: Reporter,
+  /** Everything but `plan`, which this reads for itself once trust is recorded. */
+  options: Omit<SetupOptions, "plan"> = {},
 ): Promise<SetupResult> {
   const plan = await repoSetupPlan(repo, target.path);
   if (plan.fingerprint !== undefined) await trust(repo.gitDir, plan.fingerprint);
 
-  return runSetup(repo, target, {}, reporter);
+  return runSetup(repo, target, options, reporter);
 }
 
 /**
@@ -228,6 +256,10 @@ export function describeSetup(result: SetupResult): string {
   if (result.overwritten.length > 0) parts.push(`${result.overwritten.length} overwritten`);
   if (result.linked.length > 0) parts.push(`${result.linked.length} linked`);
   if (result.ran.length > 0) parts.push(`${result.ran.length} run`);
+  // The word alone: `opened` sits in a line that is already a list of counts,
+  // and a whole command line inside it would be longer than everything else
+  // put together. The line itself was printed when it started.
+  if (result.opened !== undefined) parts.push("opened");
   if (result.kept.length > 0) parts.push(`${result.kept.length} kept`);
   if (result.untrusted) parts.push("commands not trusted");
   if (parts.length === 0) return result.planned === 0 ? `no ${SETUP_FILE}` : "nothing to do";
@@ -571,6 +603,15 @@ export async function runSetup(
     plan,
     { noun: "command", tail: "read it, then add with --trust" },
     reporter,
+    openHere(plan) === "" ? 0 : 1,
+  );
+
+  const opened = await openWhatItAsksFor(
+    repo,
+    target,
+    plan,
+    { untrusted, failed, options },
+    reporter,
   );
 
   return {
@@ -580,11 +621,174 @@ export async function runSetup(
     copied,
     linked,
     ran,
+    opened,
     missing,
     kept,
     overwritten,
     failed,
     untrusted,
+  };
+}
+
+/**
+ * Starts `[setup] open`, once there is a worktree worth opening.
+ *
+ * Three things have to be true first, and each is a different kind of no.
+ *
+ * Trust is the same record the commands answer to — the line is a shell line
+ * out of a file that arrived with a pull, and `open = "curl … | sh"` reaches
+ * this machine by exactly the road `run` does. Being unwatched afterwards makes
+ * it worse than `run`, not better, so it waits for the same `--trust`.
+ *
+ * A failed command stops it, even though nothing here depends on that command
+ * having worked. `run` is what makes the checkout runnable and `open` is what
+ * you do with it once it is; opening an editor onto a half-finished install
+ * puts the failure two screens up in a scrollback nobody is looking at any
+ * more, and the warning `add` prints is easier to read on the terminal it was
+ * printed to.
+ *
+ * No terminal stops it too, and that one is an exception to a rule this tool
+ * otherwise keeps — `add` behaves the same in a pipe as under a terminal
+ * precisely so it is one tool and not two. What makes it affordable is that
+ * `open` is the only key here whose subject is a person rather than a worktree.
+ * Every other one leaves something on disk that a script can go and read; this
+ * one puts a window in front of whoever is sitting there, and in `grove add |
+ * tee` or on CI there is nobody sitting there. So it is skipped, and it says so
+ * rather than leaving the silence to be worked out.
+ *
+ * What is printed is the line about to be started, before it is started, and
+ * then the exit code if there was one soon enough to catch — see `openShell`
+ * for how long that is and why it is not longer.
+ */
+/**
+ * The `open` line for the platform this is running on, or `""`.
+ *
+ * The platform is read once, here, so that every question about `open` — what
+ * is pending, what the trust gate counts, what actually starts — is answering
+ * about the same line. A file that names only `macos` gives a Linux machine
+ * nothing, which is "nothing to open" and not an error.
+ */
+function openHere(plan: SetupPlan, platform: NodeJS.Platform = process.platform): string {
+  return plan.open[openTargetFor(platform)];
+}
+
+/**
+ * Starts `[setup] open`, once there is a worktree worth opening.
+ *
+ * Four things have to be true first, and each is a different kind of no.
+ *
+ * Trust is the same record the commands answer to — it is a shell line out of a
+ * file that arrived with a pull, and `open = "curl … | sh"` reaches this
+ * machine by exactly the road `run` does. Being let go of afterwards makes it
+ * worse than `run`, not better, so it waits for the same `--trust`.
+ *
+ * A failed command stops it, even though nothing here depends on that command
+ * having worked. `run` is what makes the checkout runnable and `open` is what
+ * you do with it once it is; opening an editor onto a half-finished install
+ * puts the failure two screens up in a scrollback nobody is looking at any
+ * more, and the warning `add` prints is easier to read where it was printed.
+ *
+ * No terminal stops it too, and that one is an exception to a rule this tool
+ * otherwise keeps — `add` behaves the same in a pipe as under a terminal
+ * precisely so it is one tool and not two. What makes it affordable is that
+ * `open` is the only key here whose subject is a person rather than a worktree.
+ * Every other one leaves something on disk that a script can go and read; this
+ * one puts a window in front of whoever is sitting there, and in `grove add |
+ * tee` or on CI there is nobody sitting there. So it is skipped, and it says so
+ * rather than leaving the silence to be worked out.
+ *
+ * And a platform the file did not write a line for opens nothing, which is the
+ * only one of the four that is not really a refusal.
+ */
+async function openWhatItAsksFor(
+  repo: RepoPaths,
+  target: SetupTarget,
+  plan: SetupPlan,
+  state: {
+    readonly untrusted: boolean;
+    readonly failed?: SetupFailure;
+    readonly options: SetupOptions;
+  },
+  reporter: Reporter,
+): Promise<string | undefined> {
+  const { untrusted, failed, options } = state;
+  const command = openHere(plan);
+
+  if (command === "") {
+    // Said once rather than left as silence: a file that opens an editor for
+    // the rest of the team and not for you is a thing to find out from the run
+    // that did not open one, not from asking why afterwards.
+    if (wantsOpen(plan.open) && !untrusted) {
+      reporter.info(`nothing in ${SETUP_FILE} opens on ${openTargetFor(process.platform)}`);
+    }
+
+    return undefined;
+  }
+
+  if (untrusted) return undefined;
+
+  if (failed !== undefined) {
+    reporter.info(`did not open: ${failed.command} failed`);
+
+    return undefined;
+  }
+
+  if (options.open === false) {
+    reporter.info("did not open: this is not a terminal");
+
+    return undefined;
+  }
+
+  reporter.info(`opening ${command}`);
+
+  try {
+    const code = await openShell(command, {
+      cwd: target.path,
+      env: commandEnvFor(repo, target, plan.env),
+    });
+
+    // `undefined` is the line still running, which is what opening something
+    // looks like. A number means it was over before grove stopped watching, and
+    // a non-zero one is the misspelled application this key used to swallow.
+    if (code !== undefined && code !== 0) {
+      reporter.warn(`could not open: ${command} exited ${code}`);
+
+      return undefined;
+    }
+  } catch (error) {
+    // The spawn itself, which is a worktree that stopped existing between being
+    // made and being opened. Warned and not thrown, because the worktree is
+    // what `add` was asked for and an editor that would not start is no reason
+    // to report that it is missing.
+    reporter.warn(`could not open: ${error instanceof Error ? error.message : String(error)}`);
+
+    return undefined;
+  }
+
+  return command;
+}
+
+/**
+ * What a configured line runs with, over whatever grove itself was started in.
+ *
+ * `env` first and grove's own three last: `GROVE_WORKTREE` is this tool's
+ * answer to "where am I", and a file that could overwrite it would be able to
+ * lie to the script it is about to run.
+ *
+ * Not logged, and neither are the values anywhere else — the step line says the
+ * command and not its environment, because `env` is where a token ends up and a
+ * token belongs in no scrollback.
+ */
+function commandEnvFor(
+  repo: RepoPaths,
+  target: SetupTarget,
+  env: readonly SetupEnv[],
+): Record<string, string> {
+  return {
+    ...Object.fromEntries(env.map(({ name, value }) => [name, value])),
+    GROVE_ROOT: repo.root,
+    GROVE_WORKTREE: target.path,
+    GROVE_BRANCH: target.branch ?? "",
   };
 }
 
@@ -611,11 +815,23 @@ async function runCommandSection(
   /** How the refusal reads: `2 teardown commands in … — the worktree still goes`. */
   warning: { readonly noun: string; readonly tail: string },
   reporter: Reporter,
+  /**
+   * How much else this gate answers for without running it — `[setup]`'s `open`.
+   *
+   * A count and not a list, because `open` is one application however many
+   * arguments spell it. The gate is here and not beside the caller that opens,
+   * so that the promise this file makes stays literally true: one piece of code
+   * decides trust for the whole file. Counted in the warning as well, because
+   * "1 command has not been trusted" beside a file asking for two things is the
+   * wrong number to read.
+   */
+  alsoGated = 0,
 ): Promise<{ ran: readonly string[]; failed?: SetupFailure; untrusted: boolean }> {
   const { commands, env } = section;
+  const gated = commands.length + alsoGated;
 
   const untrusted =
-    commands.length > 0 &&
+    gated > 0 &&
     plan.fingerprint !== undefined &&
     !(await isTrusted(repo.gitDir, plan.fingerprint));
 
@@ -626,31 +842,15 @@ async function runCommandSection(
     const where = plan.path === undefined ? SETUP_FILE : relative(repo.root, plan.path);
 
     reporter.warn(
-      `${plural(commands.length, warning.noun)} in ${where} ${
-        commands.length === 1 ? "has" : "have"
+      `${plural(gated, warning.noun)} in ${where} ${
+        gated === 1 ? "has" : "have"
       } not been trusted here — ${warning.tail}`,
     );
 
     return { ran: [], untrusted };
   }
 
-  /**
-   * What the commands run with, over whatever grove itself was started in.
-   *
-   * `env` first and grove's own three last: `GROVE_WORKTREE` is this tool's
-   * answer to "where am I", and a file that could overwrite it would be able to
-   * lie to the script it is about to run.
-   *
-   * Not logged, and neither are the values anywhere else — the step line says
-   * the command and not its environment, because `env` is where a token ends up
-   * and a token belongs in no scrollback.
-   */
-  const commandEnv = {
-    ...Object.fromEntries(env.map(({ name, value }) => [name, value])),
-    GROVE_ROOT: repo.root,
-    GROVE_WORKTREE: target.path,
-    GROVE_BRANCH: target.branch ?? "",
-  };
+  const commandEnv = commandEnvFor(repo, target, env);
 
   const ran: string[] = [];
   let failed: SetupFailure | undefined;
