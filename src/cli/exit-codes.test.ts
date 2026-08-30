@@ -19,6 +19,7 @@ const EXPECTED: Readonly<Record<GroveErrorCode, ExitCodeValue>> = {
   "rebase-conflict": 5,
   "state-conflict": 6,
   "setup-failed": 9,
+  "command-failed": 11,
   gh: 10,
   "git-failed": 7,
   remote: 8,
@@ -55,6 +56,7 @@ describe("errorToExitCode", () => {
       remote: 8,
       setupFailed: 9,
       gh: 10,
+      commandFailed: 11,
       // 128 + SIGINT, the convention a shell reports for Ctrl-C.
       interrupted: 130,
     });

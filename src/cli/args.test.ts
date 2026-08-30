@@ -203,11 +203,28 @@ describe("positional arity", () => {
 
   test("every command's arity comes from the usage line, not from a second list", () => {
     for (const spec of SUBCOMMANDS) {
+      // A usage line ending in `...` promises no limit rather than one more
+      // argument, which is the next test rather than an exception to this one.
+      if (spec.args.endsWith("...")) continue;
+
       const max = spec.args.split(/\s+/).filter((token) => token.length > 0).length;
       const argv = [spec.name, ...Array.from({ length: max + 1 }, () => "x")];
 
       expect(error(argv).message).toContain(`${spec.name} takes ${max} argument(s)`);
     }
+  });
+
+  test("a usage line ending in `...` takes as many arguments as it is handed", () => {
+    // `exec` is the one, and what follows it is somebody else's command line:
+    // an arity this parser enforced would be an opinion about how long
+    // `bun run build --watch` is allowed to be.
+    expect(run(["exec", "bun", "run", "build"]).command).toMatchObject({
+      argv: ["bun", "run", "build"],
+    });
+    expect(run(["exec", "--", "git", "status", "--short"]).command).toMatchObject({
+      argv: ["git", "status", "--short"],
+    });
+    expect(error(["exec"]).message).toContain("exec needs a command to run");
   });
 });
 

@@ -53,6 +53,7 @@ const TAKES_TARGET = [
   "cd",
   "path",
   "open",
+  "setup",
   "remove",
   "rm",
   "reset",

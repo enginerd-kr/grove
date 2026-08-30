@@ -38,6 +38,20 @@ export type SetupOptions = {
    * says so.
    */
   readonly open?: boolean;
+  /**
+   * Whether this run finishes by opening the worktree at all.
+   *
+   * A different question from `open` above, which asks whether there is a
+   * terminal to open into. This one asks whether opening is part of what was
+   * asked for — false for `grove setup`, which fills in worktrees that were
+   * opened weeks ago, and where `--all` would otherwise put an editor window on
+   * the screen for every one of them.
+   *
+   * The difference shows in what is said. A worktree that could not be opened
+   * says so, because something was refused; a run that was never going to open
+   * anything says nothing, because nothing was.
+   */
+  readonly opens?: boolean;
 };
 
 export type SetupResult = {
@@ -426,13 +440,16 @@ export async function runSetup(
     setupGate(hooks),
   );
 
-  const opened = await openWhatItAsksFor(
-    repo,
-    target,
-    hooks,
-    { untrusted, failed, allowed: options.open !== false },
-    reporter,
-  );
+  const opened =
+    options.opens === false
+      ? undefined
+      : await openWhatItAsksFor(
+          repo,
+          target,
+          hooks,
+          { untrusted, failed, allowed: options.open !== false },
+          reporter,
+        );
 
   return {
     path: target.path,

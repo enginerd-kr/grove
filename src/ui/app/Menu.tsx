@@ -34,7 +34,7 @@ import { theme } from "../theme.ts";
  * a branch to run it is a type error rather than a row that does nothing when
  * you press enter on it.
  */
-export type CommandName = "open" | "sync-all" | "review" | "refresh" | "log";
+export type CommandName = "open" | "setup" | "sync-all" | "review" | "refresh" | "log";
 
 export type MenuCommand = {
   /** Without the slash; it is drawn with one and typed without. */
@@ -54,6 +54,10 @@ export function commandsFor(logOn: boolean): readonly MenuCommand[] {
     {
       name: "open",
       summary: "open the row under the cursor with what .grove.toml's `open` says",
+    },
+    {
+      name: "setup",
+      summary: "fill the row under the cursor in from .grove.toml again",
     },
     { name: "sync-all", summary: "sync every worktree, not just the row under the cursor" },
     { name: "review", summary: "pick one of the open pull requests and check it out" },

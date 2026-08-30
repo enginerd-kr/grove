@@ -6,6 +6,13 @@ import {
   failureFor as diagnosisFailure,
   formatDiagnosis,
 } from "../core/commands/doctor.ts";
+import {
+  describeExec,
+  failureFor as execFailure,
+  execInWorktrees,
+  execNotes,
+  formatExec,
+} from "../core/commands/exec.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
 import { openWorktree } from "../core/commands/open.ts";
 import { worktreePath } from "../core/commands/path.ts";
@@ -14,8 +21,10 @@ import { describePrune, formatPruneTable, pruneWorktrees } from "../core/command
 import { removeWorktree } from "../core/commands/remove.ts";
 import { renameWorktree } from "../core/commands/rename.ts";
 import { resetWorktree } from "../core/commands/reset.ts";
+import { setUpWorktrees, failureFor as setupFailure } from "../core/commands/setup.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
+import { describeSetup } from "../hooks/index.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
 import { completionScript, completionWords } from "./completion.ts";
@@ -192,6 +201,59 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
 
         reporter.out(formatWorktreeTable(summaries));
       });
+      return;
+    }
+
+    case "setup": {
+      const { name, ...options } = command;
+      const repo = await findRepoRoot(cwd, global.repo);
+      const results = await setUpWorktrees(repo, cwd, options, reporter);
+
+      report(results, () =>
+        reporter.out(
+          results
+            .map((result) => `${display(cwd, result.path)}\t${describeSetup(result)}`)
+            .join("\n"),
+        ),
+      );
+
+      // Printed first and thrown after, the way `sync --all` does it: with
+      // `--all` the eight worktrees that were filled in are still the news, and
+      // the ninth one's failed command is the exit code.
+      const setupFailed = setupFailure(results);
+      if (setupFailed) throw setupFailed;
+
+      return;
+    }
+
+    case "exec": {
+      const { name, ...options } = command;
+      const repo = await findRepoRoot(cwd, global.repo);
+      const outcomes = await execInWorktrees(repo, options, reporter);
+
+      report(outcomes, () => {
+        for (const outcome of outcomes) {
+          if (outcome.skipped !== undefined) {
+            reporter.warn(`${outcome.dir}: ${outcome.skipped}`);
+            continue;
+          }
+
+          // The heading on stderr, above the block it belongs to, so a person
+          // watching can tell the blocks apart and a redirect gets only the
+          // command's own words. See `formatExec`.
+          reporter.info(outcome.dir);
+          for (const line of execNotes(outcome)) reporter.info(line);
+
+          const body = formatExec(outcome);
+          if (body.length > 0) reporter.out(body);
+        }
+
+        reporter.info(describeExec(outcomes));
+      });
+
+      const execFailed = execFailure(outcomes);
+      if (execFailed) throw execFailed;
+
       return;
     }
 

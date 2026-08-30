@@ -921,6 +921,12 @@ export function App({
         case "open":
           if (!selected) return;
           return void perform(`opening ${selected.dir}`, () => service.open(selected.path));
+        // Aimed at the row for the same reason `open` is, and can find nothing
+        // to act on for the same one: a folder is not a worktree, and there is
+        // nothing to fill in about one.
+        case "setup":
+          if (!selected) return;
+          return void perform(`filling in ${selected.dir}`, () => service.setup(selected.path));
         case "sync-all":
           return void perform("syncing every worktree", () => service.sync());
         case "review":

@@ -348,6 +348,32 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     expect(log.out).toEqual([".\tup-to-date\n"]);
   },
 
+  setup: async ({ root, run }) => {
+    const log = await run(
+      { name: "setup", target: undefined, all: false, trust: false },
+      { cwd: join(root, "main") },
+    );
+
+    // No `.grove.toml` in the fixture, which is the answer for most
+    // repositories and the one `describeSetup` spells out rather than leaving
+    // as an empty line.
+    expect(log.out).toEqual([".\tno .grove.toml\n"]);
+  },
+
+  exec: async ({ run }) => {
+    const log = await run({
+      name: "exec",
+      argv: ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+      failFast: false,
+    });
+
+    // One block per worktree, and the fixture has the one. The heading is on
+    // stderr — see the stream rule this file exists to assert — so stdout is
+    // the command's own words and nothing else.
+    expect(log.out).toEqual(["main\n"]);
+    expect(log.err.join("")).toContain("main");
+  },
+
   doctor: async ({ run }) => {
     const log = await run({ name: "doctor" });
 

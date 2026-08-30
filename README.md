@@ -46,12 +46,14 @@ grove add <branch>          # Create a new worktree for a branch, tracking its r
 grove pr <number>           # Create a worktree for reviewing a pull request, on a branch you can push back from
 grove list                  # List all worktrees along with their git status and sync drift
 grove sync [target]         # Fetch and bring all worktrees up-to-date by rebasing them
+grove exec <command>...     # Run one command in every worktree
 grove prune                 # Remove every worktree whose branch is merged or gone from the remote
 grove rename <target> <new> # Rename a branch and move its worktree directory to match
 grove reset <target>        # Discard all uncommitted changes in a worktree
 grove remove <target>       # Delete a worktree directory safely
 grove path [target]         # Print the absolute path of a selected worktree
 grove open [target]         # Open a worktree with what `.grove.toml`'s `open` says
+grove setup [target]        # Run `.grove.toml`'s `[setup]` again in a worktree that already exists
 grove cd [target]           # Change directory to a worktree (requires shell integration)
 grove doctor                # Check the repository for the traps that break a later command
 grove completion <shell>    # Print the tab-completion script (`grove install` writes it for you)
@@ -74,6 +76,7 @@ Running `grove` with no arguments opens the screen above.
 - **Look**: the selected worktree's last few commits are drawn under the list, and its uncommitted files beside it, as the tree they sit in.
 - **More**: `/` opens everything that has no key of its own — type to narrow it, `Enter` to run it.
   - `/open` opens the row under the cursor with what `.grove.toml`'s `open` says — the same line `a` ran when the worktree was made, on any day after.
+  - `/setup` fills the row under the cursor in from `.grove.toml` again, for the worktree that was made before the file said what it now says.
   - `/sync-all` syncs every worktree, not just the one under the cursor.
   - `/review` lists the repository's open pull requests and checks the one you pick out at `pr/<number>`. Needs [`gh`](https://cli.github.com), the only tool besides git that `grove` ever runs.
   - `/refresh` re-reads the list now; `/log` puts the commit panel away when the list wants the rows.
@@ -118,6 +121,19 @@ grove add feat/login-api --on feat/login
 
 There is no separate stack to maintain: it is one config key per branch, `git branch -m` carries it, and `git branch -d` takes it away.
 
+## One command, every worktree
+
+```bash
+grove exec -- bun install
+grove exec -- git status --short
+```
+
+Worktrees are N directories that were the same yesterday and are not today, and the loop over them is the thing that gets written, mis-quoted, and written again next week. `grove exec` is that loop: every worktree gets its turn even when one of them fails — the news is which one — and the exit code is 11 if the command failed anywhere.
+
+The `--` is worth typing every time; it is what stops the command's own flags being read as `grove`'s. What follows it runs as a program rather than as a shell line, so the quoting your shell already did is the quoting it gets, and a line that wants a shell asks for one with `grove exec -- sh -c '…'`. `GROVE_ROOT`, `GROVE_WORKTREE` and `GROVE_BRANCH` are in the environment, the same three a `[setup]` command gets.
+
+Headings go to stderr and only the command's own stdout to stdout, so `grove exec -- cat version.txt > all.txt` collects versions rather than a transcript.
+
 ## Workspace setup (`.grove.toml`)
 
 A new worktree is a bare checkout — no `.env`, no dependencies. Commit a `.grove.toml` to your default branch and every worktree made afterwards arrives ready:
@@ -138,6 +154,7 @@ run = ["docker compose down"]  # Shell commands run inside the worktree just bef
 - **`copy` and `link` run straight away**; `run` and `open` come from repository code a pull request could edit, so the CLI prints and skips them until you pass `--trust`. The UI runs them, since pressing `a` is consent.
 - **`open` is started and let go** — not waited for, and it outlives the shell you typed `grove add` into. It is skipped when there is no terminal to open into (`grove add | tee`, CI), and when a `run` command failed.
 - **`open` is not only for the day the worktree is made**: `grove open [target]` runs the same line again, and no target means the worktree you are standing in. `/open` in the app does it for the row under the cursor.
+- **Neither is the rest of `[setup]`.** `add` fills a worktree in on the day it makes one, and the file goes on changing afterwards — so a `copy` line added in a pull request would otherwise reach only the worktrees made after it. `grove setup [target]`, or `grove setup --all`, catches the older ones up: `copy` takes the trunk's version over what is there, `link` leaves what the worktree already has, and the commands wait for the same `--trust`. It opens nothing — `--all` over eleven worktrees would be eleven editor windows, and `grove open` is that half.
 - **`open` can be written per platform**, since one line rarely works everywhere. A platform the table leaves out opens nothing:
 
   ```toml

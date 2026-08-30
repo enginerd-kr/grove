@@ -7,6 +7,7 @@ import { openWorktree } from "../../core/commands/open.ts";
 import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
+import { setUpWorktrees, failureFor as setupFailureFor } from "../../core/commands/setup.ts";
 import {
   type SyncOutcome,
   failureFor as syncFailureFor,
@@ -130,6 +131,21 @@ export type WorktreeService = {
    * an editor.
    */
   readonly open: (target: string) => Promise<string>;
+  /**
+   * `.grove.toml`'s `[setup]`, run again in a worktree that already has one.
+   *
+   * The other half of the same argument `open` makes: `a` fills a worktree in
+   * on the day it makes one, and the file goes on changing afterwards. Reached
+   * for on the row under the cursor rather than over the whole repository,
+   * because that is the worktree you are about to work in and the one whose
+   * failure you would read.
+   *
+   * Trusted by pressing it, which `open` is not — and for the reason `a` is:
+   * the commands are what filling in *means*, the screen has already asked
+   * about them once, and a key that copied files and then declined to install
+   * anything would leave a worktree in the state this exists to get it out of.
+   */
+  readonly setup: (target: string) => Promise<string>;
   /**
    * The open pull requests, for the popup to pick one from.
    *
@@ -363,6 +379,24 @@ export function createWorktreeService(
       const tracked = result.changed - result.untracked;
 
       return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
+    },
+
+    setup: async (target) => {
+      const results = await setUpWorktrees(
+        repo,
+        cwd,
+        { target, all: false, trust: true },
+        reporter,
+      );
+      const only = results[0];
+      if (only === undefined) return "nothing to set up";
+
+      // Raised rather than returned, the way `trustAndRun` above raises setup's
+      // — and it is the same failure, reached by a different key.
+      const failure = setupFailureFor(results);
+      if (failure) throw failure;
+
+      return `${describeSetup(only)} in ${only.dir}`;
     },
 
     open: async (target) => {

@@ -28,6 +28,16 @@ export type GroveErrorCode =
   | "state-conflict"
   /** A configured `grove.setup` command exited non-zero. The worktree is there. */
   | "setup-failed"
+  /**
+   * A command *you* named exited non-zero — `grove exec`, in a worktree.
+   *
+   * Held apart from `setup-failed` because the two say different things about
+   * whose command it was. That one is a line out of `.grove.toml` failing
+   * around an operation grove was performing, and the news is that the worktree
+   * is nonetheless there; this one is the operation, and there is nothing else
+   * to report about it.
+   */
+  | "command-failed"
   /** git failed and the reason did not match anything more specific. */
   | "git-failed"
   /** The remote was unreachable, refused us, or does not exist. */

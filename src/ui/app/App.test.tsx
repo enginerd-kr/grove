@@ -101,6 +101,7 @@ type Calls = {
   readonly checkedOut: number[];
   readonly synced: (string | undefined)[];
   readonly opened: string[];
+  readonly filledIn: string[];
   readonly trusted: string[];
 };
 
@@ -119,6 +120,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     checkedOut: [],
     synced: [],
     opened: [],
+    filledIn: [],
     trusted: [],
   };
 
@@ -166,6 +168,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       open: async (target) => {
         calls.opened.push(target);
         return `opened ${target} with code .`;
+      },
+      setup: async (target) => {
+        calls.filledIn.push(target);
+        return `2 copied, 1 run in ${target}`;
       },
       // Nothing open by default: the popup is the thing being tested when it is
       // being tested, and everywhere else `p` should be a message line.
@@ -957,14 +963,32 @@ describe("the keys", () => {
 
     expect(calls.opened).toEqual(["/repo/feat/login"]);
 
-    // The one command behind the slash that is aimed at a row, so it is also
-    // the only one that can be aimed at something that is not one.
+    // One of the two commands behind the slash that are aimed at a row, so it
+    // is also one of the two that can be aimed at something that is not one.
     ui.stdin.write(keys.up);
     await settled(ui, (frame) => /▸ +feat\//.test(frame));
     await run(ui, "open");
     await settled(ui, IN_LIST);
 
     expect(calls.opened).toEqual(["/repo/feat/login"]);
+  });
+
+  test("`/setup` fills the row under the cursor in again, and does nothing on a folder", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "setup");
+    await settled(ui, (frame) => IN_LIST(frame) && frame.includes("copied"));
+
+    expect(calls.filledIn).toEqual(["/repo/feat/login"]);
+
+    ui.stdin.write(keys.up);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+    await run(ui, "setup");
+    await settled(ui, IN_LIST);
+
+    expect(calls.filledIn).toEqual(["/repo/feat/login"]);
   });
 
   test("`s` on a folder does nothing, because a folder is not a worktree", async () => {
@@ -1291,10 +1315,10 @@ describe("the keys", () => {
 
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
-    // `s` is in `sync-all` and in `refresh`, which is the whole of what a
-    // filter over four short names can narrow to.
+    // `s` is in `setup`, `sync-all` and `refresh`, which is the whole of what a
+    // filter over a handful of short names can narrow to.
     await press(ui, "s");
-    await settled(ui, (frame) => frame.includes(`2 of ${MENU_TOTAL}`));
+    await settled(ui, (frame) => frame.includes(`3 of ${MENU_TOTAL}`));
 
     await press(ui, keys.backspace);
     ui.stdin.write(keys.backspace);

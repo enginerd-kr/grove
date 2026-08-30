@@ -29,6 +29,16 @@ export const ExitCode = {
   setupFailed: 9,
   /** `gh` was missing or refused; only PR creation ever reports this. */
   gh: 10,
+  /**
+   * A command handed to `grove exec` exited non-zero in at least one worktree.
+   *
+   * Its own code rather than passing the command's through, because with a
+   * worktree apiece there is no single code to pass: two of them can fail with
+   * two different ones, and picking either would be inventing a result. What
+   * each of them said is on stdout, per worktree, which is where a script that
+   * cares about the difference has to look anyway.
+   */
+  commandFailed: 11,
   /** Ctrl-C, by the convention that an interrupt reports 128 + SIGINT. */
   interrupted: 130,
 } as const;
@@ -53,6 +63,8 @@ export function errorToExitCode(code: GroveErrorCode): ExitCodeValue {
       return ExitCode.stateConflict;
     case "setup-failed":
       return ExitCode.setupFailed;
+    case "command-failed":
+      return ExitCode.commandFailed;
     case "gh":
       return ExitCode.gh;
     case "git-failed":

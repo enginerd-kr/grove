@@ -30,6 +30,7 @@
  */
 
 export {
+  commandEnvFor,
   failureFor,
   type HookFailure,
   type HookTarget,

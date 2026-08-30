@@ -61,6 +61,19 @@ export type GroveCommand =
   | { readonly name: "list" }
   | { readonly name: "doctor" }
   | {
+      readonly name: "setup";
+      /** Absent, and without `--all`, means the worktree the shell is standing in. */
+      readonly target?: string;
+      readonly all: boolean;
+      readonly trust: boolean;
+    }
+  | {
+      readonly name: "exec";
+      /** The command and its arguments, as the shell handed them over. Never empty. */
+      readonly argv: readonly string[];
+      readonly failFast: boolean;
+    }
+  | {
       readonly name: "prune";
       /** `--gone`/`--merged`; absent means both. */
       readonly only?: "gone" | "merged";
@@ -255,6 +268,22 @@ function buildCommand(
       return { name: "list" };
     case "doctor":
       return { name: "doctor" };
+    case "setup":
+      return {
+        name: "setup",
+        target: first,
+        all: bool(values, "all"),
+        trust: bool(values, "trust"),
+      };
+    case "exec": {
+      // Every positional, not just the first: the usage line ends in `...`, so
+      // `maxPositionals` let them all through and they are the command.
+      if (positionals.length === 0) {
+        return usageError(spec, `${spec.name} needs a command to run`);
+      }
+
+      return { name: "exec", argv: positionals, failFast: bool(values, "fail-fast") };
+    }
     case "prune": {
       const gone = bool(values, "gone");
       const merged = bool(values, "merged");
@@ -341,8 +370,16 @@ function buildCommand(
   }
 }
 
-/** How many positionals the usage line promises, read straight off `spec.args`. */
+/**
+ * How many positionals the usage line promises, read straight off `spec.args`.
+ *
+ * A line ending in `...` promises no limit. That is `exec` and only `exec`: what
+ * follows it is somebody else's command line, and counting its words would be
+ * this parser having an opinion about how long `bun run build --watch` is.
+ */
 function maxPositionals(args: string): number {
+  if (args.endsWith("...")) return Number.POSITIVE_INFINITY;
+
   return args.split(/\s+/).filter((token) => token.length > 0).length;
 }
 
