@@ -27,6 +27,9 @@
  *
  * Everything else passes straight through, exit code and all, so scripts that
  * wrap grove see no difference.
+ *
+ * `invocation` is exported for `completion.ts`, whose scripts call back for the
+ * worktrees to offer and have to reach the same grove this function does.
  */
 
 export const SHELLS = ["zsh", "bash", "fish"] as const;
@@ -72,22 +75,29 @@ function invocationWords(): readonly string[] {
   return isCompiledMain(Bun.main) ? [process.execPath] : [process.execPath, Bun.main];
 }
 
-function invocation(quote: (word: string) => string): string {
+export function invocation(quote: (word: string) => string): string {
   return invocationWords().map(quote).join(" ");
 }
 
 /**
- * The line `grove install` appends to an rc file.
+ * A line `grove install` appends to an rc file.
  *
  * Built from the same words the printed function calls back through, so the
  * line this writes and the line a bare checkout would be told to write by
  * hand are never out of step. fish parses its own `$(...)` with fish quoting
  * rather than POSIX, which is why the choice of `quote` follows `shell` here
  * too.
+ *
+ * `command` is which of the two evals this is. They are the same shape — run
+ * grove, evaluate what it prints — and spelling them apart would be two copies
+ * of one line for the sake of a word.
  */
-export function evalLine(shell: Shell): string {
+export function evalLine(
+  shell: Shell,
+  command: "shell-init" | "completion" = "shell-init",
+): string {
   const quote = shell === "fish" ? fishQuote : posixQuote;
-  const words = [...invocationWords(), "shell-init", shell].map(quote).join(" ");
+  const words = [...invocationWords(), command, shell].map(quote).join(" ");
 
   return `eval "$(${words})"`;
 }

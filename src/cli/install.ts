@@ -5,18 +5,43 @@ import { GroveError } from "../core/errors.ts";
 import { evalLine, isShell, SHELLS, type Shell } from "./shell-init.ts";
 
 /**
- * `grove install` — the one line from `shell-init` written for you, instead of
- * copied by hand into whichever rc file this shell happens to read.
+ * `grove install` — the lines from `shell-init` and `completion` written for
+ * you, instead of copied by hand into whichever rc file this shell happens to
+ * read.
  *
- * Idempotent by searching for the marker rather than the exact line: someone
- * who already pasted the long-checkout spelling by hand gets left alone
- * rather than getting a second, redundant eval.
+ * Idempotent by searching for each marker rather than the exact line: someone
+ * who already pasted the long-checkout spelling by hand gets left alone rather
+ * than getting a second, redundant eval — and gets the line they do not have
+ * yet, which is what makes this worth running again after an upgrade.
  */
 
-// Not "grove shell-init" as a phrase: the invocation is the runtime and entry
-// script, not the literal word "grove", so only "shell-init" is guaranteed to
-// appear verbatim regardless of how grove was reached when the line was written.
-const MARKER = "shell-init";
+/**
+ * What an install puts in an rc file: one eval line each, and why.
+ *
+ * Two pieces and not one line with two jobs, because they are missing
+ * separately. Everybody who installed before completions existed has the first
+ * and not the second, and the useful thing for them is `grove install` adding
+ * the one they are short of rather than reporting that they are done.
+ *
+ * The marker is a word from the line, not the phrase `grove shell-init`: the
+ * invocation written into the file is the runtime and the entry script, not the
+ * literal word `grove`, so the subcommand's own name is the only part that
+ * appears verbatim however grove was reached when the line was written.
+ */
+type Piece = {
+  readonly command: "shell-init" | "completion";
+  readonly marker: string;
+  readonly why: string;
+};
+
+const PIECES: readonly Piece[] = [
+  {
+    command: "shell-init",
+    marker: "shell-init",
+    why: "the shell function behind 'grove cd'",
+  },
+  { command: "completion", marker: "completion", why: "tab completion" },
+];
 
 export type InstallResult =
   | { readonly outcome: "already-installed"; readonly shell: Shell; readonly rcFile: string }
@@ -111,13 +136,18 @@ export async function installShellInit(
     throw error;
   });
 
-  if (existing.includes(MARKER)) {
+  const missing = PIECES.filter((piece) => !existing.includes(piece.marker));
+  if (missing.length === 0) {
     return { outcome: "already-installed", shell: resolved, rcFile };
   }
 
-  const line = evalLine(resolved);
+  // One block for whatever is missing, and a comment naming that much: a file
+  // getting only the completion line should say so, rather than carry a heading
+  // about a shell function that is already three lines above it.
+  const line = missing.map((piece) => evalLine(resolved, piece.command)).join("\n");
+  const why = missing.map((piece) => piece.why).join(", and ");
   const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
-  const block = `${separator}\n# grove: the shell function behind 'grove cd'\n${line}\n`;
+  const block = `${separator}\n# grove: ${why}\n${line}\n`;
 
   await mkdir(dirname(rcFile), { recursive: true });
   await appendFile(rcFile, block);

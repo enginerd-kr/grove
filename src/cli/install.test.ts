@@ -52,9 +52,9 @@ function writtenLine(result: InstallResult): string {
   return result.line;
 }
 
-/** What the install writes, as the block it appends. */
+/** What a full install writes: one block, holding both eval lines. */
 function block(line: string): string {
-  return `\n# grove: the shell function behind 'grove cd'\n${line}\n`;
+  return `\n# grove: the shell function behind 'grove cd', and tab completion\n${line}\n`;
 }
 
 describe("detectShell", () => {
@@ -147,7 +147,7 @@ describe("installShellInit", () => {
     await withTempHome(async (home, env) => {
       // The idempotency is on the marker, not on the exact line: a long-checkout
       // spelling pasted by hand is the same installation.
-      const original = '# mine\neval "$(grove shell-init bash)"\n';
+      const original = '# mine\neval "$(grove shell-init bash)"\neval "$(grove completion bash)"\n';
       await Bun.write(join(home, ".bashrc"), original);
 
       const result = await installShellInit("bash", { env, home });
@@ -155,6 +155,26 @@ describe("installShellInit", () => {
       expect(result.outcome).toBe("already-installed");
       expect(result.rcFile).toBe(join(home, ".bashrc"));
       expect(await Bun.file(join(home, ".bashrc")).text()).toBe(original);
+    });
+  });
+
+  test("adds only the line that is missing, for an rc file installed before it existed", async () => {
+    await withTempHome(async (home, env) => {
+      // Every rc file written by a grove that had no completions looks like
+      // this, and the useful answer for it is the one line it is short of.
+      const original = 'eval "$(grove shell-init bash)"\n';
+      await Bun.write(join(home, ".bashrc"), original);
+
+      const result = await installShellInit("bash", { env, home });
+
+      expect(result.outcome).toBe("installed");
+      expect(writtenLine(result)).toContain("'completion' 'bash'");
+      expect(writtenLine(result)).not.toContain("'shell-init'");
+      // And the heading names what the block holds, rather than repeating a
+      // sentence about the function that is already two lines above it.
+      expect(await Bun.file(join(home, ".bashrc")).text()).toBe(
+        `${original}\n# grove: tab completion\n${writtenLine(result)}\n`,
+      );
     });
   });
 

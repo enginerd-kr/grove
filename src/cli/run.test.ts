@@ -233,6 +233,19 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     expect(log.err).toEqual([]);
   },
 
+  completion: async ({ run }) => {
+    const script = await run({ name: "completion", what: "zsh" });
+
+    // The completion function, which nothing else prints.
+    expect(script.out.join("")).toContain("compdef _grove grove");
+    expect(script.err).toEqual([]);
+
+    // And the other half of the same subcommand: the list its script asks for,
+    // which is a repository question and not a shell one.
+    const words = await run({ name: "completion", what: "targets" });
+    expect(words.out.join("")).toContain("main");
+  },
+
   list: async ({ run }) => {
     const log = await run({ name: "list" }, { global: { json: true } });
     const [first] = JSON.parse(log.out.join("")) as readonly Record<string, unknown>[];

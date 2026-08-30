@@ -45,9 +45,9 @@ async function withTempHome(
   }
 }
 
-/** What the install writes, as the block it appends. */
+/** What a full install writes: one block, holding both eval lines. */
 function block(line: string): string {
-  return `\n# grove: the shell function behind 'grove cd'\n${line}\n`;
+  return `\n# grove: the shell function behind 'grove cd', and tab completion\n${line}\n`;
 }
 
 /** The `--json` document, as a script would read it. */

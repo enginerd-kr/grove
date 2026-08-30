@@ -17,6 +17,7 @@ import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
+import { completionScript, completionWords } from "./completion.ts";
 import { installShellInit } from "./install.ts";
 import { shellInit } from "./shell-init.ts";
 
@@ -134,6 +135,22 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       // No repository involved: this runs from rc files, before any repo exists.
       // No `--json` either: the function body is the result, whatever was asked for.
       reporter.out(shellInit(command.shell));
+      return;
+    }
+
+    case "completion": {
+      // No repository for the script itself — it is printed from an rc file,
+      // before any repository exists — and no `--json`: the script is the
+      // result, whatever was asked for, exactly as `shell-init` is.
+      if (command.what === "targets" || command.what === "branches") {
+        const words = await completionWords(cwd, global.repo, command.what);
+        // Nothing at all rather than a blank line: this is read by `compgen`,
+        // which would offer the empty string as a candidate.
+        if (words.length > 0) reporter.out(words.join("\n"));
+        return;
+      }
+
+      reporter.out(completionScript(command.what));
       return;
     }
 

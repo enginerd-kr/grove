@@ -26,14 +26,17 @@ Worktrees are the right answer for working on two branches at once, and almost n
 
 ```bash
 brew install enginerd-kr/tap/grove
-grove install      # shell integration, so `grove cd` can move your shell
+grove install      # shell integration: `grove cd` moves your shell, and TAB fills in names
 ```
 
-`grove install` finds your shell and writes the line itself. By hand, it is:
+`grove install` finds your shell and writes the lines itself — one for `grove cd`, one for tab completion. By hand, they are:
 
 ```bash
 eval "$(grove shell-init zsh)"    # zsh, bash, and fish
+eval "$(grove completion zsh)"
 ```
+
+Completion fills in the commands, their flags, and the names — `grove cd feat/<TAB>` offers the worktrees you have, and `grove add <TAB>` the branches that do not have one yet. Run `grove install` again if you installed before it existed: it adds the line you are missing and leaves the one you have.
 
 ## Usage
 
@@ -50,6 +53,7 @@ grove remove <target>       # Delete a worktree directory safely
 grove path [target]         # Print the absolute path of a selected worktree
 grove cd [target]           # Change directory to a worktree (requires shell integration)
 grove doctor                # Check the repository for the traps that break a later command
+grove completion <shell>    # Print the tab-completion script (`grove install` writes it for you)
 ```
 
 Two flags worth knowing:

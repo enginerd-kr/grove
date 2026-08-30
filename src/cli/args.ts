@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { version } from "../../package.json";
+import { type CompletionWord, isCompletionWord } from "./completion.ts";
 import type { FlagSpec, SubcommandSpec } from "./help.ts";
 import {
   BIN_NAME,
@@ -75,6 +76,16 @@ export type GroveCommand =
     }
   | { readonly name: "path"; readonly target?: string }
   | { readonly name: "shell-init"; readonly shell: Shell }
+  | {
+      readonly name: "completion";
+      /**
+       * A shell to print a script for, or a word one of those scripts asks back
+       * with — the two are one subcommand because they are one feature, and a
+       * separate `__complete` nobody would ever type would be a second name for
+       * the same thing.
+       */
+      readonly what: Shell | CompletionWord;
+    }
   | { readonly name: "install"; readonly shell?: Shell }
   | {
       readonly name: "reset";
@@ -259,6 +270,16 @@ function buildCommand(
       }
       if (!isShell(first)) return notAShell(spec, first);
       return { name: "shell-init", shell: first };
+    }
+    case "completion": {
+      if (first === undefined) {
+        return usageError(spec, `${spec.name} needs a shell: ${SHELLS.join(", ")}`);
+      }
+      // The callback words are accepted and not advertised in the refusal: they
+      // are what the printed scripts run, and somebody who mistyped a shell name
+      // is not helped by being offered two words about worktree names.
+      if (!isShell(first) && !isCompletionWord(first)) return notAShell(spec, first);
+      return { name: "completion", what: first };
     }
     case "install": {
       if (first !== undefined && !isShell(first)) return notAShell(spec, first);
