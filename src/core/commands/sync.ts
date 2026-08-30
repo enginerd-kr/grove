@@ -1,8 +1,9 @@
 import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, enableReflogs, fetchRemotes } from "../branches.ts";
+import { defaultBranch, enableReflogs, fetchRemotes, localBranchExists } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { ancestry, clearParent, readStack, type Stack, setParent, stackOrder } from "../stack.ts";
 import {
   listWorktrees,
   resolveTarget,
@@ -17,6 +18,14 @@ import {
  * Nothing here touches a worktree it has not first established is safe to touch.
  * A sync that half-finishes is worse than one that declines, because the user
  * finds out later and in the middle of something else.
+ *
+ * "The default branch" is the answer for most worktrees and the wrong one for a
+ * stack. A branch cut from another branch — `grove add … --on`, recorded in
+ * `core/stack.ts` — goes back onto that one, and the trunk reaches it through
+ * its parent. Rebasing it onto the trunk directly would replay it over the
+ * absence of the work it was written on top of, which is a conflict against a
+ * change sitting in the next directory along. So the base is per worktree, and
+ * the order is bottom-up: a parent is moved before anything standing on it.
  */
 
 export type SyncOptions = {
@@ -44,6 +53,23 @@ export type SyncOutcome = {
   /** Why it was skipped, or what conflicted. Absent when nothing went wrong. */
   readonly reason?: string;
   readonly conflicts?: readonly string[];
+  /**
+   * What this worktree was brought up to date against.
+   *
+   * `origin/main` for an ordinary branch, and the parent branch for one in a
+   * stack. Reported because for a stack it is the whole of what the command
+   * decided: two worktrees that both say `rebased` did two different things,
+   * and this is the field that says which.
+   */
+  readonly onto?: string;
+  /**
+   * The branch this one was moved onto, when its recorded parent had gone.
+   *
+   * Set only when the record changed — a stack whose bottom branch was deleted
+   * is one this command silently repaired, and a repair nobody was told about
+   * is one they find out about from the rebase it caused.
+   */
+  readonly reparented?: string;
   /** Absent when there was nothing to publish; false when the remote refused. */
   readonly pushed?: boolean;
   /** Why the push did not happen, when it was meant to. */
@@ -59,7 +85,8 @@ export async function syncWorktrees(
   reporter: Reporter,
 ): Promise<readonly SyncOutcome[]> {
   const worktrees = await listWorktrees(repo.gitDir);
-  const targets = chooseTargets(worktrees, repo.root, cwd, options);
+  const stack = await readStack(repo.gitDir);
+  const targets = chooseTargets(worktrees, repo.root, cwd, options, stack);
 
   // Asserted here, before the fetch, and not only in `clone`: a repository
   // cloned before grove started setting it has no reflogs, and the push at the
@@ -81,39 +108,157 @@ export async function syncWorktrees(
   const outcomes: SyncOutcome[] = [];
 
   for (const target of targets) {
-    outcomes.push(await syncOne(target, repo.root, trunk, options, reporter));
+    // Resolved inside the loop rather than up front, because the answer depends
+    // on what the branches above this one have just become: a parent that was
+    // rebased two iterations ago is where this one is going.
+    const base = await baseFor(repo, target.branch, trunk, stack, reporter);
+
+    outcomes.push(await syncOne(target, repo.root, trunk, base, options, reporter));
   }
 
   return outcomes;
 }
 
+/** The base a worktree is rebased onto, and the record that had to be repaired to say so. */
+type Base = { readonly onto: string; readonly reparented?: string };
+
+/**
+ * What this branch goes back onto — its parent, or the trunk.
+ *
+ * The chain is walked rather than only its first link, because the branch a
+ * stack was standing on is the one most likely to be gone: it is the bottom of
+ * the stack, so it merges first, and `prune --delete-branch` clears it away.
+ * Walking up finds the nearest ancestor still here, which is where the rest of
+ * the stack now belongs.
+ *
+ * And what it finds is **written back**. A record pointing at a branch that no
+ * longer exists is repaired here rather than tolerated, because tolerating it
+ * would mean every later command walking the same dead link — and because the
+ * repair is the honest description of what this repository now is: two branches
+ * where there were three.
+ *
+ * The trunk is where a chain ends, either by being named in it or by running
+ * out of ancestors. It is the one base spelled as a remote-tracking ref, for
+ * the reason `syncOne` gives: the trunk is measured against what the remote has
+ * and every other branch against what is here.
+ */
+async function baseFor(
+  repo: RepoPaths,
+  branch: string | undefined,
+  trunk: string,
+  stack: Stack,
+  reporter: Reporter,
+): Promise<Base> {
+  const onto = `${REMOTE}/${trunk}`;
+  if (branch === undefined) return { onto };
+
+  const chain = ancestry(stack, branch);
+  if (chain.length === 0) return { onto };
+
+  for (const [index, parent] of chain.entries()) {
+    // The trunk named in a chain is still the trunk, and still measured against
+    // the remote — somebody who wrote `--on main` said the ordinary thing in the
+    // explicit way, and it must not read as a parent that has gone.
+    const reached =
+      parent === trunk ? onto : (await localBranchExists(repo.gitDir, parent)) ? parent : undefined;
+    if (reached === undefined) continue;
+
+    // The nearest one is still there, so nothing was repaired and nothing is
+    // said: this is the ordinary shape of a stack that is being worked in.
+    if (index === 0) return { onto: reached };
+
+    if (reached === onto) await clearParent(repo.gitDir, branch);
+    else await setParent(repo.gitDir, branch, reached);
+    reporter.info(`${branch} now sits on ${parent} — ${chain[0]} has gone`);
+
+    return { onto: reached, reparented: parent };
+  }
+
+  await clearParent(repo.gitDir, branch);
+  reporter.info(`${branch} now sits on ${trunk} — ${chain[0]} has gone`);
+
+  return { onto, reparented: trunk };
+}
+
+/**
+ * Which worktrees this run touches, and in what order.
+ *
+ * The order is the part a stack adds: a parent is synced before its children,
+ * so a child is replayed onto a parent that has already taken the trunk's new
+ * commits rather than onto the position the parent is about to leave.
+ *
+ * Naming one worktree brings its parents with it, which is the one place this
+ * command does more than it was literally asked to. The reason is that the
+ * smaller reading is not useful: rebasing `feat/login-api` onto a `feat/login`
+ * that is itself four commits behind the trunk leaves the branch exactly as
+ * stale as it was, and the user would type the two commands in this order
+ * anyway. Nothing is hidden by it — every worktree that was touched is in the
+ * outcomes, and a parent that was dirty is reported as skipped there.
+ */
 function chooseTargets(
   worktrees: readonly WorktreeRecord[],
   root: string,
   cwd: string,
   options: SyncOptions,
+  stack: Stack,
 ): readonly WorktreeRecord[] {
-  if (options.all) return worktrees;
-  if (options.target !== undefined) {
-    return [resolveTarget(options.target, worktrees, { root, cwd })];
+  if (options.all) return stackOrder(worktrees, stack, (record) => record.branch);
+
+  const chosen =
+    options.target === undefined
+      ? worktrees.find((record) => contains(record.path, cwd))
+      : resolveTarget(options.target, worktrees, { root, cwd });
+
+  if (!chosen) {
+    throw new GroveError("usage", "not inside a worktree, so there is nothing to sync", {
+      hint: "name one (`grove sync <branch>`) or pass --all",
+    });
   }
 
-  const here = worktrees.find((record) => contains(record.path, cwd));
-  if (here) return [here];
+  return withAncestors(chosen, worktrees, stack);
+}
 
-  throw new GroveError("usage", "not inside a worktree, so there is nothing to sync", {
-    hint: "name one (`grove sync <branch>`) or pass --all",
-  });
+/** The worktrees under this one in its stack, furthest first, and then it. */
+function withAncestors(
+  record: WorktreeRecord,
+  worktrees: readonly WorktreeRecord[],
+  stack: Stack,
+): readonly WorktreeRecord[] {
+  if (record.branch === undefined) return [record];
+
+  const chain = ancestry(stack, record.branch);
+  if (chain.length === 0) return [record];
+
+  const byBranch = new Map(
+    worktrees
+      .filter((each) => each.branch !== undefined)
+      .map((each) => [each.branch as string, each] as const),
+  );
+
+  // An ancestor with no worktree is skipped rather than refused: the branch is
+  // still a base its children rebase onto, there is just no checkout to move it
+  // in. `baseFor` handles the one that is gone altogether.
+  const parents = chain
+    .map((branch) => byBranch.get(branch))
+    .filter((each): each is WorktreeRecord => each !== undefined)
+    .toReversed();
+
+  return [...parents, record];
 }
 
 async function syncOne(
   record: WorktreeRecord,
   root: string,
   trunk: string,
+  base: Base,
   options: SyncOptions,
   reporter: Reporter,
 ): Promise<SyncOutcome> {
   const name = worktreeDir(root, record.path);
+  // Spread rather than assigned, so an outcome that repaired nothing does not
+  // carry the key at all: `reparented: undefined` and no `reparented` read the
+  // same to a person and differently to `--json` and to a test.
+  const repaired = base.reparented === undefined ? {} : { reparented: base.reparented };
   const skip = (reason: string, conflicts?: readonly string[]): SyncOutcome => ({
     path: record.path,
     dir: name,
@@ -121,6 +266,16 @@ async function syncOne(
     kind: "skipped",
     reason,
     conflicts,
+    // Carried onto a skip as much as onto a rebase: a repaired record is a
+    // change to the repository, and it happened whether or not the worktree
+    // holding the branch turned out to be in a state to be moved.
+    ...repaired,
+  });
+  /** The two facts about the base, put on an outcome `settle` built without them. */
+  const stamp = (outcome: SyncOutcome): SyncOutcome => ({
+    ...outcome,
+    onto: base.onto,
+    ...repaired,
   });
 
   // Checked before the detached test, because a worktree stopped mid-rebase is
@@ -142,7 +297,9 @@ async function syncOne(
   }
 
   const before = await gitOutput(["rev-parse", "HEAD"], { cwd: record.path });
-  const onto = `${REMOTE}/${trunk}`;
+  // `origin/<trunk>` for a branch that hangs off the trunk, and the parent
+  // branch — a local one — for a branch in a stack. See `baseFor`.
+  const onto = base.onto;
   const step = reporter.step(`syncing ${name}`);
 
   /**
@@ -161,15 +318,15 @@ async function syncOne(
    * consult — a fresh clone — git falls back to plain `base`, so nothing is
    * worse than it was.
    */
-  const rebaseOnto = async (base: string): Promise<SyncOutcome | undefined> => {
-    const result = await runGit(["rebase", "--fork-point", base], { cwd: record.path });
+  const rebaseOnto = async (ref: string): Promise<SyncOutcome | undefined> => {
+    const result = await runGit(["rebase", "--fork-point", ref], { cwd: record.path });
     if (result.code === 0) return undefined;
 
     const conflicts = await conflictedPaths(record.path);
     if (options.abortOnConflict) {
       await runGit(["rebase", "--abort"], { cwd: record.path });
     }
-    step.fail(`${name} conflicts with ${base}`);
+    step.fail(`${name} conflicts with ${ref}`);
 
     return {
       path: record.path,
@@ -177,9 +334,11 @@ async function syncOne(
       branch: record.branch,
       kind: "conflicted",
       reason: options.abortOnConflict
-        ? `rebase onto ${base} conflicted and was rolled back`
-        : `rebase onto ${base} conflicted and was left in place to resolve`,
+        ? `rebase onto ${ref} conflicted and was rolled back`
+        : `rebase onto ${ref} conflicted and was left in place to resolve`,
       conflicts,
+      onto,
+      ...repaired,
     };
   };
 
@@ -199,14 +358,14 @@ async function syncOne(
    */
   if (record.branch === trunk) {
     const ff = await runGit(["merge", "--ff-only", onto], { cwd: record.path });
-    if (ff.code === 0) return settle(record, name, before, step, "fast-forwarded");
+    if (ff.code === 0) return stamp(await settle(record, name, before, step, "fast-forwarded"));
 
     const conflicted = await rebaseOnto(onto);
     if (conflicted) return conflicted;
 
     const published = await publish(record, name, onto, options, reporter, { force: false });
 
-    return { ...(await settle(record, name, before, step, "rebased")), ...published };
+    return stamp({ ...(await settle(record, name, before, step, "rebased")), ...published });
   }
 
   /**
@@ -230,7 +389,7 @@ async function syncOne(
     force: true,
   });
 
-  return { ...(await settle(record, name, before, step, "rebased")), ...published };
+  return stamp({ ...(await settle(record, name, before, step, "rebased")), ...published });
 }
 
 /** The half of a rebase workflow that a rebase does not do. */

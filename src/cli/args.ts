@@ -41,6 +41,8 @@ export type GroveCommand =
       readonly name: "add";
       readonly branch: string;
       readonly from?: string;
+      /** `--on`: the branch this one is stacked on, recorded as well as used as the base. */
+      readonly on?: string;
       readonly fetch: boolean;
       readonly push: boolean;
       readonly setup: boolean;
@@ -217,10 +219,22 @@ function buildCommand(
     }
     case "add": {
       if (first === undefined) return usageError(spec, `${spec.name} needs a branch name`);
+
+      const from = str(values, "from");
+      const on = str(values, "on");
+      // Both name a base, and only one of them is also remembered — see
+      // `checkedParent` in `core/commands/add.ts`. Refused here rather than
+      // ranked, because either ranking silently does something the other flag
+      // was typed to ask for.
+      if (from !== undefined && on !== undefined) {
+        return usageError(spec, "--on and --from both say where the branch starts; pass one");
+      }
+
       return {
         name: "add",
         branch: first,
-        from: str(values, "from"),
+        from,
+        on,
         fetch: !bool(values, "no-fetch"),
         push: bool(values, "push"),
         setup: !bool(values, "no-setup"),

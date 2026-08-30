@@ -10,6 +10,7 @@ import {
   remoteRef,
 } from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { readStack } from "../stack.ts";
 import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
 
 /** `grove list` — what is here, what state it is in, and where you are standing. */
@@ -134,6 +135,14 @@ export type WorktreeSummary = {
    * it is on are the two nobody has cleared away yet.
    */
   readonly finished?: Finished;
+  /**
+   * The branch this one was stacked on, when it was stacked on one.
+   *
+   * Absent for almost every row, which is what makes it worth showing: a stack
+   * is the case where "how far from the trunk" is answering about the wrong
+   * base, and this is the field that says so. See `core/stack.ts`.
+   */
+  readonly parent?: string;
   /** True for the branch the repository treats as its trunk. */
   readonly isDefault: boolean;
   /** True for the worktree the command was run from. */
@@ -173,9 +182,10 @@ export async function listWorktreeSummaries(
   repo: RepoPaths,
   cwd: string,
 ): Promise<readonly WorktreeSummary[]> {
-  const [records, trunk] = await Promise.all([
+  const [records, trunk, stack] = await Promise.all([
     listWorktrees(repo.gitDir),
     defaultBranch(repo.gitDir),
+    readStack(repo.gitDir),
   ]);
   // After `trunk` is known, and once for every branch rather than per worktree.
   const [drift, states, committed] = await Promise.all([
@@ -222,6 +232,7 @@ export async function listWorktreeSummaries(
           trunk,
           record.branch === undefined ? undefined : states.get(record.branch),
         ),
+        parent: record.branch === undefined ? undefined : stack.get(record.branch),
         isDefault: record.branch === trunk,
         current: contains(record.path, cwd),
       };
@@ -258,14 +269,24 @@ function stateParts(summary: WorktreeSummary, withDirty: boolean): string[] {
   return parts;
 }
 
-/** The state column: the shortest true description of the worktree. */
+/**
+ * The state column: the shortest true description of the worktree.
+ *
+ * The parent is appended rather than folded in with the rest, and after
+ * `clean`. Everything before it is a state the worktree is in and could get out
+ * of; where a branch was cut from is not one of those, and a row reading `on
+ * feat/login` *instead* of `clean` would have dropped the answer to the
+ * question the column is for.
+ */
 function describeState(summary: WorktreeSummary): string {
   const parts = stateParts(summary, true);
   if (summary.ahead > 0) parts.push(`${summary.ahead} ahead`);
   if (summary.behind > 0) parts.push(`${summary.behind} behind`);
   if (summary.locked) parts.push("locked");
 
-  return parts.length === 0 ? "clean" : parts.join(", ");
+  const state = parts.length === 0 ? "clean" : parts.join(", ");
+
+  return summary.parent === undefined ? state : `${state}, on ${summary.parent}`;
 }
 
 /**
@@ -279,6 +300,9 @@ function describeState(summary: WorktreeSummary): string {
 export function noteParts(summary: WorktreeSummary): readonly string[] {
   const parts = stateParts(summary, false);
   if (summary.locked) parts.push("locked");
+  // Last, because it is the only one of these that is not a warning: the other
+  // three are things to deal with, and this is where the row sits.
+  if (summary.parent !== undefined) parts.push(`on ${summary.parent}`);
 
   return parts;
 }

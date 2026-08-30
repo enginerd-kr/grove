@@ -6,6 +6,7 @@ import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase, worktreePathFor } from "../layout.ts";
+import { renameInStack } from "../stack.ts";
 import { listWorktrees, resolveTarget, worktreeDir } from "../worktrees.ts";
 import { refuseNameCollision } from "./add.ts";
 import { pruneEmptyParents } from "./remove.ts";
@@ -107,6 +108,12 @@ export async function renameWorktree(
 
   const moved = target.path !== path;
   if (moved) await moveWorktree(repo, target.path, path, from, options.to, reporter);
+
+  // After the move, because the move is what can still put the old name back.
+  // `git branch -m` carried this branch's own parent across with its config
+  // section; what it could not know is that other branches name this one as
+  // theirs, and after a rename that is a name the repository has not got.
+  await renameInStack(repo.gitDir, from, options.to);
 
   // Pushing the new name leaves the old branch on the remote. Deleting it is a
   // decision about somebody else's pull request and somebody else's checkout,

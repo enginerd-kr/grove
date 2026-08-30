@@ -13,6 +13,7 @@ import { pathExists } from "../fs.ts";
 import { gitSucceeds, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { contains, worktreePathFor } from "../layout.ts";
+import { readStack, setParent, wouldCycle } from "../stack.ts";
 import { type TakeResult, takeChanges } from "../take.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
@@ -22,6 +23,15 @@ export type AddOptions = {
   readonly branch: string;
   /** Base for a branch that does not exist yet. Defaults to the remote's default. */
   readonly from?: string;
+  /**
+   * The branch this one sits on top of — a stack rather than a branch off the trunk.
+   *
+   * Does two things, and they are two because one of them outlives the command.
+   * It is the base the new branch is cut from, which `--from` also does; and it
+   * is written down, which is what makes every later `sync` rebase this branch
+   * onto that one instead of onto the trunk. See `core/stack.ts`.
+   */
+  readonly on?: string;
   /** Fetch before deciding the branch is missing. On by default. */
   readonly fetch: boolean;
   readonly push: boolean;
@@ -78,6 +88,8 @@ export type AddResult = {
   readonly upstream?: string;
   /** True when the worktree was already there and nothing was done. */
   readonly alreadyPresent: boolean;
+  /** The branch this one was recorded as sitting on, when `--on` said so. */
+  readonly parent?: string;
   /** What `grove.copy`/`link`/`setup` did, when anything was configured. */
   readonly setup?: SetupResult;
   /** What `--take` carried across, when it was asked for. */
@@ -100,15 +112,23 @@ export async function addWorktree(
   // not a worktree fails while the request is still only a request — rather
   // than after a `git worktree add` that nobody would then want.
   const source = options.take ? takeSource(cwd, worktrees) : undefined;
+  // And vetted here for the same reason: a `--on` naming a branch this
+  // repository has not got is a mistake in the command line, and a refusal that
+  // arrives after the directory does is a refusal with a directory behind it.
+  const parent =
+    options.on === undefined ? undefined : await checkedParent(repo, options.branch, options.on);
 
   const existing = await checkAlreadyThere(repo.root, options.branch, path, worktrees);
   if (existing) {
     // Asking for a worktree that is there is not an error, and neither is
     // asking for the changes to be moved into it: that half of the request has
-    // not happened yet, and it is the half that was the point.
-    if (source === undefined || source === path) return existing;
+    // not happened yet, and it is the half that was the point. The same is true
+    // of `--on` — the branch was cut from wherever it was cut from, and where
+    // it goes back to is a fact this command can still record.
+    if (parent !== undefined) await setParent(repo.gitDir, options.branch, parent);
+    if (source === undefined || source === path) return { ...existing, parent };
 
-    return { ...existing, took: await takeChanges(source, path, reporter) };
+    return { ...existing, parent, took: await takeChanges(source, path, reporter) };
   }
 
   refuseNameCollision(repo.root, path, worktrees);
@@ -143,6 +163,11 @@ export async function addWorktree(
     throw error;
   }
 
+  // Written before the push rather than after it: a remote that refused the
+  // branch says nothing about which branch it was cut from, and a stack whose
+  // record depended on the network would be one that quietly is not a stack.
+  if (parent !== undefined) await setParent(repo.gitDir, options.branch, parent);
+
   const pushFailure = `created the worktree, but pushing ${options.branch} failed`;
   if (options.push) await pushUpstream(path, options.branch, reporter, pushFailure);
 
@@ -170,9 +195,59 @@ export async function addWorktree(
     source: origin.kind,
     upstream: origin.kind === "new" && !options.push ? undefined : `${REMOTE}/${options.branch}`,
     alreadyPresent: false,
+    parent,
     setup,
     took,
   };
+}
+
+/**
+ * The branch `--on` names, once it is one this repository can stack on.
+ *
+ * Four refusals, and each is a different mistake.
+ *
+ * `--from` alongside it is refused a layer up, in `args.ts`, because both flags
+ * name a base and only one of them is remembered: taking `--on` and ignoring
+ * `--from` would start the branch somewhere other than where it was asked to
+ * start, and taking `--from` while recording `--on` would record a parent the
+ * branch was never cut from — the same lie, one `sync` later.
+ *
+ * A parent that is not a local branch is refused rather than fetched for. The
+ * stack a branch belongs to is a local arrangement of local branches — see
+ * `core/stack.ts` — and `origin/feat/login` as a parent would be the branch as
+ * the remote last saw it, which is not the thing a child gets rebased onto.
+ *
+ * A cycle is refused at the one moment it can be: `wouldCycle` asks whether the
+ * parent is already somewhere under this branch, which is the whole of what
+ * would make the two of them unresolvable afterwards.
+ *
+ * And the trunk cannot be given a parent. It is the branch everything else is
+ * measured against, so a record putting it on top of a feature branch would
+ * have `sync` fast-forwarding the trunk onto that branch and pushing the result
+ * — which is not a mistake to leave reachable by one flag. Stacking *on* the
+ * trunk is fine and is what every unstacked branch already does; the refusal is
+ * only about the trunk as the thing being stacked.
+ */
+async function checkedParent(repo: RepoPaths, branch: string, on: string): Promise<string> {
+  if (branch === (await defaultBranch(repo.gitDir))) {
+    throw new GroveError("usage", `${branch} is the branch everything else is measured against`, {
+      hint: "the trunk is the bottom of every stack; --on goes on the branch above it",
+    });
+  }
+
+  if (!(await localBranchExists(repo.gitDir, on))) {
+    throw new GroveError("usage", `there is no branch named ${JSON.stringify(on)} here`, {
+      hint: "a stack sits on a branch this repository has — make the parent first",
+    });
+  }
+
+  if (wouldCycle(await readStack(repo.gitDir), branch, on)) {
+    throw new GroveError("state-conflict", `${on} is already stacked under ${branch}`, {
+      hint: "a stack is a line, and this would close it into a loop",
+    });
+  }
+
+  return on;
 }
 
 /**
@@ -392,7 +467,10 @@ async function resolveSource(
     if (await remoteBranchExists(bare, options.branch)) return { kind: "remote" };
   }
 
-  const base = options.from ?? `${REMOTE}/${await defaultBranch(bare)}`;
+  // `--on` is a base as well as a record — a branch stacked on another one
+  // starts at that one's tip, which is the whole of what "on top of" means. It
+  // is checked before this point, so by here it is a branch that exists.
+  const base = options.on ?? options.from ?? `${REMOTE}/${await defaultBranch(bare)}`;
   if (
     !(await gitSucceeds(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], { cwd: bare }))
   ) {

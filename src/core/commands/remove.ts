@@ -7,6 +7,7 @@ import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase } from "../layout.ts";
+import { forgetBranch } from "../stack.ts";
 import {
   listWorktrees,
   resolveTarget,
@@ -116,6 +117,12 @@ export async function removeWorktree(
   }
 
   if (options.deleteBranch && target.branch !== undefined) {
+    // Before the deletion and not after it: `git branch -d` takes the whole
+    // `branch.<name>` config section with it, and the stack record is in there.
+    // Anything standing on this branch is handed to whatever it was standing on.
+    for (const { child, parent } of await forgetBranch(repo.gitDir, target.branch)) {
+      reporter.info(`${child} now sits on ${parent ?? "the default branch"}`);
+    }
     await deleteBranch(repo.gitDir, target.branch, options.force, reporter);
 
     return { path: target.path, dir, branch: target.branch, branchDeleted: true, teardown };

@@ -57,9 +57,10 @@ grove doctor                # Check the repository for the traps that break a la
 grove completion <shell>    # Print the tab-completion script (`grove install` writes it for you)
 ```
 
-Two flags worth knowing:
+Three flags worth knowing:
 
 - `grove add <branch> --take` moves the changes you have been making in the current worktree into the new one — staged still staged, untracked carried across — without going near the shared stash stack.
+- `grove add <branch> --on <parent>` starts the branch on another branch of yours instead of on the trunk, and remembers that it sits there. See [Stacked branches](#stacked-branches).
 - `grove prune --dry-run` says what would go first. Rows badged `merged` (the trunk has them) or `gone` (the remote deleted them) are the candidates; anything holding uncommitted work, mid-rebase, locked, or under your feet is reported and left alone.
 
 ## The interactive UI
@@ -98,6 +99,24 @@ The keys stay few on purpose: the bar holds what acts on the row under the curso
 ```
 
 Inside an ordinary clone, `grove` leaves the layout alone: `grove add feat/login` puts the worktree at `../repo-feat-login`.
+
+## Stacked branches
+
+A second pull request written on top of a first one is the case where "how far from the trunk" is the wrong question. `feat/login-api` was cut from `feat/login` because the screen calls the API; rebasing it onto the trunk would replay it over the absence of the work it was written on, which is a conflict against a change sitting in the next directory along.
+
+```bash
+grove add feat/login
+grove add feat/login-api --on feat/login
+```
+
+`--on` does two things, and the second is the one that lasts. It cuts the branch from `feat/login`'s tip — which `--from` also does — and it writes down that the branch sits there, in the bare repository's own config beside the upstream git keeps in the same place. From then on:
+
+- **`sync` rebases it onto its parent**, and onto the trunk only through it. The parent moves first, so the child is replayed onto a branch that has already taken the trunk's new commits rather than onto the position its parent is about to leave.
+- **Naming the child brings its parents with it.** `grove sync feat/login-api` syncs `feat/login` first, because rebasing onto a parent four commits behind the trunk leaves the branch exactly as stale as it was. Every worktree it touched is in the output.
+- **A parent that goes is handed back.** Merge the bottom branch and `grove prune --delete-branch` it, and what stood on it now stands on what *it* stood on — down to the trunk. `remove`, `prune` and `rename` all keep the records honest, and a `sync` that meets a parent deleted some other way repairs the record and says so.
+- **`grove list` shows it**, as `on feat/login` in the state column, and on the row in the app.
+
+There is no separate stack to maintain: it is one config key per branch, `git branch -m` carries it, and `git branch -d` takes it away.
 
 ## Workspace setup (`.grove.toml`)
 

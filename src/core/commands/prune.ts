@@ -3,6 +3,7 @@ import { fetchRemotes } from "../branches.ts";
 import { isGroveError } from "../errors.ts";
 import { runGit } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
+import { forgetBranch } from "../stack.ts";
 import { type Finished, listWorktreeSummaries, type WorktreeSummary } from "./list.ts";
 import { dropPrRemote, removeWorktree } from "./remove.ts";
 import { describeDiscard } from "./reset.ts";
@@ -198,6 +199,13 @@ export async function pruneWorktrees(
     if (!options.deleteBranch || base.branch === undefined) {
       entries.push(base);
       continue;
+    }
+
+    // Before the deletion, for the reason `remove` gives: the record lives in
+    // the section git is about to take away, and a stack whose bottom branch
+    // was just cleared is still a stack of the ones above it.
+    for (const { child, parent } of await forgetBranch(repo.gitDir, base.branch)) {
+      reporter.info(`${child} now sits on ${parent ?? "the default branch"}`);
     }
 
     const outcome = await deleteBranch(repo.gitDir, base.branch, reporter);

@@ -4,17 +4,20 @@ import { join } from "node:path";
 import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
 import type { GroveError } from "../errors.ts";
 import type { RepoPaths } from "../layout.ts";
+import { readStack } from "../stack.ts";
 import {
   type Attempt,
   attempt,
   managedRepo,
   probeGit,
+  recorder,
   seedGit,
   seedWorktree,
   succeeded,
   type TempRepo,
   withTempRepo,
 } from "../test-utils.ts";
+import { addWorktree } from "./add.ts";
 import { failureFor, type SyncOutcome, syncWorktrees } from "./sync.ts";
 
 /**
@@ -140,7 +143,7 @@ describe("grove sync", () => {
       // fast-forwarded" was standing in for. `pushed` is absent rather than
       // false: a fast-forward publishes nothing, because nothing local moved.
       expect(forwarded).toEqual([
-        { path: main, dir: "main", branch: "main", kind: "fast-forwarded" },
+        { path: main, dir: "main", branch: "main", kind: "fast-forwarded", onto: "origin/main" },
       ]);
       expect(failureFor(forwarded)).toBeUndefined();
       expect(await Bun.file(join(main, "remote-one.txt")).text()).toBe("one\n");
@@ -160,7 +163,14 @@ describe("grove sync", () => {
       const rebase = await attemptSync(repo, { target: "main" });
 
       expect(succeeded(rebase)).toEqual([
-        { path: main, dir: "main", branch: "main", kind: "rebased", pushed: true },
+        {
+          path: main,
+          dir: "main",
+          branch: "main",
+          kind: "rebased",
+          pushed: true,
+          onto: "origin/main",
+        },
       ]);
       expect(failureFor(succeeded(rebase))).toBeUndefined();
 
@@ -193,6 +203,9 @@ describe("grove sync", () => {
           branch: "feat/login",
           kind: "rebased",
           pushed: true,
+          // Its own remote first and then the trunk — and the trunk is what it
+          // finished on, which is what this field is here to say.
+          onto: "origin/main",
         },
       ]);
 
@@ -369,7 +382,13 @@ describe("grove sync", () => {
       // why the line above has to be there. A caller reading only the outcome
       // is being told "up to date", and the warning is the rest of the truth.
       expect(succeeded(outcome)).toEqual([
-        { path: join(repo.root, "main"), dir: "main", branch: "main", kind: "up-to-date" },
+        {
+          path: join(repo.root, "main"),
+          dir: "main",
+          branch: "main",
+          kind: "up-to-date",
+          onto: "origin/main",
+        },
       ]);
     });
   });
@@ -396,6 +415,7 @@ describe("grove sync", () => {
           dir: "spike",
           branch: "spike",
           kind: "conflicted",
+          onto: "origin/main",
           reason: "rebase onto origin/main conflicted and was rolled back",
           // The files git stopped on, captured before the abort threw them
           // away — the one moment they exist to be read.
@@ -431,6 +451,128 @@ describe("grove sync", () => {
       expect(failure(left).details.join("\n")).toContain("left in place");
       expect(await isRebasing(worktree)).toBe(true);
       expect((await probeGit(worktree, ["status"])).stdout).toContain("rebase");
+    });
+  });
+});
+
+/**
+ * A stack, and the two things `sync` has to get right about one.
+ *
+ * The base — a branch cut from another branch goes back onto that branch, not
+ * onto the trunk — and the order, which is what makes the base worth anything:
+ * a child replayed onto a parent that has not yet taken the trunk's new commits
+ * is a child left exactly as stale as it was.
+ *
+ * `push` is off throughout. These branches have never been pushed, so there is
+ * no upstream to publish to and nothing about the remote is what is being
+ * asserted; leaving it on would only add the `--force-with-lease` machinery to
+ * a test about which commit a rebase lands on.
+ */
+describe("grove sync over a stack", () => {
+  /** `feat/a` off the trunk, `feat/b` on top of it, each with a commit of its own. */
+  async function twoDeep(repo: RepoPaths): Promise<{ a: string; b: string }> {
+    await seedWorktree(repo, "feat/a");
+    const a = join(repo.root, "feat", "a");
+    await commitIn(a, "a.txt", "a\n");
+
+    await addWorktree(
+      repo,
+      repo.root,
+      {
+        branch: "feat/b",
+        on: "feat/a",
+        fetch: false,
+        push: false,
+        setup: false,
+        trust: false,
+        take: false,
+      },
+      recorder().reporter,
+    );
+    const b = join(repo.root, "feat", "b");
+    await commitIn(b, "b.txt", "b\n");
+
+    return { a, b };
+  }
+
+  test("rebases the child onto its parent, and the parent onto the trunk first", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const { a, b } = await twoDeep(repo);
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+
+      const outcomes = succeeded(await attemptSync(repo, { all: true, push: false }));
+      const at = (dir: string) => outcomes.find((outcome) => outcome.dir === dir);
+
+      // The parent went onto the trunk and the child went onto the parent —
+      // which is the whole claim, and `onto` is where it is legible.
+      expect(at("feat/a")?.onto).toBe("origin/main");
+      expect(at("feat/b")?.onto).toBe("feat/a");
+      expect(at("feat/b")?.kind).toBe("rebased");
+
+      // And the order was bottom-up, so the child has all three commits: the
+      // trunk's, its parent's, and its own.
+      for (const [file, contents] of [
+        ["trunk.txt", "trunk\n"],
+        ["a.txt", "a\n"],
+        ["b.txt", "b\n"],
+      ] as const) {
+        expect(await Bun.file(join(b, file)).text()).toBe(contents);
+      }
+      // The parent is where the child was replayed from, and nothing about the
+      // child leaked back into it.
+      expect(await Bun.file(join(a, "b.txt")).exists()).toBe(false);
+    });
+  });
+
+  test("naming the child brings its parents with it", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const { b } = await twoDeep(repo);
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+
+      const outcomes = succeeded(await attemptSync(repo, { target: "feat/b", push: false }));
+
+      // Two rows for one name, furthest ancestor first — nothing is hidden,
+      // and the trunk's worktree, which was not asked about, is not in here.
+      expect(outcomes.map((outcome) => outcome.dir)).toEqual(["feat/a", "feat/b"]);
+      expect(await Bun.file(join(b, "trunk.txt")).text()).toBe("trunk\n");
+    });
+  });
+
+  test("a parent that has gone hands the branch back to the trunk, and says so", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const { b } = await twoDeep(repo);
+
+      // Deleted behind grove's back — `remove --delete-branch` would have
+      // repaired the record itself, and this is the case that reaches `sync`
+      // with a record pointing at nothing.
+      await probeGit(repo.gitDir, ["worktree", "remove", "--force", join(repo.root, "feat", "a")]);
+      await probeGit(repo.gitDir, ["branch", "-D", "feat/a"]);
+
+      const outcome = succeeded(await attemptSync(repo, { target: "feat/b", push: false }));
+
+      expect(outcome).toHaveLength(1);
+      expect(outcome[0]?.onto).toBe("origin/main");
+      expect(outcome[0]?.reparented).toBe("main");
+      // Repaired rather than tolerated: the next command walks no dead link.
+      expect((await readStack(repo.gitDir)).get("feat/b")).toBeUndefined();
+      expect(await Bun.file(join(b, "b.txt")).text()).toBe("b\n");
+    });
+  });
+
+  test("an ordinary branch carries no parent, and is measured against the trunk", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "feat/login");
+
+      const outcomes = succeeded(await attemptSync(repo, { target: "feat/login", push: false }));
+
+      expect(outcomes.map((outcome) => outcome.dir)).toEqual(["feat/login"]);
+      expect(outcomes[0]?.onto).toBe("origin/main");
+      // Absent, not `undefined`: nothing was repaired, so there is no key.
+      expect(outcomes[0]).not.toHaveProperty("reparented");
     });
   });
 });

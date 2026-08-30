@@ -89,6 +89,12 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "in over to the new one, and leaves that one clean — the stash-and-pop",
       "that follows every `I should have branched first`, without a stash stack",
       "shared between every worktree in the repository to get it wrong.",
+      "",
+      "--on <branch> cuts the branch from another branch of yours rather than",
+      "from the trunk, and writes down that it sits there. From then on `sync`",
+      "rebases it onto that branch, and onto the trunk only through it — which",
+      "is what keeps a second pull request written on top of a first one from",
+      "being replayed over the absence of it.",
     ],
     flags: [
       {
@@ -96,6 +102,12 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         type: "string",
         placeholder: "<base>",
         summary: "base a new branch on <base> instead of the default branch",
+      },
+      {
+        name: "on",
+        type: "string",
+        placeholder: "<branch>",
+        summary: "stack the branch on <branch>, and remember that it sits there",
       },
       {
         name: "no-fetch",
