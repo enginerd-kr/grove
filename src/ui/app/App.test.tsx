@@ -830,6 +830,30 @@ describe("the keys", () => {
     await settled(ui, (frame) => /f(?!eXat)/.test(frame) && frame.includes("at"));
   });
 
+  test("a pasted branch name keeps its text and does not submit itself", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("a");
+    await settled(ui, (frame) => frame.includes("branch"));
+
+    // One event carrying the newline that ended the line it was copied from.
+    // Ink reads that newline as enter, so this used to arrive as a submit of
+    // an empty prompt: the name typed nowhere and the popup gone.
+    ui.stdin.write("feat/pasted\r");
+    await settled(ui, (frame) => frame.includes("feat/pasted"));
+
+    // Still open, and nothing was created: a name that was never on screen is
+    // not one to act on.
+    expect(ui.frame()).toContain("enter add");
+    expect(calls.added).toEqual([]);
+
+    // And it is a real value, not decoration — enter from here adds it.
+    ui.stdin.write(keys.enter);
+    await settled(ui, (frame) => !frame.includes("enter add"));
+    expect(calls.added).toEqual([{ branch: "feat/pasted", from: "main" }]);
+  });
+
   test("`enter` copies the path of whatever the cursor is on, folder included", async () => {
     const { service, calls } = stub();
     const ui = await opened_with(service);
@@ -988,7 +1012,10 @@ describe("the keys", () => {
     expect(ui.frame()).not.toContain("remove main?");
 
     answer([pullRequest(12), pullRequest(34, { isDraft: true })]);
-    const popup = await settled(ui, (frame) => frame.includes("pull requests"));
+    // Waited for by a row only the popup has: `busy` now says "· reading pull
+    // requests" on the message row, so the heading alone no longer tells the
+    // two apart.
+    const popup = await settled(ui, (frame) => frame.includes("feat/pr-12"));
 
     expect(popup).toContain("feat/pr-12");
     expect(popup).toContain("Change number 34");

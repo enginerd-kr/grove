@@ -267,8 +267,15 @@ export function resolveTarget(
 
   throw new GroveError("not-a-repo", `no worktree matches ${JSON.stringify(target)}`, {
     hint: "run `grove list` to see what is there",
-    details: worktrees.map(
-      (record) => `${record.branch ?? "(detached)"}  ${worktreeDir(root, record.path)}`,
-    ),
+    // Sorted, because the hint sends people to `grove list` and a listing of
+    // the same worktrees in a different order is a listing you have to read
+    // twice. git hands them back in the order they were made; `grove list`
+    // sorts by directory (after lifting the trunk, which is presentation this
+    // layer has no business knowing about), so sorting here is as close to
+    // agreeing as an error path can get.
+    details: worktrees
+      .map((record) => ({ branch: record.branch, dir: worktreeDir(root, record.path) }))
+      .sort((a, b) => a.dir.localeCompare(b.dir))
+      .map(({ branch, dir }) => `${branch ?? "(detached)"}  ${dir}`),
   });
 }

@@ -1,8 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { runCli } from "../../cli/test-cli.ts";
-import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
+import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
+import type { GroveError } from "../errors.ts";
+import type { RepoPaths } from "../layout.ts";
+import {
+  type Attempt,
+  attempt,
+  managedRepo,
+  probeGit,
+  seedGit,
+  seedWorktree,
+  succeeded,
+  type TempRepo,
+  withTempRepo,
+} from "../test-utils.ts";
+import { failureFor, type SyncOutcome, syncWorktrees } from "./sync.ts";
 
 /**
  * `grove sync` against a real origin.
@@ -11,17 +24,24 @@ import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts
  * this command a local-only test would miss is the push: a rebase that is never
  * published is the exact failure the push was added for, and the only way to
  * tell the two apart is to ask the origin where its branch is.
+ *
+ * `syncWorktrees` is called directly, with a recording reporter, for the reason
+ * `rename.test.ts` gives: the repository is the part that has to be real, and a
+ * process around it buys nothing but latency. Here it also buys back coverage
+ * this command had no way to express through the binary. `sync` does not throw
+ * on a bad outcome — it returns a `SyncOutcome` per worktree and `failureFor`
+ * derives the one error from them — so through the CLI the only evidence of
+ * *which* worktree went wrong, and *how*, was an exit code and whatever prose
+ * the error happened to compose. Holding the outcomes is what distinguishes
+ * "the push was never attempted" (`pushed` absent) from "the remote refused it"
+ * (`pushed: false`), which are the same exit code and, with `--no-push`, very
+ * nearly the same screen.
+ *
+ * What still goes through the binary is what only the binary does: the
+ * tab-separated row per worktree, the rule that those rows are printed even
+ * when the run then fails, and the exit code a wrapper script branches on.
+ * Those live in `cli/run.ts`, so they are in `sync.e2e.test.ts`.
  */
-
-const REFUSED = 4;
-const REBASE_CONFLICT = 5;
-
-async function managed(repo: TempRepo): Promise<string> {
-  const clone = await runCli(["clone", repo.originUrl], { cwd: repo.work });
-  expect(clone.exitCode).toBe(0);
-
-  return join(repo.work, "origin");
-}
 
 let scratchCount = 0;
 
@@ -33,14 +53,14 @@ let scratchCount = 0;
  * being synced would not be that.
  */
 async function commitOnOrigin(
-  repo: TempRepo,
+  temp: TempRepo,
   branch: string,
   file: string,
   contents: string,
 ): Promise<void> {
   scratchCount += 1;
-  const scratch = join(repo.root, `elsewhere-${scratchCount}`);
-  await seedGit(repo.root, ["clone", "--branch", branch, repo.originPath, scratch]);
+  const scratch = join(temp.root, `elsewhere-${scratchCount}`);
+  await seedGit(temp.root, ["clone", "--branch", branch, temp.originPath, scratch]);
   await Bun.write(join(scratch, file), contents);
   await seedGit(scratch, ["add", "-A"]);
   await seedGit(scratch, ["-c", "commit.gpgsign=false", "commit", "-m", `Add ${file}`]);
@@ -70,50 +90,111 @@ async function isRebasing(worktree: string): Promise<boolean> {
   return state.code === 0 && (await Bun.file(join(state.stdout.trim(), "head-name")).exists());
 }
 
+/** The flags `cli/args.ts` hands `syncWorktrees`, with its own defaults. */
+type SyncCall = {
+  readonly target?: string;
+  readonly all?: boolean;
+  readonly abortOnConflict?: boolean;
+  readonly push?: boolean;
+  /** Where the sync is asked from. Defaults to the repository root. */
+  readonly cwd?: string;
+};
+
+function attemptSync(
+  repo: RepoPaths,
+  { target, all = false, abortOnConflict = true, push = true, cwd = repo.root }: SyncCall = {},
+): Promise<Attempt<readonly SyncOutcome[]>> {
+  return attempt((reporter) =>
+    syncWorktrees(repo, cwd, { target, all, abortOnConflict, push }, reporter),
+  );
+}
+
+/**
+ * The error the outcomes add up to, insisting there is one.
+ *
+ * `refused()` cannot be used on this command: nothing is thrown, so a test that
+ * expected a failure and got a clean run would otherwise read the empty
+ * `failureFor` answer as "no error to check" and pass.
+ */
+function failure(outcomes: readonly SyncOutcome[]): GroveError {
+  const error = failureFor(outcomes);
+  if (error === undefined) {
+    throw new Error("expected these outcomes to add up to a failure, and they did not");
+  }
+
+  return error;
+}
+
 describe("grove sync", () => {
   test("fast-forwards the default branch, and rebases then plainly pushes it when it has commits of its own", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
-      const main = join(root, "main");
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const main = join(repo.root, "main");
 
-      await commitOnOrigin(repo, "main", "remote-one.txt", "one\n");
+      await commitOnOrigin(temp, "main", "remote-one.txt", "one\n");
 
-      const forward = await runCli(["sync", "main"], { cwd: root });
-      expect(forward.exitCode).toBe(0);
-      expect(forward.stdout).toContain("fast-forwarded");
+      const forward = await attemptSync(repo, { target: "main" });
+      const forwarded = succeeded(forward);
+
+      // The whole outcome, field by field — what "exit 0, stdout said
+      // fast-forwarded" was standing in for. `pushed` is absent rather than
+      // false: a fast-forward publishes nothing, because nothing local moved.
+      expect(forwarded).toEqual([
+        { path: main, dir: "main", branch: "main", kind: "fast-forwarded" },
+      ]);
+      expect(failureFor(forwarded)).toBeUndefined();
       expect(await Bun.file(join(main, "remote-one.txt")).text()).toBe("one\n");
+
+      // The fetch happened and said so, which is the precondition for the trunk
+      // below being current rather than remembered.
+      expect(forward.log.err.join("")).toContain("✓ fetched");
+      expect(forward.log.err.join("")).toContain("✓ main updated");
+      // Outcomes are returned, never narrated: the rows are `cli/run.ts`'s job.
+      expect(forward.log.out).toEqual([]);
 
       // Now both sides move: the local commit is somebody's work and is carried
       // over what the origin gained, rather than being a reason to refuse.
       await commitIn(main, "local.txt", "local\n");
-      await commitOnOrigin(repo, "main", "remote-two.txt", "two\n");
+      await commitOnOrigin(temp, "main", "remote-two.txt", "two\n");
 
-      const rebased = await runCli(["sync", "main"], { cwd: root });
-      expect(rebased.exitCode).toBe(0);
-      expect(rebased.stdout).toContain("rebased");
+      const rebase = await attemptSync(repo, { target: "main" });
+
+      expect(succeeded(rebase)).toEqual([
+        { path: main, dir: "main", branch: "main", kind: "rebased", pushed: true },
+      ]);
+      expect(failureFor(succeeded(rebase))).toBeUndefined();
 
       expect(await Bun.file(join(main, "remote-two.txt")).text()).toBe("two\n");
       expect(await Bun.file(join(main, "local.txt")).text()).toBe("local\n");
       // Pushed plainly, and the origin has exactly what the worktree has.
-      expect(await head(repo.originPath, "main")).toBe(await head(main));
+      expect(await head(temp.originPath, "main")).toBe(await head(main));
+      expect(rebase.log.err.join("")).toContain("✓ pushed main");
     });
   });
 
   test("rebases a branch onto its own remote first, and then onto the trunk", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
-      expect((await runCli(["add", "feat/login"], { cwd: root })).exitCode).toBe(0);
-      const worktree = join(root, "feat", "login");
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "feat/login");
+      const worktree = join(repo.root, "feat", "login");
 
       // A colleague's commit on the branch's own remote, work on the trunk, and
       // a commit of our own — the three the ordering has to reconcile.
-      await commitOnOrigin(repo, "feat/login", "colleague.txt", "theirs\n");
-      await commitOnOrigin(repo, "main", "trunk.txt", "trunk\n");
+      await commitOnOrigin(temp, "feat/login", "colleague.txt", "theirs\n");
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
       await commitIn(worktree, "mine.txt", "mine\n");
 
-      const synced = await runCli(["sync", "feat/login"], { cwd: root });
-      expect(synced.exitCode).toBe(0);
-      expect(synced.stdout).toContain("rebased");
+      const outcomes = succeeded(await attemptSync(repo, { target: "feat/login" }));
+
+      expect(outcomes).toEqual([
+        {
+          path: worktree,
+          dir: "feat/login",
+          branch: "feat/login",
+          kind: "rebased",
+          pushed: true,
+        },
+      ]);
 
       // Nothing was left behind: the colleague's commit, the trunk's, and ours.
       for (const [file, contents] of [
@@ -139,39 +220,72 @@ describe("grove sync", () => {
   // not keep — `.bare` is made with `core.logallrefupdates` on so that the
   // lease-guarded push can be verified rather than refused out of hand.
   test("force-pushes the rebased branch back to its own remote", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
-      expect((await runCli(["add", "feat/login"], { cwd: root })).exitCode).toBe(0);
-      const worktree = join(root, "feat", "login");
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "feat/login");
+      const worktree = join(repo.root, "feat", "login");
 
-      await commitOnOrigin(repo, "main", "trunk.txt", "trunk\n");
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
       await commitIn(worktree, "mine.txt", "mine\n");
-      const originBefore = await head(repo.originPath, "feat/login");
+      const originBefore = await head(temp.originPath, "feat/login");
 
-      const synced = await runCli(["sync", "feat/login"], { cwd: root });
-      expect(synced.exitCode).toBe(0);
+      const outcome = await attemptSync(repo, { target: "feat/login" });
+      const [synced] = succeeded(outcome);
+
+      // `pushed: true` rather than an inferred exit 0: the push was attempted
+      // and it landed, which is the claim the flag exists to make.
+      expect(synced?.pushed).toBe(true);
+      expect(synced?.pushRefusal).toBeUndefined();
+      expect(outcome.log.err.join("")).toContain("✓ pushed feat/login");
 
       // `--force-with-lease` rewrites the branch on the remote, so the origin
       // ends up holding exactly what the worktree does.
-      const originAfter = await head(repo.originPath, "feat/login");
+      const originAfter = await head(temp.originPath, "feat/login");
       expect(originAfter).not.toBe(originBefore);
       expect(originAfter).toBe(await head(worktree));
     });
   });
 
   test("stops on a dirty worktree without changing anything", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
-      expect((await runCli(["add", "feat/login"], { cwd: root })).exitCode).toBe(0);
-      const worktree = join(root, "feat", "login");
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "feat/login");
+      const worktree = join(repo.root, "feat", "login");
 
-      await commitOnOrigin(repo, "main", "trunk.txt", "trunk\n");
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
       await Bun.write(join(worktree, "login.txt"), "half-finished\n");
       const before = await head(worktree);
 
-      const synced = await runCli(["sync", "feat/login"], { cwd: root });
-      expect(synced.exitCode).toBe(REFUSED);
-      expect(synced.stderr).toContain("uncommitted changes");
+      const outcome = await attemptSync(repo, { target: "feat/login" });
+      const outcomes = succeeded(outcome);
+
+      // Which worktree, why, and which files — none of which reached the shell,
+      // where the whole of this was exit 4 and a sentence with "uncommitted
+      // changes" somewhere in it.
+      expect(outcomes).toEqual([
+        {
+          path: worktree,
+          dir: "feat/login",
+          branch: "feat/login",
+          kind: "skipped",
+          reason: "uncommitted changes",
+          conflicts: ["login.txt"],
+        },
+      ]);
+
+      const refusal = failure(outcomes);
+      expect(refusal.code).toBe("refused");
+      // The number a script branches on, composed the way `cli.tsx` composes it.
+      expect(errorToExitCode(refusal.code)).toBe(ExitCode.refused);
+      expect(refusal.message).toBe("feat/login skipped");
+      expect(refusal.details).toEqual(["feat/login: uncommitted changes", "  login.txt"]);
+      // A skip is not a conflict, and the hint that tells you how to resolve one
+      // would be advice about a rebase that never started.
+      expect(refusal.hint).toBeUndefined();
+
+      // The fetch, and then nothing: the dirty check runs before the step for
+      // this worktree is opened, so the transcript never claims to have begun.
+      expect(outcome.log.err).toEqual(["· fetching\n", "✓ fetched\n"]);
 
       expect(await head(worktree)).toBe(before);
       expect(await Bun.file(join(worktree, "login.txt")).text()).toBe("half-finished\n");
@@ -180,80 +294,125 @@ describe("grove sync", () => {
   });
 
   test("--all syncs every worktree", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
-      expect((await runCli(["add", "feat/login"], { cwd: root })).exitCode).toBe(0);
-      await commitOnOrigin(repo, "main", "trunk.txt", "trunk\n");
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "feat/login");
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
 
-      const synced = await runCli(["sync", "--all"], { cwd: root });
-      expect(synced.exitCode).toBe(0);
+      const outcomes = succeeded(await attemptSync(repo, { all: true }));
 
-      const lines = synced.stdout.trim().split("\n");
-      expect(lines.length).toBe(2);
-      expect(synced.stdout).toContain("main\tfast-forwarded");
+      // Keyed rather than ordered: `--all` is about none of them being missed,
+      // and `git worktree list`'s order is not this command's promise.
+      expect(outcomes.length).toBe(2);
+      const byDir = new Map(outcomes.map((outcome) => [outcome.dir, outcome]));
+      expect(byDir.get("main")?.kind).toBe("fast-forwarded");
       // The branch had nothing of its own to move, but it was visited: its
       // trunk drift closed, which is what "rebased" reports here.
-      expect(synced.stdout).toContain("feat/login\t");
-      expect(await Bun.file(join(root, "main", "trunk.txt")).text()).toBe("trunk\n");
-      expect(await Bun.file(join(root, "feat", "login", "trunk.txt")).text()).toBe("trunk\n");
+      expect(byDir.get("feat/login")?.kind).toBe("rebased");
+      expect(failureFor(outcomes)).toBeUndefined();
+
+      expect(await Bun.file(join(repo.root, "main", "trunk.txt")).text()).toBe("trunk\n");
+      expect(await Bun.file(join(repo.root, "feat", "login", "trunk.txt")).text()).toBe("trunk\n");
     });
   });
 
   test("--no-push leaves the rebase local and diverged from the remote", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
-      expect((await runCli(["add", "feat/login"], { cwd: root })).exitCode).toBe(0);
-      const worktree = join(root, "feat", "login");
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "feat/login");
+      const worktree = join(repo.root, "feat", "login");
 
-      await commitOnOrigin(repo, "main", "trunk.txt", "trunk\n");
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
       await commitIn(worktree, "mine.txt", "mine\n");
-      const originBefore = await head(repo.originPath, "feat/login");
+      const originBefore = await head(temp.originPath, "feat/login");
 
-      const synced = await runCli(["sync", "feat/login", "--no-push"], { cwd: root });
-      expect(synced.exitCode).toBe(0);
-      expect(synced.stdout).toContain("rebased");
+      const outcome = await attemptSync(repo, { target: "feat/login", push: false });
+      const [synced] = succeeded(outcome);
+
+      expect(synced?.kind).toBe("rebased");
+      // Absent, not `false`. The two spell different things — "nobody asked for
+      // a push" against "the remote refused one" — and only the second is a
+      // failure, which is the distinction an exit code of 0 could not carry.
+      expect(synced?.pushed).toBeUndefined();
+      expect(synced?.pushRefusal).toBeUndefined();
+      expect(outcome.log.err.join("")).not.toContain("pushing");
 
       // The rebase happened locally...
       expect(await Bun.file(join(worktree, "trunk.txt")).text()).toBe("trunk\n");
       // ...and the remote is exactly where it was, which is the divergence the
       // flag is named after.
-      expect(await head(repo.originPath, "feat/login")).toBe(originBefore);
+      expect(await head(temp.originPath, "feat/login")).toBe(originBefore);
       expect(await head(worktree)).not.toBe(originBefore);
     });
   });
 
   test("says the fetch failed instead of reporting a stale answer as up to date", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
 
       // The origin goes away entirely, which is what being offline looks like
       // to a `file://` remote. The whole point of this command is that the
       // trunk it rebases onto is current, so a fetch that did not happen is
       // news — "up to date with what was last seen" is a different claim.
-      await rm(repo.originPath, { recursive: true, force: true });
+      await rm(temp.originPath, { recursive: true, force: true });
 
-      const synced = await runCli(["sync", "main"], { cwd: root });
-      expect(synced.stderr).not.toContain("✓ fetched");
-      expect(synced.stderr).toContain("could not fetch");
+      const outcome = await attemptSync(repo, { target: "main" });
+
+      expect(outcome.log.err.join("")).not.toContain("✓ fetched");
+      // The whole sentence, not a substring of it: the warning has to say what
+      // is now uncertain, or it is only an apology.
+      expect(outcome.log.err).toContain(
+        "✗ could not fetch — the trunk below is as it was last seen\n",
+      );
+
+      // And the sync still answers, over what was last seen — which is exactly
+      // why the line above has to be there. A caller reading only the outcome
+      // is being told "up to date", and the warning is the rest of the truth.
+      expect(succeeded(outcome)).toEqual([
+        { path: join(repo.root, "main"), dir: "main", branch: "main", kind: "up-to-date" },
+      ]);
     });
   });
 
   test("aborts a conflicting rebase and exits 5, and --no-abort leaves it stopped part-way", async () => {
-    await withTempRepo(async (repo) => {
-      const root = await managed(repo);
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
       // No upstream, so the only base is the trunk and the conflict is the
       // whole of what is being tested.
-      expect((await runCli(["add", "spike"], { cwd: root })).exitCode).toBe(0);
-      const worktree = join(root, "spike");
+      await seedWorktree(repo, "spike");
+      const worktree = join(repo.root, "spike");
 
       // Both sides rewrite the fixture's single known line of app.txt.
       await commitIn(worktree, "app.txt", "mine\n");
-      await commitOnOrigin(repo, "main", "app.txt", "theirs\n");
+      await commitOnOrigin(temp, "main", "app.txt", "theirs\n");
       const before = await head(worktree);
 
-      const aborted = await runCli(["sync", "spike"], { cwd: root });
-      expect(aborted.exitCode).toBe(REBASE_CONFLICT);
-      expect(aborted.stderr).toContain("app.txt");
+      const aborted = await attemptSync(repo, { target: "spike" });
+      const rolledBack = succeeded(aborted);
+
+      expect(rolledBack).toEqual([
+        {
+          path: worktree,
+          dir: "spike",
+          branch: "spike",
+          kind: "conflicted",
+          reason: "rebase onto origin/main conflicted and was rolled back",
+          // The files git stopped on, captured before the abort threw them
+          // away — the one moment they exist to be read.
+          conflicts: ["app.txt"],
+        },
+      ]);
+
+      const conflict = failure(rolledBack);
+      expect(conflict.code).toBe("rebase-conflict");
+      expect(errorToExitCode(conflict.code)).toBe(ExitCode.rebaseConflict);
+      expect(conflict.message).toBe("spike conflicted");
+      expect(conflict.hint).toBe("resolve them by hand, or sync after committing");
+      expect(conflict.details).toEqual([
+        "spike: rebase onto origin/main conflicted and was rolled back",
+        "  app.txt",
+      ]);
+      expect(aborted.log.err.join("")).toContain("✗ spike conflicts with origin/main");
 
       // Rolled back: the worktree is where it was and there is no half-finished
       // rebase to clear up.
@@ -261,9 +420,15 @@ describe("grove sync", () => {
       expect(await head(worktree)).toBe(before);
       expect(await Bun.file(join(worktree, "app.txt")).text()).toBe("mine\n");
 
-      const left = await runCli(["sync", "spike", "--no-abort"], { cwd: root });
-      expect(left.exitCode).toBe(REBASE_CONFLICT);
-      expect(left.stderr).toContain("left in place");
+      const left = succeeded(await attemptSync(repo, { target: "spike", abortOnConflict: false }));
+
+      // The same conflict, and the same exit code — the flag changes what is
+      // left on disk, not what the run is judged to be.
+      expect(left[0]?.reason).toBe(
+        "rebase onto origin/main conflicted and was left in place to resolve",
+      );
+      expect(errorToExitCode(failure(left).code)).toBe(ExitCode.rebaseConflict);
+      expect(failure(left).details.join("\n")).toContain("left in place");
       expect(await isRebasing(worktree)).toBe(true);
       expect((await probeGit(worktree, ["status"])).stdout).toContain("rebase");
     });

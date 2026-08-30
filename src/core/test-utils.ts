@@ -2,7 +2,12 @@ import { rmSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createPlainReporter, type Reporter } from "../report/reporter.ts";
+import { addWorktree } from "./commands/add.ts";
+import { cloneRepo } from "./commands/clone.ts";
+import { type GroveError, isGroveError } from "./errors.ts";
 import { runGit, runGitOrThrow } from "./git.ts";
+import { type RepoPaths, repoPaths } from "./layout.ts";
 
 /**
  * A throwaway git universe for the integration tests.
@@ -193,4 +198,131 @@ export async function withTempRepo(body: (repo: TempRepo) => Promise<void>): Pro
     }
     await rm(root, { recursive: true, force: true });
   }
+}
+
+/**
+ * The scaffolding a command test needs to call a command directly.
+ *
+ * Every one of these exists because the interesting assertions are the ones a
+ * process throws away: through the binary a refusal is an exit code and a line
+ * of stderr, so two different checks that compose the same sentence are
+ * indistinguishable, and a result is whatever survived being formatted. Calling
+ * the exported function with a recording reporter keeps the `GroveError` and the
+ * result itself, and costs a function call instead of a process.
+ */
+
+export type Recorder = {
+  /**
+   * Everything that reached stdout, one entry per `reporter.out` — so a command
+   * that narrates without producing a result leaves this empty, which is itself
+   * worth asserting.
+   */
+  readonly out: string[];
+  /** One entry per narrated line — the steps, and whether each one settled. */
+  readonly err: string[];
+  readonly reporter: Reporter;
+};
+
+/** A reporter whose two destinations are kept apart — which is the rule under test. */
+export function recorder(): Recorder {
+  const out: string[] = [];
+  const err: string[] = [];
+
+  return {
+    out,
+    err,
+    reporter: createPlainReporter({ out: (text) => out.push(text), err: (text) => err.push(text) }),
+  };
+}
+
+/**
+ * The managed repository `grove clone` would have made, without the process.
+ *
+ * `url` defaults to the fixture's own origin, which is what every test wants
+ * except one: `pr.test.ts` needs an origin whose URL has an owner and a
+ * repository in it to rewrite, because that is how `pr.ts` finds a fork — so it
+ * clones a bare copy into a forge-shaped tree and points this at that.
+ */
+export async function managedRepo(temp: TempRepo, url = temp.originUrl): Promise<RepoPaths> {
+  const clone = await cloneRepo(temp.work, { url }, recorder().reporter);
+
+  return repoPaths(clone.root);
+}
+
+type SeedWorktreeOptions = {
+  readonly push?: boolean;
+  /**
+   * Off says "do not look at the remote for this branch".
+   *
+   * On is right for a fixture, which usually wants the branch the origin has.
+   * Off is for the test that is about the fetch itself — what `add` decides
+   * when it is told not to look, and what it says about a branch it therefore
+   * cannot find.
+   */
+  readonly fetch?: boolean;
+};
+
+/**
+ * A worktree to act on, built the way `add` builds one.
+ *
+ * `setup` is off because none of these fixtures has a `.grove.toml` for it to
+ * find: leaving it on would be a slower way of doing nothing.
+ */
+export async function seedWorktree(
+  repo: RepoPaths,
+  branch: string,
+  { push = false, fetch = true }: SeedWorktreeOptions = {},
+) {
+  return addWorktree(
+    repo,
+    repo.root,
+    { branch, from: undefined, fetch, push, setup: false, trust: false, take: false },
+    recorder().reporter,
+  );
+}
+
+export type Attempt<T> = {
+  readonly result?: T;
+  readonly error?: unknown;
+  /** What was narrated, kept whether the command worked or not. */
+  readonly log: Recorder;
+};
+
+/**
+ * Runs one command against a fresh recorder and hands back whichever of the two
+ * outcomes happened.
+ *
+ * A command either returns a result or throws, and a test wants the transcript
+ * either way — so nothing is asserted here. `succeeded` and `refused` below are
+ * where a test says which of the two it was expecting, and they are separate
+ * from this so that the narration of a failure is still there to be read.
+ */
+export async function attempt<T>(body: (reporter: Reporter) => Promise<T>): Promise<Attempt<T>> {
+  const log = recorder();
+
+  try {
+    const result = await body(log.reporter);
+    return { result, log };
+  } catch (error) {
+    return { error, log };
+  }
+}
+
+/** The result, insisting the command actually did what it was asked. */
+export function succeeded<T>(outcome: Attempt<T>): T {
+  if (outcome.result === undefined) {
+    throw new Error(`the command failed: ${String(outcome.error)}`);
+  }
+
+  return outcome.result;
+}
+
+/** The refusal, insisting it was one this tool meant to produce. */
+export function refused(outcome: Attempt<unknown>): GroveError {
+  if (outcome.error === undefined) throw new Error("expected the command to fail, and it did not");
+  if (!isGroveError(outcome.error)) {
+    throw new Error(`expected a GroveError, got ${String(outcome.error)}`);
+  }
+
+  return outcome.error;
 }

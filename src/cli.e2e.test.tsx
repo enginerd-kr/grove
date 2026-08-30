@@ -16,6 +16,12 @@ import { startUi } from "./ui/e2e-utils.ts";
  * argv turns into, whether the screen is drawn or the usage printed, and the
  * number the shell is left holding.
  *
+ * `.e2e.` in the name because none of it can move in-process, and the name is
+ * what `scripts/test.sh` sorts the tiers by. Every test here spawns `cli.tsx`,
+ * two of them over a real PTY or a signal: a decision made *from* `isTTY` and
+ * `process.exitCode` cannot be observed by the process making it, and there is
+ * no argument to pass that would let it be.
+ *
  * Every repository-dependent case is given a `cwd`, deliberately: this checkout
  * is itself a grove-managed repository, so a run without one would discover the
  * developer's own worktrees and pass for the wrong reason.

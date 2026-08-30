@@ -905,6 +905,32 @@ export function App({
 
     if (mode.kind === "add") {
       if (key.escape) return setMode({ kind: "list" });
+      /*
+       * A paste arrives as one string, and a branch name copied off a terminal
+       * line brings the newline that ended it. Ink reads that newline as Enter,
+       * so the whole paste used to land on the branch below as a submit of an
+       * empty prompt: the name typed nowhere, the popup gone, nothing added.
+       *
+       * The text goes in and the newline is dropped rather than submitting,
+       * because acting on a name that was never on screen is not what pasting
+       * asked for — one more keypress is cheap next to creating the wrong
+       * branch. An escape sequence has no trailing newline to lose, so it
+       * still fails the printable test below rather than typing itself in.
+       */
+      const pasted = input.replace(/[\r\n]+$/, "");
+      if (pasted.length > 0 && pasted !== input && !key.ctrl && !key.meta) {
+        if (!/^[\x20-\x7e]+$/.test(pasted)) return;
+
+        return setMode((now) =>
+          now.kind !== "add"
+            ? now
+            : {
+                ...now,
+                value: now.value.slice(0, now.caret) + pasted + now.value.slice(now.caret),
+                caret: now.caret + pasted.length,
+              },
+        );
+      }
       if (key.return) {
         const value = mode.value.trim();
         // Enter on nothing is a cancel, not an error: the empty popup is what
@@ -1287,7 +1313,16 @@ export function App({
         </Text>
       ) : null}
 
-      {message !== undefined && mode.kind !== "busy" ? (
+      {mode.kind === "busy" ? (
+        // The one row that says a key was heard. `perform` blocks the keyboard
+        // while it runs, and two of the actions it wraps — copying a path, and
+        // re-reading the list — narrate nothing through the reporter, so
+        // without this the screen just stops answering. `·` is the reporter's
+        // own mark for a step that has not settled, which is what this is.
+        <Text dimColor wrap="truncate">
+          {`· ${mode.label}`}
+        </Text>
+      ) : message !== undefined ? (
         <Box flexDirection="column">
           <MessageView message={message} />
         </Box>

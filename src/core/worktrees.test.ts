@@ -329,7 +329,10 @@ describe("resolveTarget", () => {
       if (!isGroveError(error)) throw error;
 
       expect(error.code).toBe("not-a-repo");
-      expect(error.details).toEqual(["main  main", "feat/login  feat/login", "(detached)  spike"]);
+      // Sorted by directory, not in the order git hands the worktrees back:
+      // the hint sends people to `grove list`, which sorts too, and two
+      // listings of the same worktrees in two orders is one to read twice.
+      expect(error.details).toEqual(["feat/login  feat/login", "main  main", "(detached)  spike"]);
     }
   });
 

@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { mkdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
-import { runCli } from "../../cli/test-cli.ts";
+import { addWorktree } from "../../core/commands/add.ts";
 import { isGroveError } from "../../core/errors.ts";
 import { pathExists } from "../../core/fs.ts";
-import { repoPaths } from "../../core/layout.ts";
-import { seedGit, type TempRepo, withTempRepo } from "../../core/test-utils.ts";
+import type { RepoPaths } from "../../core/layout.ts";
+import {
+  managedRepo,
+  seedGit,
+  seedWorktree,
+  type TempRepo,
+  withTempRepo,
+} from "../../core/test-utils.ts";
 import type { Reporter, Step } from "../../report/reporter.ts";
 import { createSetupService, createWorktreeService, type WorktreeService } from "./service.ts";
 
@@ -22,6 +28,12 @@ import { createSetupService, createWorktreeService, type WorktreeService } from 
  *
  * Every test builds its own throwaway origin, so they are parallel-safe and
  * nothing here touches the network.
+ *
+ * The arrangement is in-process for the same reason: a fixture is a repository
+ * in a particular state, not a demonstration that the binary can produce one,
+ * so `managedRepo` and `addWorktree` build them by calling the same functions
+ * the command line calls. That is a git process rather than a `bun` one — the
+ * expensive half of `grove clone` was never git.
  */
 
 /** A clone, a couple of git processes and a shell command: seconds, not milliseconds. */
@@ -67,29 +79,27 @@ function recorder(): Recorder {
   return { reporter, steps, succeeded, failed, infos, warnings };
 }
 
-/** `grove clone`, run the way the command line runs it, as the fixture. */
-async function managed(repo: TempRepo): Promise<string> {
-  const clone = await runCli(["clone", repo.originUrl], { cwd: repo.work });
-  expect(clone.exitCode).toBe(0);
-
-  return join(repo.work, "origin");
-}
-
 /** The service as `run.tsx` builds it: the repo it found, and the cwd it started in. */
-function serviceAt(root: string, cwd = root): { service: WorktreeService; log: Recorder } {
+function serviceAt(
+  paths: RepoPaths,
+  cwd = paths.root,
+): {
+  service: WorktreeService;
+  log: Recorder;
+} {
   const log = recorder();
 
-  return { service: createWorktreeService(repoPaths(root), cwd, log.reporter), log };
+  return { service: createWorktreeService(paths, cwd, log.reporter), log };
 }
 
 let scratchCount = 0;
 
 /** Somebody else's commit, pushed from outside the repository under test. */
-async function commitOnOrigin(repo: TempRepo, branch: string, file: string): Promise<void> {
+async function commitOnOrigin(temp: TempRepo, branch: string, file: string): Promise<void> {
   scratchCount += 1;
-  const scratch = join(repo.root, `elsewhere-${scratchCount}`);
+  const scratch = join(temp.root, `elsewhere-${scratchCount}`);
 
-  await seedGit(repo.root, ["clone", "--branch", branch, repo.originPath, scratch]);
+  await seedGit(temp.root, ["clone", "--branch", branch, temp.originPath, scratch]);
   await Bun.write(join(scratch, file), `${file}\n`);
   await seedGit(scratch, ["add", "-A"]);
   await seedGit(scratch, ["-c", "commit.gpgsign=false", "commit", "-m", `Add ${file}`]);
@@ -124,9 +134,10 @@ describe("createWorktreeService", () => {
   test(
     "list hands over the summaries the tree is built from, and re-reads what changed underneath it",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root, join(root, "main"));
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths, join(root, "main"));
 
         const first = await service.list();
 
@@ -145,9 +156,9 @@ describe("createWorktreeService", () => {
           current: true,
         });
 
-        // A worktree made outside the app entirely: a refresh is a re-read, not
-        // a cache that has to be told about it.
-        expect((await runCli(["add", "feat/login"], { cwd: root })).exitCode).toBe(0);
+        // A worktree made without the service knowing: a refresh is a re-read,
+        // not a cache that has to be told about it.
+        await seedWorktree(paths, "feat/login");
         await Bun.write(join(root, "main", "scratch.txt"), "half-finished\n");
 
         const second = await service.list();
@@ -167,9 +178,10 @@ describe("createWorktreeService", () => {
   test(
     "add says which way it got the branch, and says so again when there was nothing to do",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         // The suffix depends on whether this machine has a clipboard tool, so
         // only the sentence in front of it is the service's own answer.
@@ -201,15 +213,20 @@ describe("createWorktreeService", () => {
   test(
     "add refuses what the command line refuses, as an error with a sentence and a hint",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { service, log } = serviceAt(paths);
 
         // A name with no usable directory in it — refused before anything is made.
         const unusable = await refusalFrom(service.add("..."));
 
         expect(unusable.code).toBe("usage");
         expect(unusable.message.length).toBeGreaterThan(0);
+        // "Before anything is made", asserted rather than assumed: the screen
+        // draws a step the moment one is opened, so a refusal that had already
+        // started narrating would leave a half-finished line under a red one.
+        expect(log.steps).toEqual([]);
+        expect(log.failed).toEqual([]);
 
         await service.add("feat/login");
         // `feat` would have to become a file where a directory already is.
@@ -231,9 +248,10 @@ describe("createWorktreeService", () => {
   test(
     "remove answers with the line to show, and refuses the trunk and a name it cannot resolve",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         await service.add("feat/login");
 
@@ -262,9 +280,10 @@ describe("createWorktreeService", () => {
   test(
     "a dirty worktree is refused until the confirmation says it was asked about",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         await service.add("feat/login");
         await Bun.write(join(root, "feat", "login", "scratch.txt"), "half-finished\n");
@@ -285,9 +304,10 @@ describe("createWorktreeService", () => {
   test(
     "removeMany counts what went, keeps going past a refusal, and raises when nothing went",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         await service.add("feat/login");
         await service.add("feat/search");
@@ -315,17 +335,18 @@ describe("createWorktreeService", () => {
   test(
     "sync fast-forwards a worktree the origin moved ahead of, one target or all of them",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         await service.add("feat/login");
-        await commitOnOrigin(repo, "main", "newer.txt");
+        await commitOnOrigin(temp, "main", "newer.txt");
 
         expect(await service.sync("main")).toBe("main fast-forwarded");
         expect(await pathExists(join(root, "main", "newer.txt"))).toBe(true);
 
-        await commitOnOrigin(repo, "feat/login", "later.txt");
+        await commitOnOrigin(temp, "feat/login", "later.txt");
 
         // "rebased" and not "fast-forwarded", even though nothing local had to
         // move: only the trunk is fast-forwarded, and every other branch goes
@@ -344,13 +365,14 @@ describe("createWorktreeService", () => {
   test(
     "a worktree sync could not touch is reported on the same line, not raised",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         await service.add("feat/login");
         await Bun.write(join(root, "feat", "login", "scratch.txt"), "half-finished\n");
-        await commitOnOrigin(repo, "feat/login", "later.txt");
+        await commitOnOrigin(temp, "feat/login", "later.txt");
 
         // Worth pinning as it is: `grove sync` on the command line turns a skip
         // into exit 4 through `failureFor`, and the service deliberately does
@@ -368,9 +390,10 @@ describe("createWorktreeService", () => {
   test(
     "a rebase that conflicted is a refusal, and the worktree is left as it was",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         await service.add("feat/login");
 
@@ -380,7 +403,7 @@ describe("createWorktreeService", () => {
         await Bun.write(join(worktree, "clash.txt"), "mine\n");
         await seedGit(worktree, ["add", "-A"]);
         await seedGit(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "Add clash.txt"]);
-        await commitOnOrigin(repo, "main", "clash.txt");
+        await commitOnOrigin(temp, "main", "clash.txt");
 
         // The defect this pins: the outcome used to come back as the line
         // `feat/login conflicted`, drawn in the same accent colour as
@@ -409,9 +432,9 @@ describe("createWorktreeService", () => {
   test(
     "sync with nothing to say still says something",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { service } = serviceAt(paths);
 
         expect(await service.sync()).toBe("main up-to-date");
       });
@@ -422,15 +445,15 @@ describe("createWorktreeService", () => {
   test(
     "fetch answers rather than throws, so a laptop on a train is not an error",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service, log } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { service, log } = serviceAt(paths);
 
         expect(await service.fetch()).toBe(true);
 
         // The origin is gone — which is every offline refresh tick, and is not
         // something to interrupt anybody about.
-        await rm(repo.originPath, { recursive: true, force: true });
+        await rm(temp.originPath, { recursive: true, force: true });
 
         expect(await service.fetch()).toBe(false);
         expect(log.warnings).toEqual([]);
@@ -442,9 +465,10 @@ describe("createWorktreeService", () => {
   test(
     "log answers with commits, and with nothing rather than a failure",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
         const main = join(root, "main");
 
         const commits = await service.log(main, 5);
@@ -470,9 +494,10 @@ describe("createWorktreeService", () => {
   test(
     "log on a directory that has gone is an empty panel, not a rejection",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
 
         expect(await service.log(join(root, "not-a-worktree"), 5)).toEqual([]);
       });
@@ -483,9 +508,10 @@ describe("createWorktreeService", () => {
   test(
     "copyPath either says what it copied or refuses in a way the screen can draw",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
         const main = join(root, "main");
 
         // Which of the two happens is a property of the machine — a headless
@@ -507,9 +533,10 @@ describe("createWorktreeService", () => {
   test(
     "the commands a new worktree was denied are offered, and running them trusts the file for good",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service, log } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service, log } = serviceAt(paths);
 
         // The trunk's copy is the one that governs, so that is where it goes.
         await Bun.write(
@@ -538,7 +565,24 @@ describe("createWorktreeService", () => {
 
         // The same record `--trust` writes: the command line stops asking too,
         // and a worktree it makes runs the commands without being told again.
-        expect((await runCli(["add", "chore/tidy"], { cwd: root })).exitCode).toBe(0);
+        // `addWorktree` with these options *is* `grove add chore/tidy` — the
+        // trust is in a file on disk, so it does not matter which of the two
+        // entry points reads it, only that both read the same one.
+        await addWorktree(
+          paths,
+          root,
+          {
+            branch: "chore/tidy",
+            from: undefined,
+            fetch: true,
+            push: false,
+            setup: true,
+            trust: false,
+            take: false,
+          },
+          recorder().reporter,
+        );
+
         expect(await pathExists(join(root, "chore", "tidy", "ran.txt"))).toBe(true);
       });
     },
@@ -548,9 +592,10 @@ describe("createWorktreeService", () => {
   test(
     "an edit to the file withdraws the trust, and a command that fails is raised with what it said",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
         const file = join(root, "main", ".grove.toml");
 
         await Bun.write(file, '[setup]\nrun = ["echo ran > ran.txt"]\n');
@@ -576,9 +621,9 @@ describe("createWorktreeService", () => {
   test(
     "an ordinary repository has nothing pending and nothing to run",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { service } = serviceAt(paths);
 
         expect(await service.pendingCommands()).toEqual([]);
 
@@ -594,16 +639,16 @@ describe("createWorktreeService", () => {
   test(
     "the pull request keys refuse with a URL when `gh` is not installed",
     async () => {
-      await withTempRepo(async (repo) => {
-        const root = await managed(repo);
-        const { service } = serviceAt(root);
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { service } = serviceAt(paths);
 
         // The one read here that leaves the machine. A PATH holding nothing but
         // git is what makes this hermetic — git is still needed, because
         // `checkoutPr` prunes remotes before it asks the forge anything — and
         // the missing-tool refusal is the answer the screen has to be able to
         // draw anyway.
-        const bin = join(repo.root, "only-git");
+        const bin = join(temp.root, "only-git");
         await mkdir(bin, { recursive: true });
         const git = Bun.which("git");
         if (git === null) throw new Error("these tests need git on PATH");
@@ -634,12 +679,12 @@ describe("createSetupService", () => {
   test(
     "clone turns a URL into the repository the app then talks to",
     async () => {
-      await withTempRepo(async (repo) => {
+      await withTempRepo(async (temp) => {
         const log = recorder();
-        const setup = createSetupService(repo.work, false, log.reporter);
+        const setup = createSetupService(temp.work, false, log.reporter);
 
-        const { paths, branch } = await setup.clone(repo.originUrl);
-        const root = join(repo.work, "origin");
+        const { paths, branch } = await setup.clone(temp.originUrl);
+        const root = join(temp.work, "origin");
 
         // The paths are what `run.tsx` hands to `createWorktreeService`, so
         // every field of them is load-bearing.
@@ -657,7 +702,7 @@ describe("createSetupService", () => {
         expect(log.succeeded).toEqual(["cloned", "fetched refs"]);
 
         // And the repository it produced is one the worktree service can read.
-        const { service } = serviceAt(paths.root);
+        const { service } = serviceAt(paths);
 
         expect((await service.list()).map((entry) => entry.dir)).toEqual(["main"]);
       });
@@ -668,12 +713,12 @@ describe("createSetupService", () => {
   test(
     "in place, the folder becomes the repository instead of gaining one",
     async () => {
-      await withTempRepo(async (repo) => {
+      await withTempRepo(async (temp) => {
         const log = recorder();
-        const here = join(repo.work, "here");
+        const here = join(temp.work, "here");
         await mkdir(here, { recursive: true });
 
-        const { paths } = await createSetupService(here, true, log.reporter).clone(repo.originUrl);
+        const { paths } = await createSetupService(here, true, log.reporter).clone(temp.originUrl);
 
         expect(paths.root).toBe(here);
         expect(await pathExists(join(here, ".bare"))).toBe(true);
@@ -686,22 +731,26 @@ describe("createSetupService", () => {
   test(
     "a URL that is not one, and a folder that is not empty, are refused before anything is made",
     async () => {
-      await withTempRepo(async (repo) => {
+      await withTempRepo(async (temp) => {
         const log = recorder();
-        const setup = createSetupService(repo.work, false, log.reporter);
+        const setup = createSetupService(temp.work, false, log.reporter);
 
         const bad = await refusalFrom(setup.clone("not a url"));
 
         expect(bad.code).toBe("usage");
+        // Nothing was started for it either, which is the difference between a
+        // setup screen that says "that is not a URL" and one that says it after
+        // appearing to begin.
+        expect(log.steps).toEqual([]);
 
-        await mkdir(join(repo.work, "origin"), { recursive: true });
-        await Bun.write(join(repo.work, "origin", "mine.txt"), "already here\n");
+        await mkdir(join(temp.work, "origin"), { recursive: true });
+        await Bun.write(join(temp.work, "origin", "mine.txt"), "already here\n");
 
-        const occupied = await refusalFrom(setup.clone(repo.originUrl));
+        const occupied = await refusalFrom(setup.clone(temp.originUrl));
 
         expect(occupied.code).toBe("state-conflict");
         expect(occupied.hint).toBeDefined();
-        expect(await pathExists(join(repo.work, "origin", "mine.txt"))).toBe(true);
+        expect(await pathExists(join(temp.work, "origin", "mine.txt"))).toBe(true);
       });
     },
     SLOW,
@@ -710,10 +759,10 @@ describe("createSetupService", () => {
   test(
     "a clone whose file wants to run something says so and runs none of it",
     async () => {
-      await withTempRepo(async (repo) => {
+      await withTempRepo(async (temp) => {
         scratchCount += 1;
-        const scratch = join(repo.root, `seeded-${scratchCount}`);
-        await seedGit(repo.root, ["clone", "--branch", "main", repo.originPath, scratch]);
+        const scratch = join(temp.root, `seeded-${scratchCount}`);
+        await seedGit(temp.root, ["clone", "--branch", "main", temp.originPath, scratch]);
         await Bun.write(join(scratch, ".grove.toml"), '[setup]\nrun = ["echo ran > ran.txt"]\n');
         await seedGit(scratch, ["add", "-A"]);
         await seedGit(scratch, ["-c", "commit.gpgsign=false", "commit", "-m", "Add .grove.toml"]);
@@ -721,8 +770,8 @@ describe("createSetupService", () => {
         await rm(scratch, { recursive: true, force: true });
 
         const log = recorder();
-        const { paths } = await createSetupService(repo.work, false, log.reporter).clone(
-          repo.originUrl,
+        const { paths } = await createSetupService(temp.work, false, log.reporter).clone(
+          temp.originUrl,
         );
 
         // The worst moment there has ever been to run a command is ten seconds
@@ -732,7 +781,7 @@ describe("createSetupService", () => {
 
         // It is waiting on the screen instead, which is where the question gets
         // asked with the file in front of you.
-        const { service } = serviceAt(paths.root);
+        const { service } = serviceAt(paths);
 
         expect(await service.pendingCommands()).toEqual(["echo ran > ran.txt"]);
       });

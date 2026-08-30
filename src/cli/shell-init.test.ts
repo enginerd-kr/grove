@@ -1,92 +1,83 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { ExitCode } from "./exit-codes.ts";
-import { isCompiledMain, isShell, SHELLS } from "./shell-init.ts";
-import { runCli } from "./test-cli.ts";
+import { evalLine, isCompiledMain, isShell, SHELLS, shellInit } from "./shell-init.ts";
 
 /**
- * The function is generated from *this* invocation — `process.execPath` and
- * `Bun.main` of the process that printed it — so it has to be read from a real
- * child. Calling `shellInit` in-process would embed the test runner instead,
- * which is precisely the thing that must not happen.
+ * The shell function `grove shell-init` prints, as the string it is.
+ *
+ * `shellInit` is pure: given a shell it composes a script out of this process's
+ * own `process.execPath` and `Bun.main`. That makes the dialect — posix here,
+ * fish there, and nothing from one leaking into the other — a property of a
+ * return value, and asserting it costs a function call rather than a process.
+ *
+ * The invocation it embeds is asserted the same way, and *more* precisely than
+ * a child could show it: this process knows exactly which two words it expects
+ * to be quoted back at it, so the test compares them rather than looking for a
+ * path it hopes is in there. That the words are this test file rather than
+ * `cli.tsx` is the point — the function reaches back through however grove was
+ * reached, whatever that was.
+ *
+ * What stays in `shell-init.e2e.test.ts` is what only the binary can answer:
+ * that the script reaches stdout with nothing on stderr, that the run exits 0
+ * so an rc file's `eval "$(…)"` is not a failed line, and that a real child
+ * writes the *entry script* into it — the case this file cannot construct,
+ * because in here the entry script is the test runner.
  */
 
-/** The entry script `runCli` spawns; what the printed function must call back through. */
-const ENTRY = resolve(import.meta.dir, "../cli.tsx");
+/** The words the printed function must call back through: this very invocation. */
+const SELF = `'${process.execPath}' '${Bun.main}'`;
 
-describe("shell-init", () => {
-  test("prints a posix function for zsh and bash, and exits 0", async () => {
-    const [zsh, bash] = await Promise.all([
-      runCli(["shell-init", "zsh"]),
-      runCli(["shell-init", "bash"]),
-    ]);
+describe("shellInit", () => {
+  test("prints a posix function for zsh and bash", () => {
+    for (const shell of ["zsh", "bash"] as const) {
+      const script = shellInit(shell);
 
-    for (const result of [zsh, bash]) {
-      expect(result.exitCode).toBe(ExitCode.ok);
-      expect(result.stderr.trim()).toBe("");
-      expect(result.stdout).toContain("grove() {");
-      expect(result.stdout).toContain('if [ "$1" = "cd" ]; then');
-      expect(result.stdout).toContain('builtin cd "$dest"');
+      expect(script).toContain("grove() {");
+      expect(script).toContain('if [ "$1" = "cd" ]; then');
+      expect(script).toContain('builtin cd "$dest"');
       // fish's spellings, which would be syntax errors here.
-      expect(result.stdout).not.toContain("function grove");
-      expect(result.stdout).not.toContain("set -l");
+      expect(script).not.toContain("function grove");
+      expect(script).not.toContain("set -l");
     }
 
     // One script for both, which is what makes one script enough to test.
-    expect(zsh.stdout).toBe(bash.stdout);
+    expect(shellInit("zsh")).toBe(shellInit("bash"));
   });
 
-  test("prints a fish function for fish, in fish's own dialect", async () => {
-    const result = await runCli(["shell-init", "fish"]);
+  test("prints a fish function for fish, in fish's own dialect", () => {
+    const script = shellInit("fish");
 
-    expect(result.exitCode).toBe(ExitCode.ok);
-    expect(result.stderr.trim()).toBe("");
-    expect(result.stdout).toContain("function grove");
-    expect(result.stdout).toContain("set --erase argv[1]");
-    expect(result.stdout).toContain("or return $status");
-    expect(result.stdout).toContain("builtin cd $dest");
-    expect(result.stdout.trimEnd().endsWith("\nend")).toBe(true);
+    expect(script).toContain("function grove");
+    expect(script).toContain("set --erase argv[1]");
+    expect(script).toContain("or return $status");
+    expect(script).toContain("builtin cd $dest");
+    expect(script.trimEnd().endsWith("\nend")).toBe(true);
     // The posix spellings, which fish does not have.
-    expect(result.stdout).not.toContain("grove() {");
-    expect(result.stdout).not.toContain('"$@"');
+    expect(script).not.toContain("grove() {");
+    expect(script).not.toContain('"$@"');
   });
 
-  test("the function calls back by the spelling that printed it", async () => {
+  test("the function calls back by the spelling that printed it", () => {
     // Not a `grove` it hopes is on PATH: the runtime and entry script this very
     // run was reached by, which is what makes it work from a bare checkout.
-    const [posix, fish] = await Promise.all([
-      runCli(["shell-init", "zsh"]),
-      runCli(["shell-init", "fish"]),
-    ]);
-
-    expect(posix.stdout).toContain(`'${ENTRY}' path "$@"`);
-    expect(fish.stdout).toContain(`'${ENTRY}' path $argv`);
-    for (const result of [posix, fish]) expect(result.stdout).toContain("GROVE_CD_FILE");
+    expect(shellInit("zsh")).toContain(`${SELF} path "$@"`);
+    expect(shellInit("fish")).toContain(`${SELF} path $argv`);
+    for (const shell of SHELLS) expect(shellInit(shell)).toContain("GROVE_CD_FILE");
   });
 
-  test("every shell it claims to know prints something", async () => {
-    const results = await Promise.all(SHELLS.map((shell) => runCli(["shell-init", shell])));
+  test("every shell it claims to know prints something", () => {
+    for (const shell of SHELLS) expect(shellInit(shell).length).toBeGreaterThan(0);
+  });
+});
 
-    for (const result of results) {
-      expect(result.exitCode).toBe(ExitCode.ok);
-      expect(result.stdout.length).toBeGreaterThan(0);
+describe("evalLine", () => {
+  test("is the same invocation again, asking for that shell's function", () => {
+    // The line `grove install` appends and the line a bare checkout would be
+    // told to paste are built from these same words, which is what keeps the
+    // two from drifting apart.
+    for (const shell of SHELLS) {
+      expect(evalLine(shell)).toBe(`eval "$(${SELF} 'shell-init' '${shell}')"`);
     }
-  });
-
-  test("a shell it does not know is a usage error", async () => {
-    const result = await runCli(["shell-init", "tcsh"]);
-
-    expect(result.exitCode).toBe(ExitCode.usage);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain('"tcsh" is not a shell this knows');
-    expect(result.stderr).toContain("zsh, bash, fish");
-  });
-
-  test("no shell at all is a usage error naming the ones there are", async () => {
-    const result = await runCli(["shell-init"]);
-
-    expect(result.exitCode).toBe(ExitCode.usage);
-    expect(result.stderr).toContain("shell-init needs a shell: zsh, bash, fish");
   });
 });
 
@@ -106,7 +97,7 @@ describe("isCompiledMain", () => {
   });
 
   test("leaves a real entry script alone", () => {
-    expect(isCompiledMain(ENTRY)).toBe(false);
+    expect(isCompiledMain(resolve(import.meta.dir, "../cli.tsx"))).toBe(false);
     expect(isCompiledMain("/home/me/bunfs/cli.tsx")).toBe(false);
   });
 });

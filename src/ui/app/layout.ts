@@ -246,7 +246,10 @@ export function regionsFor({
     (mode.kind === "add" ? 3 : 0) +
     (mode.kind === "pick" ? pullRequestRows(mode.prs.length, prBody) : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
-    (message === undefined || mode.kind === "busy" ? 0 : messageRows(message));
+    // `busy` takes the message row rather than leaving it empty: it is one
+    // line saying which key is being answered, and the message it displaces
+    // is the previous action's, which `perform` has already cleared.
+    (mode.kind === "busy" ? 1 : message === undefined ? 0 : messageRows(message));
 
   /**
    * How many rows the activity area may take, out of what is actually left.

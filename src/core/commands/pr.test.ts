@@ -1,13 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { chmod, mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
-import { ExitCode } from "../../cli/exit-codes.ts";
-import { runCli } from "../../cli/test-cli.ts";
-import { isGroveError } from "../errors.ts";
+import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
 import { pathExists } from "../fs.ts";
-import { repoPaths } from "../layout.ts";
-import { probeGit, seedGit, type TempRepo, withTempRepo } from "../test-utils.ts";
-import { listPullRequests } from "./pr.ts";
+import type { RepoPaths } from "../layout.ts";
+import {
+  type Attempt,
+  attempt,
+  managedRepo,
+  probeGit,
+  refused,
+  seedGit,
+  succeeded,
+  type TempRepo,
+  withTempRepo,
+} from "../test-utils.ts";
+import { checkoutPullRequest, listPullRequests, type PrResult } from "./pr.ts";
+import { removeWorktree } from "./remove.ts";
+import { resetWorktree } from "./reset.ts";
 
 /**
  * `grove pr` against a real repository and a fake forge.
@@ -21,6 +31,20 @@ import { listPullRequests } from "./pr.ts";
  * Everything after that answer is git, and git is real: the "fork" is a second
  * bare repository on disk, the fetch is a fetch, and the push refspec is proved
  * by pushing.
+ *
+ * `checkoutPullRequest` is called directly rather than through the binary, and
+ * the fixture survives the change untouched: `runTool` spawns `gh` with
+ * `process.env`, so installing the fake's `PATH` there is the same lookup the
+ * child process was doing — the only difference is that a `GroveError` comes
+ * back instead of an exit code. That difference is most of the point. `gh` can
+ * disappoint in four different ways that all exit 10, and through stderr they
+ * were told apart by substring; here the message, the `hint` and gh's own bytes
+ * on `details` are each asserted, and the whole `PrResult` is checked field by
+ * field instead of the seven of them a `--json` reader happened to look at.
+ *
+ * What only the binary can answer is in `pr.e2e.test.ts`: the `--json`
+ * document, the exit codes, and the two sentences `cli/run.ts` composes about a
+ * worktree that was already there.
  */
 
 /** POSIX only — the fake is a shell script, and so is `clipboard.test.ts`'s. */
@@ -56,48 +80,28 @@ const OPEN_PR: Readonly<Record<string, unknown>> = {
   author: { login: "octocat" },
 };
 
-type PrJson = {
-  readonly path: string;
-  readonly dir: string;
-  readonly branch: string;
-  readonly number: number;
-  readonly title: string;
-  readonly url: string;
-  readonly state: "OPEN" | "CLOSED" | "MERGED";
-  readonly head: string;
-  readonly remote?: string;
-  readonly upstream?: string;
-  readonly pushable: boolean;
-  readonly updated: "created" | "fast-forwarded" | "unchanged";
-  readonly alreadyPresent: boolean;
-  readonly setup?: {
-    readonly planned: number;
-    readonly copied: readonly string[];
-    readonly linked: readonly string[];
-    readonly ran: readonly string[];
-    readonly untrusted: boolean;
-  };
-};
+/** The fields `gh pr view` is asked for, in the order `pr.ts` asks for them. */
+const PR_FIELDS =
+  "number,title,url,state,isDraft,baseRefName,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author";
 
 type Forge = {
-  readonly repo: TempRepo;
+  readonly temp: TempRepo;
   /** The managed clone, whose origin is `acme/widget.git`. */
-  readonly root: string;
-  readonly bare: string;
+  readonly repo: RepoPaths;
   /** The bare repository origin points at. */
   readonly base: string;
   /** Somebody else's bare repository, one directory over — the fork. */
   readonly fork: string;
-  /** `PATH` plus the files the fake `gh` reads its answer out of. */
-  readonly env: Record<string, string>;
-  /** A `PATH` holding git and bun and nothing else, for proving `gh` absent. */
-  readonly barePath: string;
   /** Replaces what the next `gh pr view` answers, over `OPEN_PR`. */
   readonly answer: (over?: Readonly<Record<string, unknown>>) => Promise<void>;
   /** Every argv the fake `gh` has been handed, in order. */
   readonly asked: () => Promise<readonly string[]>;
   /** Commits `text` on `branch` of the fork and pushes it, as its author would. */
   readonly propose: (branch: string, text: string, message: string) => Promise<void>;
+  /** Makes `gh` answer the way it does when it is unhappy: a code and its own stderr. */
+  readonly fails: (code: string, stderr: string) => void;
+  /** Runs `body` with a `PATH` holding git and bun and nothing else. */
+  readonly withoutGh: <T>(body: () => Promise<T>) => Promise<T>;
 };
 
 /**
@@ -107,76 +111,151 @@ type Forge = {
  * origin's own URL, so the fixture has to have two components to rewrite:
  * `<forge>/acme/widget.git` is the base and `<forge>/octocat/widget.git` is the
  * fork, and grove reaches the second by deriving it rather than being told.
+ *
+ * The fake's environment goes onto `process.env` for the duration rather than
+ * into a child's, because the code under test now runs in this process — the
+ * same reason `withTempRepo` puts the pinned git identity there.
  */
 async function withForge(body: (forge: Forge) => Promise<void>): Promise<void> {
-  await withTempRepo(async (repo) => {
-    const forge = join(repo.root, "forge");
+  await withTempRepo(async (temp) => {
+    const forge = join(temp.root, "forge");
     const base = join(forge, "acme", "widget.git");
     const fork = join(forge, "octocat", "widget.git");
 
-    await seedGit(repo.root, ["clone", "--bare", repo.originPath, base]);
-    await seedGit(repo.root, ["clone", "--bare", repo.originPath, fork]);
+    // Independent of each other, and two git processes is the single biggest
+    // thing this fixture costs — so they are paid for at once.
+    await Promise.all([
+      seedGit(temp.root, ["clone", "--bare", temp.originPath, base]),
+      seedGit(temp.root, ["clone", "--bare", temp.originPath, fork]),
+    ]);
 
-    const forkWork = join(repo.root, "fork-work");
-    await seedGit(repo.root, ["clone", fork, forkWork]);
+    /**
+     * The fork owner's own checkout, made the first time a test proposes
+     * something.
+     *
+     * Six of the tests below never do — they are about what the base
+     * repository holds, or about gh refusing before any of this is reached —
+     * and a clone they do not use is a clone they should not pay for.
+     */
+    let forkWork: string | undefined;
+    const workingCopy = async (): Promise<string> => {
+      if (forkWork === undefined) {
+        const path = join(temp.root, "fork-work");
+        await seedGit(temp.root, ["clone", fork, path]);
+        forkWork = path;
+      }
 
-    const bin = join(repo.root, "bin");
+      return forkWork;
+    };
+
+    const bin = join(temp.root, "bin");
     await mkdir(bin, { recursive: true });
     await Bun.write(join(bin, "gh"), GH_FAKE);
     await chmod(join(bin, "gh"), 0o755);
 
     // git and bun alone, so "gh is not installed" is a fact about the
     // environment rather than a fact about one directory being first.
-    const barePath = join(repo.root, "no-gh");
+    const barePath = join(temp.root, "no-gh");
     await mkdir(barePath, { recursive: true });
     await symlink(Bun.which("git") ?? "/usr/bin/git", join(barePath, "git"));
     await symlink(process.execPath, join(barePath, "bun"));
 
-    const log = join(repo.root, "gh.log");
-    const out = join(repo.root, "gh.json");
+    const log = join(temp.root, "gh.log");
+    const out = join(temp.root, "gh.json");
     await Bun.write(log, "");
 
-    const cloned = await runCli(["clone", `file://${base}`, "app"], { cwd: repo.work });
-    expect([cloned.exitCode, cloned.stderr]).toEqual([ExitCode.ok, cloned.stderr]);
-    const root = join(repo.work, "app");
+    const repo = await managedRepo(temp, `file://${base}`);
 
-    async function commitOnFork(branch: string, text: string, message: string): Promise<void> {
-      const known = await probeGit(forkWork, ["rev-parse", "--verify", "--quiet", branch]);
-      await seedGit(forkWork, known.code === 0 ? ["checkout", branch] : ["checkout", "-b", branch]);
+    // Every key is set, including the two a test only sometimes wants, so that
+    // all of them are on the restore list below — an exit code left behind
+    // would make the next file's tests fail in a way that points nowhere near
+    // here.
+    const env: Readonly<Record<string, string>> = {
+      PATH: `${bin}:${process.env.PATH}`,
+      GROVE_GH_LOG: log,
+      GROVE_GH_OUT: out,
+      GROVE_GH_EXIT: "",
+      GROVE_GH_STDERR: "",
+    };
+    const restore = new Map<string, string | undefined>();
 
-      await Bun.write(join(forkWork, "crash.txt"), text);
-      await seedGit(forkWork, ["add", "-A"]);
-      await seedGit(forkWork, ["-c", "commit.gpgsign=false", "commit", "-m", message]);
-      await seedGit(forkWork, ["push", "origin", branch]);
+    for (const [key, value] of Object.entries(env)) {
+      restore.set(key, process.env[key]);
+      process.env[key] = value;
     }
 
-    await body({
-      repo,
-      root,
-      bare: join(root, ".bare"),
-      base,
-      fork,
-      barePath,
-      env: {
-        PATH: `${bin}:${process.env.PATH}`,
-        GROVE_GH_LOG: log,
-        GROVE_GH_OUT: out,
-      },
-      answer: async (over = {}) => {
-        await Bun.write(out, JSON.stringify({ ...OPEN_PR, ...over }));
-      },
-      asked: async () => (await Bun.file(log).text()).split("\n").filter((line) => line.length > 0),
-      propose: commitOnFork,
-    });
+    try {
+      await body({
+        temp,
+        repo,
+        base,
+        fork,
+        answer: async (over = {}) => {
+          await Bun.write(out, JSON.stringify({ ...OPEN_PR, ...over }));
+        },
+        asked: async () =>
+          (await Bun.file(log).text()).split("\n").filter((line) => line.length > 0),
+        propose: async (branch, text, message) => {
+          const work = await workingCopy();
+          const known = await probeGit(work, ["rev-parse", "--verify", "--quiet", branch]);
+          await seedGit(work, known.code === 0 ? ["checkout", branch] : ["checkout", "-b", branch]);
+
+          await Bun.write(join(work, "crash.txt"), text);
+          await seedGit(work, ["add", "-A"]);
+          await seedGit(work, ["-c", "commit.gpgsign=false", "commit", "-m", message]);
+          await seedGit(work, ["push", "origin", branch]);
+        },
+        fails: (code, stderr) => {
+          process.env.GROVE_GH_EXIT = code;
+          process.env.GROVE_GH_STDERR = stderr;
+        },
+        withoutGh: async (inner) => {
+          const path = process.env.PATH;
+          process.env.PATH = barePath;
+
+          try {
+            return await inner();
+          } finally {
+            process.env.PATH = path;
+          }
+        },
+      });
+    } finally {
+      for (const [key, value] of restore) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 }
 
-/** `grove pr`, expected to succeed, read back as JSON. */
-async function pr(forge: Forge, args: readonly string[]): Promise<PrJson> {
-  const result = await runCli(["pr", ...args, "--json"], { cwd: forge.root, env: forge.env });
-  expect([args, result.exitCode, result.stderr]).toEqual([args, ExitCode.ok, result.stderr]);
+type PrCall = {
+  /**
+   * Off, though the flag is on.
+   *
+   * None of these fixtures has a `.grove.toml` until the block that writes one
+   * says so, and an empty plan still comes back as a `SetupResult` full of
+   * empty lists — noise in every `toEqual` below. The `.grove.toml` block
+   * passes it explicitly.
+   */
+  readonly setup?: boolean;
+  readonly trust?: boolean;
+};
 
-  return JSON.parse(result.stdout) as PrJson;
+/** Checks a pull request out, and hands back whichever of the two outcomes happened. */
+function attemptPr(
+  forge: Forge,
+  pr: string,
+  { setup = false, trust = false }: PrCall = {},
+): Promise<Attempt<PrResult>> {
+  return attempt((reporter) =>
+    checkoutPullRequest(forge.repo, forge.repo.root, { pr, setup, trust }, reporter),
+  );
+}
+
+/** The same, insisting it worked — the shape most of these tests want. */
+async function pr(forge: Forge, spelling: string, options?: PrCall): Promise<PrResult> {
+  return succeeded(await attemptPr(forge, spelling, options));
 }
 
 async function config(bare: string, key: string): Promise<string> {
@@ -187,28 +266,33 @@ async function headOf(worktree: string): Promise<string> {
   return (await probeGit(worktree, ["rev-parse", "HEAD"])).stdout.trim();
 }
 
+/** The remotes the repository has, which is what a leak would show up in. */
+async function remotes(bare: string): Promise<readonly string[]> {
+  return (await probeGit(bare, ["remote"])).stdout.trim().split("\n").filter(Boolean);
+}
+
 describe.skipIf(!POSIX)("how a pull request is named", () => {
   test("a number, its browser URL, and its source branch all reach the same worktree", async () => {
     await withForge(async (forge) => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
 
-      const byNumber = await pr(forge, ["42"]);
-      const byUrl = await pr(forge, ["https://github.example/acme/widget/pull/42"]);
-      const byBranch = await pr(forge, ["octocat:fix/crash"]);
+      const byNumber = await pr(forge, "42");
+      const byUrl = await pr(forge, "https://github.example/acme/widget/pull/42");
+      const byBranch = await pr(forge, "octocat:fix/crash");
 
       // One directory, whichever spelling asked for it — the number comes back
       // out of gh's answer rather than out of the argument.
       expect([byUrl.path, byBranch.path]).toEqual([byNumber.path, byNumber.path]);
-      expect(byNumber.path).toBe(join(forge.root, "pr", "42"));
+      expect(byNumber.path).toBe(join(forge.repo.root, "pr", "42"));
       expect([byUrl.alreadyPresent, byBranch.alreadyPresent]).toEqual([true, true]);
 
       // And each spelling was handed to `gh` untouched: grove parses none of
       // them, which is what makes all three free.
       expect(await forge.asked()).toEqual([
-        "pr view 42 --json number,title,url,state,isDraft,baseRefName,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author",
-        "pr view https://github.example/acme/widget/pull/42 --json number,title,url,state,isDraft,baseRefName,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author",
-        "pr view octocat:fix/crash --json number,title,url,state,isDraft,baseRefName,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author",
+        `pr view 42 --json ${PR_FIELDS}`,
+        `pr view https://github.example/acme/widget/pull/42 --json ${PR_FIELDS}`,
+        `pr view octocat:fix/crash --json ${PR_FIELDS}`,
       ]);
     });
   }, 90_000);
@@ -220,14 +304,35 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
 
-      const result = await pr(forge, ["42"]);
+      const outcome = await attemptPr(forge, "42");
+      const result = succeeded(outcome);
 
-      expect(result.branch).toBe("pr/42");
-      expect(result.head).toBe("octocat:fix/crash");
-      expect(result.updated).toBe("created");
+      // The whole result, field by field — what "exit 0 and seven fields off
+      // stdout" was standing in for.
+      expect(result).toEqual({
+        path: join(forge.repo.root, "pr", "42"),
+        // Taken from the `add` underneath rather than recomputed — the same
+        // field `path`, `reset` and `rename` answer with, so this row lines up
+        // with `grove list`.
+        dir: "pr/42",
+        branch: "pr/42",
+        number: 42,
+        title: "Fix the crash",
+        url: "https://github.example/acme/widget/pull/42",
+        state: "OPEN",
+        head: "octocat:fix/crash",
+        remote: "pr-42",
+        upstream: "pr-42/fix/crash",
+        pushable: true,
+        updated: "created",
+        alreadyPresent: false,
+        setup: undefined,
+      });
 
       // A branch, not a detached head — `git branch` is where a reviewer looks.
-      expect((await probeGit(forge.bare, ["branch", "--list", "pr/42"])).stdout).toContain("pr/42");
+      expect((await probeGit(forge.repo.gitDir, ["branch", "--list", "pr/42"])).stdout).toContain(
+        "pr/42",
+      );
       expect(
         (await probeGit(result.path, ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim(),
       ).toBe("pr/42");
@@ -244,10 +349,22 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
 
       // The title and the link, kept where `git branch --edit-description` put
       // them, so a directory called `pr/42` is still readable in a month.
-      expect(await config(forge.bare, "branch.pr/42.description")).toContain("Fix the crash");
-      expect(await config(forge.bare, "branch.pr/42.description")).toContain(
+      expect(await config(forge.repo.gitDir, "branch.pr/42.description")).toContain(
+        "Fix the crash",
+      );
+      expect(await config(forge.repo.gitDir, "branch.pr/42.description")).toContain(
         "https://github.example/acme/widget/pull/42",
       );
+
+      // The transcript, which a process only ever showed as a blob: what was
+      // asked, what was fetched, and — on a branch that was just created — the
+      // one line that says the push refspec below is there at all.
+      const narrated = outcome.log.err.join("");
+      expect(narrated).toContain("✓ pull request 42 — Fix the crash");
+      expect(narrated).toContain("✓ fetched octocat:fix/crash");
+      expect(narrated).toContain("git push there sends it back to octocat:fix/crash");
+      // Nothing about the pull request went to stdout: the result is the result.
+      expect(outcome.log.out).toEqual([]);
     });
   }, 90_000);
 
@@ -256,16 +373,15 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
 
-      const result = await pr(forge, ["42"]);
+      const result = await pr(forge, "42");
+      const bare = forge.repo.gitDir;
 
       // The refspec is the payoff, and it is asserted rather than inferred:
       // `pr/42` and `fix/crash` are different names, so under `push.default`
       // alone a bare `git push` would be refused.
-      expect(await config(forge.bare, "remote.pr-42.push")).toBe(
-        "refs/heads/pr/42:refs/heads/fix/crash",
-      );
+      expect(await config(bare, "remote.pr-42.push")).toBe("refs/heads/pr/42:refs/heads/fix/crash");
       expect(result.upstream).toBe("pr-42/fix/crash");
-      expect(await config(forge.bare, "branch.pr/42.remote")).toBe("pr-42");
+      expect(await config(bare, "branch.pr/42.remote")).toBe("pr-42");
       expect(result.pushable).toBe(true);
 
       await Bun.write(join(result.path, "review.txt"), "reviewed\n");
@@ -293,14 +409,15 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
       // review has no business paying for.
       await forge.propose("wip/other", "other\n", "Something else");
 
-      await pr(forge, ["42"]);
+      await pr(forge, "42");
+      const bare = forge.repo.gitDir;
 
-      expect(await config(forge.bare, "remote.pr-42.fetch")).toBe(
+      expect(await config(bare, "remote.pr-42.fetch")).toBe(
         "+refs/heads/fix/crash:refs/remotes/pr-42/fix/crash",
       );
-      expect(await config(forge.bare, "remote.pr-42.tagOpt")).toBe("--no-tags");
+      expect(await config(bare, "remote.pr-42.tagOpt")).toBe("--no-tags");
 
-      const refs = await probeGit(forge.bare, [
+      const refs = await probeGit(bare, [
         "for-each-ref",
         "--format=%(refname)",
         "refs/remotes/pr-42/",
@@ -310,10 +427,7 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
 
       // Named after the pull request rather than its author, so a second
       // proposal from the same fork cannot fight over one push refspec.
-      expect((await probeGit(forge.bare, ["remote"])).stdout.trim().split("\n")).toEqual([
-        "origin",
-        "pr-42",
-      ]);
+      expect(await remotes(bare)).toEqual(["origin", "pr-42"]);
     });
   }, 90_000);
 
@@ -326,12 +440,12 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
         headRepositoryOwner: { login: "acme" },
       });
 
-      const result = await pr(forge, ["7"]);
+      const result = await pr(forge, "7");
 
       expect(result.head).toBe("acme:feat/login");
       // Derived from origin's own URL, which is what keeps the transport and
       // the host that already work here.
-      expect(await config(forge.bare, "remote.pr-7.url")).toBe(`file://${forge.base}`);
+      expect(await config(forge.repo.gitDir, "remote.pr-7.url")).toBe(`file://${forge.base}`);
       expect(await Bun.file(join(result.path, "login.txt")).text()).toBe("login\n");
       expect(result.upstream).toBe("pr-7/feat/login");
     });
@@ -350,30 +464,34 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
         headRefName: "gone-branch",
       });
 
-      const result = await runCli(["pr", "8", "--json"], { cwd: forge.root, env: forge.env });
-      expect(result.exitCode).toBe(ExitCode.ok);
-      const parsed = JSON.parse(result.stdout) as PrJson;
+      const outcome = await attemptPr(forge, "8");
+      const result = succeeded(outcome);
 
-      expect(parsed.state).toBe("MERGED");
-      // Repo-root-relative and `/`-separated, taken from the `add` underneath
-      // rather than recomputed — the same field `path`, `reset` and `rename`
-      // answer with, so this row lines up with `grove list`.
-      expect(parsed.dir).toBe("pr/8");
-      expect(parsed.pushable).toBe(false);
-      expect(parsed.remote).toBeUndefined();
-      expect(parsed.upstream).toBeUndefined();
-      expect(await headOf(parsed.path)).toBe(sha);
+      expect(result.state).toBe("MERGED");
+      expect(result.dir).toBe("pr/8");
+      // Three facts rather than one sentence: there is no remote that can serve
+      // it, so there is no upstream and nothing to push.
+      expect(result.pushable).toBe(false);
+      expect(result.remote).toBeUndefined();
+      expect(result.upstream).toBeUndefined();
+      expect(await headOf(result.path)).toBe(sha);
 
       // Said, not refused: "what did this change" is as good a question about a
-      // merged pull request as an open one.
-      expect(result.stderr).toContain("pull request 8 is merged");
-      expect(result.stderr).toContain("still a draft");
-      expect(result.stderr).toContain("nothing to push");
+      // merged pull request as an open one. Two of the three are warnings and
+      // the draft is an aside, which the prefixes are the record of.
+      const narrated = outcome.log.err;
+      expect(narrated).toContain(
+        "! pull request 8 is merged; this is the branch as it was proposed\n",
+      );
+      expect(narrated).toContain("· pull request 8 is still a draft\n");
+      expect(narrated).toContain(
+        "! the branch behind pull request 8 is gone; this is a copy with nothing to push back to\n",
+      );
+      // And nothing promised a push refspec that is not there.
+      expect(narrated.join("")).not.toContain("git push there sends it back");
 
-      // And the remote that could not serve it is gone rather than left behind.
-      expect((await probeGit(forge.bare, ["remote"])).stdout.trim().split("\n")).toEqual([
-        "origin",
-      ]);
+      // The remote that could not serve it is gone rather than left behind.
+      expect(await remotes(forge.repo.gitDir)).toEqual(["origin"]);
     });
   }, 90_000);
 });
@@ -383,21 +501,18 @@ describe.skipIf(!POSIX)("running it again", () => {
     await withForge(async (forge) => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
-      const first = await pr(forge, ["42"]);
+      const first = await pr(forge, "42");
 
-      const unchanged = await pr(forge, ["42"]);
-      expect(unchanged.updated).toBe("unchanged");
+      const unchanged = await pr(forge, "42");
+      expect([unchanged.updated, unchanged.alreadyPresent]).toEqual(["unchanged", true]);
 
       await forge.propose("fix/crash", "two\n", "More fixing");
-      const caught = await runCli(["pr", "42", "--json"], { cwd: forge.root, env: forge.env });
-      expect(caught.exitCode).toBe(ExitCode.ok);
+      const caught = await pr(forge, "42");
 
-      const parsed = JSON.parse(caught.stdout) as PrJson;
-      expect(parsed.updated).toBe("fast-forwarded");
-      expect(parsed.alreadyPresent).toBe(true);
+      expect(caught.updated).toBe("fast-forwarded");
+      expect(caught.alreadyPresent).toBe(true);
       // Still named, on the path where the worktree was already there.
-      expect(parsed.dir).toBe("pr/42");
-      expect(caught.stderr).toContain("caught up with pull request 42");
+      expect([caught.dir, caught.path]).toEqual(["pr/42", first.path]);
       // The move went through the worktree, so the files match the branch.
       expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("two\n");
       expect(await headOf(first.path)).toBe(
@@ -410,7 +525,7 @@ describe.skipIf(!POSIX)("running it again", () => {
     await withForge(async (forge) => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
-      const first = await pr(forge, ["42"]);
+      const first = await pr(forge, "42");
 
       await Bun.write(join(first.path, "mine.txt"), "mine\n");
       await seedGit(first.path, ["add", "-A"]);
@@ -421,12 +536,18 @@ describe.skipIf(!POSIX)("running it again", () => {
       // neither equal to the head nor an ancestor of it.
       await forge.propose("fix/crash", "two\n", "More fixing");
 
-      const refused = await runCli(["pr", "42"], { cwd: forge.root, env: forge.env });
+      const outcome = await attemptPr(forge, "42");
+      const error = refused(outcome);
 
-      expect(refused.exitCode).toBe(ExitCode.refused);
-      expect(refused.stderr).toContain("pr/42 has 1 commit pull request 42 does not");
-      // The one line that resolves it, spelled out rather than described.
-      expect(refused.stderr).toContain("grove reset pr/42 --to pr-42/fix/crash");
+      expect(error.code).toBe("refused");
+      expect(errorToExitCode(error.code)).toBe(ExitCode.refused);
+      expect(error.message).toBe("pr/42 has 1 commit pull request 42 does not");
+      // Which of the two refusals `reconcileBranch` composes this was: the
+      // commits are yours. The other one — a `pr/42` somebody else made — reads
+      // almost the same and is told apart by the hint, below.
+      expect(error.hint).toBe(
+        "they are yours — push them, or throw them away: grove reset pr/42 --to pr-42/fix/crash",
+      );
 
       // Nothing was lost: the branch is where it was, and so is the file.
       expect(await headOf(first.path)).toBe(mine);
@@ -434,11 +555,18 @@ describe.skipIf(!POSIX)("running it again", () => {
       expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("one\n");
 
       // And the hint works, which is what makes it a hint rather than an excuse.
-      const reset = await runCli(["reset", "pr/42", "--to", "pr-42/fix/crash"], {
-        cwd: forge.root,
-      });
-      expect(reset.exitCode).toBe(ExitCode.ok);
-      expect((await pr(forge, ["42"])).updated).toBe("unchanged");
+      succeeded(
+        await attempt((reporter) =>
+          resetWorktree(
+            forge.repo,
+            forge.repo.root,
+            { target: "pr/42", to: "pr-42/fix/crash", clean: false },
+            reporter,
+          ),
+        ),
+      );
+
+      expect((await pr(forge, "42")).updated).toBe("unchanged");
       expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("two\n");
     });
   }, 90_000);
@@ -447,31 +575,39 @@ describe.skipIf(!POSIX)("running it again", () => {
     await withForge(async (forge) => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
-      const first = await pr(forge, ["42"]);
+      const first = await pr(forge, "42");
 
       await Bun.write(join(first.path, "crash.txt"), "half-edited\n");
       await forge.propose("fix/crash", "two\n", "More fixing");
 
-      const dirty = await runCli(["pr", "42"], { cwd: forge.root, env: forge.env });
-      expect(dirty.exitCode).toBe(ExitCode.refused);
-      expect(dirty.stderr).toContain("has uncommitted changes");
+      const dirty = refused(await attemptPr(forge, "42"));
+
+      expect(dirty.code).toBe("refused");
+      expect(dirty.message).toBe("pr/42 has uncommitted changes, and pull request 42 has moved on");
+      expect(dirty.hint).toBe("commit them, or discard them: grove reset pr/42");
       expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("half-edited\n");
 
       // Somebody's own branch that happens to be called `pr/9`: not an
       // ancestor of the head, so it is refused rather than quietly checked out
       // as though it were the pull request.
-      await seedGit(forge.bare, ["branch", "pr/9", "refs/remotes/origin/feat/login"]);
+      await seedGit(forge.repo.gitDir, ["branch", "pr/9", "refs/remotes/origin/feat/login"]);
       await forge.answer({
         number: 9,
         headRefName: "main",
         headRepositoryOwner: { login: "acme" },
       });
 
-      const clash = await runCli(["pr", "9"], { cwd: forge.root, env: forge.env });
-      expect(clash.exitCode).toBe(ExitCode.refused);
-      expect(clash.stderr).toContain("pr/9 is already a branch here, and it is not pull request 9");
-      expect(clash.stderr).toContain("branch -m pr/9");
-      expect(await pathExists(join(forge.root, "pr", "9"))).toBe(false);
+      const outcome = await attemptPr(forge, "9");
+      const clash = refused(outcome);
+
+      expect(clash.code).toBe("refused");
+      expect(clash.message).toBe("pr/9 is already a branch here, and it is not pull request 9");
+      // The other half of the same check, and the half stderr could not show:
+      // this one is not yours, so the way out is a rename and not a reset.
+      expect(clash.hint).toBe(
+        `rename it: git -C ${forge.repo.gitDir} branch -m pr/9 <another name>`,
+      );
+      expect(await pathExists(join(forge.repo.root, "pr", "9"))).toBe(false);
     });
   }, 90_000);
 });
@@ -481,21 +617,30 @@ describe.skipIf(!POSIX)("the remotes a review leaves behind", () => {
     await withForge(async (forge) => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
-      await pr(forge, ["42"]);
+      await pr(forge, "42");
+
+      /** `grove remove`, without the teardown no fixture here has a file for. */
+      const remove = (deleteBranch: boolean) =>
+        attempt((reporter) =>
+          removeWorktree(
+            forge.repo,
+            forge.repo.root,
+            { target: "pr/42", force: false, deleteBranch, teardown: false },
+            reporter,
+          ),
+        );
 
       // The worktree alone is not enough: the branch is what the remote serves.
-      const kept = await runCli(["remove", "pr/42"], { cwd: forge.root });
-      expect(kept.exitCode).toBe(ExitCode.ok);
-      expect((await probeGit(forge.bare, ["remote"])).stdout).toContain("pr-42");
+      const kept = succeeded(await remove(false));
+      expect(kept.branchDeleted).toBe(false);
+      expect(await remotes(forge.repo.gitDir)).toContain("pr-42");
 
-      await pr(forge, ["42"]);
-      const removed = await runCli(["remove", "pr/42", "--delete-branch"], { cwd: forge.root });
+      await pr(forge, "42");
+      const outcome = await remove(true);
 
-      expect(removed.exitCode).toBe(ExitCode.ok);
-      expect(removed.stderr).toContain("dropped remote pr-42");
-      expect((await probeGit(forge.bare, ["remote"])).stdout.trim().split("\n")).toEqual([
-        "origin",
-      ]);
+      expect(succeeded(outcome).branchDeleted).toBe(true);
+      expect(outcome.log.err.join("")).toContain("dropped remote pr-42");
+      expect(await remotes(forge.repo.gitDir)).toEqual(["origin"]);
     });
   }, 90_000);
 
@@ -506,17 +651,13 @@ describe.skipIf(!POSIX)("the remotes a review leaves behind", () => {
 
       // `pr-99` with no `pr/99` branch: what a branch deleted by hand, or a
       // merge, leaves for the refresh tick to fetch forever.
-      await seedGit(forge.bare, ["remote", "add", "pr-99", `file://${forge.fork}`]);
+      await seedGit(forge.repo.gitDir, ["remote", "add", "pr-99", `file://${forge.fork}`]);
       // A remote that merely looks similar is not grove's to remove.
-      await seedGit(forge.bare, ["remote", "add", "upstream", `file://${forge.base}`]);
+      await seedGit(forge.repo.gitDir, ["remote", "add", "upstream", `file://${forge.base}`]);
 
-      await pr(forge, ["42"]);
+      await pr(forge, "42");
 
-      expect((await probeGit(forge.bare, ["remote"])).stdout.trim().split("\n")).toEqual([
-        "origin",
-        "pr-42",
-        "upstream",
-      ]);
+      expect(await remotes(forge.repo.gitDir)).toEqual(["origin", "pr-42", "upstream"]);
     });
   }, 90_000);
 });
@@ -544,14 +685,15 @@ run = ["sh -c 'echo ok > ran.txt'"]
 
   test("fills the worktree in like add does — run waits on --trust, --no-setup skips the lot", async () => {
     await withForge(async (forge) => {
-      await seedSetupFile(forge.root);
+      await seedSetupFile(forge.repo.root);
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
 
-      const untrusted = await pr(forge, ["42"]);
+      const untrusted = await pr(forge, "42", { setup: true });
 
       expect(untrusted.setup?.copied).toEqual([".env"]);
       expect(untrusted.setup?.linked).toEqual(["node_modules"]);
+      expect(untrusted.setup?.planned).toBe(3);
       expect(await Bun.file(join(untrusted.path, ".env")).text()).toBe("SECRET=1\n");
       // A `run` line in somebody else's pull request is code that arrived with
       // a fetch, which is exactly the case the trust gate is there for.
@@ -561,16 +703,19 @@ run = ["sh -c 'echo ok > ran.txt'"]
 
       await forge.answer({ number: 43, headRefName: "fix/other" });
       await forge.propose("fix/other", "other\n", "Something else");
-      const trusted = await pr(forge, ["43", "--trust"]);
+      const trusted = await pr(forge, "43", { setup: true, trust: true });
 
       expect(trusted.setup?.untrusted).toBe(false);
       expect(trusted.setup?.ran).toEqual(["sh -c 'echo ok > ran.txt'"]);
+      expect(trusted.setup?.failed).toBeUndefined();
       expect(await Bun.file(join(trusted.path, "ran.txt")).text()).toBe("ok\n");
 
       await forge.answer({ number: 44, headRefName: "fix/third" });
       await forge.propose("fix/third", "third\n", "A third thing");
-      const skipped = await pr(forge, ["44", "--no-setup"]);
+      const skipped = await pr(forge, "44", { setup: false });
 
+      // Not an empty record: `--no-setup` means the file was never read, and an
+      // absent field is the honest way to say that.
       expect(skipped.setup).toBeUndefined();
       expect(await pathExists(join(skipped.path, ".env"))).toBe(false);
       expect(await pathExists(join(skipped.path, "node_modules"))).toBe(false);
@@ -586,50 +731,50 @@ describe.skipIf(!POSIX)("when gh cannot answer", () => {
 
       // Nothing on `PATH` but git and bun, so this is "gh is not installed"
       // rather than "the fake was shadowed".
-      const result = await runCli(["pr", "42"], {
-        cwd: forge.root,
-        env: { PATH: forge.barePath },
-      });
+      const outcome = await forge.withoutGh(() => attemptPr(forge, "42"));
+      const error = refused(outcome);
 
-      expect(result.exitCode).toBe(ExitCode.gh);
-      expect(result.stderr).toContain("needs `gh`, which is not installed");
-      expect(result.stderr).toContain("https://cli.github.com");
-      // Not a crash: no stack trace, and nothing was written.
-      expect(result.stderr).not.toContain("at <parse>");
-      expect(await pathExists(join(forge.root, "pr"))).toBe(false);
-      expect((await probeGit(forge.bare, ["remote"])).stdout.trim()).toBe("origin");
+      expect(error.code).toBe("gh");
+      // The one exit code nothing else in grove reports, because `gh` is the
+      // one tool nothing else in grove needs.
+      expect(errorToExitCode(error.code)).toBe(ExitCode.gh);
+      expect(error.message).toBe("reviewing a pull request needs `gh`, which is not installed");
+      expect(error.hint).toBe("https://cli.github.com — nothing else in grove uses it");
+      // Missing is not the same as failing: there is no exit code to quote and
+      // no stderr to carry, so `details` is empty rather than a guess.
+      expect(error.details).toEqual([]);
+
+      // Not a crash: the step that was open says it failed, and nothing was
+      // written.
+      expect(outcome.log.err.join("")).toContain("✗ the forge had no answer");
+      expect(await pathExists(join(forge.repo.root, "pr"))).toBe(false);
+      expect(await remotes(forge.repo.gitDir)).toEqual(["origin"]);
     });
   }, 90_000);
 
   test("gh failing surfaces gh's own stderr, and names the fix when it is the repository", async () => {
     await withForge(async (forge) => {
-      const failing = await runCli(["pr", "999"], {
-        cwd: forge.root,
-        env: {
-          ...forge.env,
-          GROVE_GH_EXIT: "1",
-          GROVE_GH_STDERR: "no pull requests found for branch 999",
-        },
-      });
+      forge.fails("1", "no pull requests found for branch 999");
 
-      expect(failing.exitCode).toBe(ExitCode.gh);
-      expect(failing.stderr).toContain("gh pr view failed (exit 1)");
+      const failing = refused(await attemptPr(forge, "999"));
+
+      expect(failing.code).toBe("gh");
+      expect(failing.message).toBe("gh pr view failed (exit 1)");
       // gh's own words are the useful half; grove adds none of its own.
-      expect(failing.stderr).toContain("no pull requests found for branch 999");
-      expect(failing.stderr).not.toContain("gh repo set-default");
+      expect(failing.details.join("\n")).toContain("no pull requests found for branch 999");
+      // No hint at all, rather than a hint that happens not to mention
+      // `set-default`: this is gh answering a question, not gh being lost.
+      expect(failing.hint).toBeUndefined();
 
-      const hostless = await runCli(["pr", "42"], {
-        cwd: forge.root,
-        env: {
-          ...forge.env,
-          GROVE_GH_EXIT: "1",
-          GROVE_GH_STDERR: "none of the git remotes correspond to a known GitHub host",
-        },
-      });
+      forge.fails("1", "none of the git remotes correspond to a known GitHub host");
 
-      expect(hostless.exitCode).toBe(ExitCode.gh);
-      expect(hostless.stderr).toContain("gh repo set-default");
-      expect((await probeGit(forge.bare, ["remote"])).stdout.trim()).toBe("origin");
+      const hostless = refused(await attemptPr(forge, "42"));
+
+      expect(hostless.code).toBe("gh");
+      expect(hostless.hint).toBe(
+        "gh could not tell which GitHub repository this is; try `gh repo set-default`",
+      );
+      expect(await remotes(forge.repo.gitDir)).toEqual(["origin"]);
     });
   }, 90_000);
 
@@ -638,57 +783,54 @@ describe.skipIf(!POSIX)("when gh cannot answer", () => {
   // and not the repository — nothing invalid reaches `.bare/config`.
   test("an answer grove does not recognise is refused before the config is touched", async () => {
     await withForge(async (forge) => {
-      await Bun.write(join(forge.repo.root, "gh.json"), JSON.stringify({ title: "who knows" }));
+      await Bun.write(join(forge.temp.root, "gh.json"), JSON.stringify({ title: "who knows" }));
 
-      const result = await runCli(["pr", "42"], { cwd: forge.root, env: forge.env });
+      const error = refused(await attemptPr(forge, "42"));
 
-      expect(result.exitCode).toBe(ExitCode.gh);
-      expect(result.stderr).toContain("gh");
+      expect(error.code).toBe("gh");
+      // Every field that was missing, named — the sentence a `toContain("gh")`
+      // could not tell from any other gh failure, and the one that says which
+      // half of the answer to go and look at.
+      expect(error.message).toBe(
+        "gh pr view answered without number, headRefName, headRepositoryOwner, headRepository",
+      );
+      expect(error.hint).toBe(`see what it answers: gh pr view 42 --json ${PR_FIELDS}`);
+
       // The repository still works afterwards, which is the point of refusing.
-      const remotes = await probeGit(forge.bare, ["remote"]);
-      expect([remotes.code, remotes.stdout.trim()]).toEqual([0, "origin"]);
+      const listed = await probeGit(forge.repo.gitDir, ["remote"]);
+      expect([listed.code, listed.stdout.trim()]).toEqual([0, "origin"]);
     });
   }, 90_000);
 
   // gh's stdout is as much external input as its exit code, so output grove
-  // cannot read is one more way gh disappoints — exit 10 with gh's own words,
-  // not exit 1 and "a bug in this tool".
+  // cannot read is one more way gh disappoints — a `gh` error with gh's own
+  // words, not a `SyntaxError` and "a bug in this tool".
   test("gh answering with something that is not JSON is a gh failure, not a crash", async () => {
     await withForge(async (forge) => {
-      await Bun.write(join(forge.repo.root, "gh.json"), "not json at all\n");
+      await Bun.write(join(forge.temp.root, "gh.json"), "not json at all\n");
 
-      const result = await runCli(["pr", "42"], { cwd: forge.root, env: forge.env });
+      const error = refused(await attemptPr(forge, "42"));
 
-      expect(result.exitCode).toBe(ExitCode.gh);
-      expect(result.stderr).not.toContain("SyntaxError");
+      expect(error.code).toBe("gh");
+      expect(error.message).toBe("gh pr view answered with something that is not JSON");
+      // gh's own bytes, carried rather than paraphrased.
+      expect(error.details.join("\n")).toContain("not json at all");
     });
   }, 90_000);
 
-  // The same answer for the other question grove asks gh. In process because
-  // that is how it is reached: no command line lists pull requests, the app's
-  // picker is the only caller, and `PATH` is what grove looks `gh` up on either
-  // way — the swap `service.test.ts` makes to prove `gh` missing.
+  // The same answer for the other question grove asks gh. The picker is its
+  // only caller — no command line lists pull requests — and `PATH` is what
+  // grove looks `gh` up on either way.
   test("the picker's own gh call answers the same way when the list is not JSON", async () => {
     await withForge(async (forge) => {
-      await Bun.write(join(forge.repo.root, "gh.json"), "not json at all\n");
+      await Bun.write(join(forge.temp.root, "gh.json"), "not json at all\n");
 
-      const path = process.env.PATH;
-      Object.assign(process.env, forge.env);
+      const error = refused(await attempt(() => listPullRequests(forge.repo)));
 
-      try {
-        const failed: unknown = await listPullRequests(repoPaths(forge.root)).catch(
-          (error: unknown) => error,
-        );
-
-        if (!isGroveError(failed)) throw new Error(`expected a GroveError, got ${String(failed)}`);
-        expect(failed.code).toBe("gh");
-        // gh's own bytes, so the panel can say what it was handed.
-        expect(failed.details.join("\n")).toContain("not json at all");
-      } finally {
-        process.env.PATH = path;
-        delete process.env.GROVE_GH_LOG;
-        delete process.env.GROVE_GH_OUT;
-      }
+      expect(error.code).toBe("gh");
+      expect(error.message).toBe("gh pr list answered with something that is not JSON");
+      // gh's own bytes, so the panel can say what it was handed.
+      expect(error.details.join("\n")).toContain("not json at all");
     });
   }, 90_000);
 });

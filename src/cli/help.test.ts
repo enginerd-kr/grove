@@ -10,13 +10,16 @@ import {
   SUBCOMMANDS,
   type SubcommandSpec,
 } from "./help.ts";
-import { runCli } from "./test-cli.ts";
 
 /**
  * Help and the parser are generated from the same table, and the interesting
  * property is that they cannot drift apart. So this asserts the relationship
  * rather than the prose: what the spec declares is what the parser takes and
  * what the page prints, in both directions.
+ *
+ * All of that is two pure functions and a table, so none of it needs a
+ * process. `help.e2e.test.ts` next door keeps the half that does: that
+ * `--help` reaches stdout and exits 0.
  */
 
 function requiredArgs(spec: SubcommandSpec): readonly string[] {
@@ -189,25 +192,5 @@ describe("the rendered page", () => {
     for (const page of pages) {
       for (const line of page.split("\n")) expect(line.length).toBeLessThanOrEqual(100);
     }
-  });
-});
-
-describe("--help through the binary", () => {
-  test("`grove --help` prints the global page on stdout and exits 0", async () => {
-    const result = await runCli(["--help"]);
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(`${formatGlobalHelp()}\n`);
-    expect(result.stderr).toBe("");
-  });
-
-  test("`grove add --help` prints add's own page on stdout and exits 0", async () => {
-    const spec = findSubcommand("add");
-    const result = await runCli(["add", "--help"]);
-
-    expect(result.exitCode).toBe(0);
-    expect(spec).toBeDefined();
-    expect(result.stdout).toBe(`${spec ? formatSubcommandHelp(spec) : ""}\n`);
-    expect(result.stderr).toBe("");
   });
 });

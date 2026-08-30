@@ -5,8 +5,13 @@ import { join } from "node:path";
 import { type GroveError, isGroveError } from "../core/errors.ts";
 import { pathExists } from "../core/fs.ts";
 import { traceGit } from "../core/git.ts";
-import { probeGit, type TempRepo, withTempRepo } from "../core/test-utils.ts";
-import { createPlainReporter, type Reporter } from "../report/reporter.ts";
+import {
+  probeGit,
+  type Recorder,
+  recorder,
+  type TempRepo,
+  withTempRepo,
+} from "../core/test-utils.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
 import { ExitCode, errorToExitCode } from "./exit-codes.ts";
 import { SUBCOMMANDS } from "./help.ts";
@@ -29,25 +34,6 @@ import { runCli } from "./test-cli.ts";
  */
 
 const BASE: GlobalOptions = { repo: undefined, json: false, verbose: false, headless: false };
-
-type Recorder = {
-  /** Everything that reached stdout, one entry per `reporter.out`. */
-  readonly out: string[];
-  readonly err: string[];
-  readonly reporter: Reporter;
-};
-
-/** A reporter whose two destinations are kept apart — which is the rule under test. */
-function recorder(): Recorder {
-  const out: string[] = [];
-  const err: string[] = [];
-
-  return {
-    out,
-    err,
-    reporter: createPlainReporter({ out: (text) => out.push(text), err: (text) => err.push(text) }),
-  };
-}
 
 type RunOptions = {
   readonly global?: Partial<GlobalOptions>;
@@ -439,7 +425,7 @@ describe("global flags", () => {
 
       // `runCommand` never reads `global.verbose` — `cli.tsx` does, and calls
       // `traceGit`. Pinned here so moving the trace into a command would be
-      // noticed, and asserted end to end in `cli.test.tsx`.
+      // noticed, and asserted end to end in `cli.e2e.test.tsx`.
       expect(log.err).toEqual([]);
     });
   }, 60_000);

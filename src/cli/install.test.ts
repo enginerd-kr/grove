@@ -1,17 +1,28 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ExitCode } from "./exit-codes.ts";
-import { detectShell, rcFileFor } from "./install.ts";
-import type { Shell } from "./shell-init.ts";
-import { runCli } from "./test-cli.ts";
+import { attempt, refused } from "../core/test-utils.ts";
+import { detectShell, type InstallResult, installShellInit, rcFileFor } from "./install.ts";
+import { SHELLS, type Shell } from "./shell-init.ts";
 
 /**
  * `install` writes to a shell's rc file, which is the one thing in this tool
  * that touches a real home directory — so every run here is given a throwaway
  * one, and the variables that relocate an rc file are cleared rather than
  * inherited from whoever is running the tests.
+ *
+ * `installShellInit` takes both of those as parameters, which is the whole
+ * reason they are parameters: the environment and the home directory are what
+ * the command is *about*, and passing them in costs a function call where
+ * handing them to a child costs a process. It also holds on to the
+ * `InstallResult` itself, so "installed" and "already-installed" are told apart
+ * by the field that says so rather than by a sentence, and a refusal is the
+ * `GroveError` with its code and its hint rather than an exit code.
+ *
+ * `install.e2e.test.ts` keeps the part that only the binary has: which of the
+ * two writers the path and the news go to, the `--json` document, and the
+ * shells that are rejected in argument parsing before this function is reached.
  */
 
 /** A home nothing else can see, deleted afterwards. */
@@ -22,9 +33,9 @@ async function withTempHome(
 
   try {
     await body(home, {
-      HOME: home,
       // Unset rather than inherited: a developer with either of these set would
       // otherwise have the test write outside the temporary home.
+      HOME: home,
       ZDOTDIR: undefined,
       XDG_CONFIG_HOME: undefined,
       XDG_CACHE_HOME: join(home, ".cache"),
@@ -34,28 +45,16 @@ async function withTempHome(
   }
 }
 
+/** The line an install wrote, having insisted that it wrote one. */
+function writtenLine(result: InstallResult): string {
+  if (result.outcome !== "installed") throw new Error(`expected an install, got ${result.outcome}`);
+
+  return result.line;
+}
+
 /** What the install writes, as the block it appends. */
 function block(line: string): string {
   return `\n# grove: the shell function behind 'grove cd'\n${line}\n`;
-}
-
-type Installed = { readonly outcome: string; readonly rcFile: string; readonly line?: string };
-
-async function install(
-  home: string,
-  args: readonly string[],
-  env: Record<string, string | undefined>,
-): Promise<{ result: Installed }> {
-  const run = await runCli([...args, "--json"], { env });
-  expect(run.exitCode).toBe(ExitCode.ok);
-
-  const result = JSON.parse(run.stdout) as Installed;
-  // A guard, not an assertion about the product: getting the environment to the
-  // child wrong would append to whoever is running the tests' own rc file, and
-  // that has to fail here rather than succeed quietly.
-  expect(result.rcFile.startsWith(home)).toBe(true);
-
-  return { result };
 }
 
 describe("detectShell", () => {
@@ -109,29 +108,37 @@ describe("rcFileFor", () => {
   });
 });
 
-describe("grove install", () => {
+describe("installShellInit", () => {
   test("detects the shell from $SHELL and writes that shell's rc file", async () => {
     await withTempHome(async (home, env) => {
-      const { result } = await install(home, ["install"], { ...env, SHELL: "/bin/zsh" });
+      const result = await installShellInit(undefined, {
+        env: { ...env, SHELL: "/bin/zsh" },
+        home,
+      });
 
-      expect(result.outcome).toBe("installed");
-      expect(result.rcFile).toBe(join(home, ".zshrc"));
-      expect(result.line).toContain("shell-init");
-      expect(result.line).toContain("'zsh'");
-      expect(await Bun.file(join(home, ".zshrc")).text()).toBe(block(result.line ?? ""));
+      // Every field, not just the outcome: `shell` is what the sentence names
+      // and `rcFile` is what a person is told to restart, so both are answers.
+      expect(result).toEqual({
+        outcome: "installed",
+        shell: "zsh",
+        rcFile: join(home, ".zshrc"),
+        line: expect.stringContaining("'shell-init' 'zsh'"),
+      });
+      expect(await Bun.file(join(home, ".zshrc")).text()).toBe(block(writtenLine(result)));
     });
   });
 
   test("is idempotent: a second run leaves the file exactly as it was", async () => {
     await withTempHome(async (home, env) => {
       const rc = join(home, ".zshrc");
-      await install(home, ["install"], { ...env, SHELL: "/bin/zsh" });
+      await installShellInit("zsh", { env, home });
       const after = await Bun.file(rc).text();
 
-      const { result } = await install(home, ["install"], { ...env, SHELL: "/bin/zsh" });
+      const result = await installShellInit("zsh", { env, home });
 
-      expect(result.outcome).toBe("already-installed");
-      expect(result.rcFile).toBe(rc);
+      // No `line`, and that is the point: there is nothing to tell anybody to
+      // run, because the line they would run is already in the file.
+      expect(result).toEqual({ outcome: "already-installed", shell: "zsh", rcFile: rc });
       expect(await Bun.file(rc).text()).toBe(after);
     });
   });
@@ -143,9 +150,10 @@ describe("grove install", () => {
       const original = '# mine\neval "$(grove shell-init bash)"\n';
       await Bun.write(join(home, ".bashrc"), original);
 
-      const { result } = await install(home, ["install", "bash"], env);
+      const result = await installShellInit("bash", { env, home });
 
       expect(result.outcome).toBe("already-installed");
+      expect(result.rcFile).toBe(join(home, ".bashrc"));
       expect(await Bun.file(join(home, ".bashrc")).text()).toBe(original);
     });
   });
@@ -156,10 +164,11 @@ describe("grove install", () => {
       // end of somebody's last line.
       await Bun.write(join(home, ".bashrc"), "export EDITOR=vim");
 
-      const { result } = await install(home, ["install", "bash"], env);
+      const result = await installShellInit("bash", { env, home });
 
+      expect(result.outcome).toBe("installed");
       expect(await Bun.file(join(home, ".bashrc")).text()).toBe(
-        `export EDITOR=vim\n${block(result.line ?? "")}`,
+        `export EDITOR=vim\n${block(writtenLine(result))}`,
       );
     });
   });
@@ -167,71 +176,60 @@ describe("grove install", () => {
   test("fish gets its own rc file, its own directory, and fish quoting", async () => {
     await withTempHome(async (home, env) => {
       const rc = join(home, ".config/fish/config.fish");
-      const { result } = await install(home, ["install", "fish"], { ...env, SHELL: "/bin/zsh" });
+      const result = await installShellInit("fish", { env: { ...env, SHELL: "/bin/zsh" }, home });
 
       // The named shell beats $SHELL, and the directory is created for it.
       expect(result.rcFile).toBe(rc);
-      expect(result.line).toContain("'shell-init' 'fish'");
-      expect(await Bun.file(rc).text()).toBe(block(result.line ?? ""));
+      expect(result.shell).toBe("fish");
+      expect(writtenLine(result)).toContain("'shell-init' 'fish'");
+      expect(await Bun.file(rc).text()).toBe(block(writtenLine(result)));
     });
   });
 
   test("bash lands in the file that is already there", async () => {
     await withTempHome(async (home, env) => {
-      await mkdir(home, { recursive: true });
       await Bun.write(join(home, ".profile"), "# login\n");
 
-      const { result } = await install(home, ["install", "bash"], env);
+      const result = await installShellInit("bash", { env, home });
 
       expect(result.rcFile).toBe(join(home, ".profile"));
       expect(await Bun.file(join(home, ".profile")).text()).toBe(
-        `# login\n${block(result.line ?? "")}`,
+        `# login\n${block(writtenLine(result))}`,
       );
       expect(await Bun.file(join(home, ".bashrc")).exists()).toBe(false);
     });
   });
 
-  test("the rc file's path is the result on stdout, and the news is on stderr", async () => {
-    await withTempHome(async (home, env) => {
-      const result = await runCli(["install"], { env: { ...env, SHELL: "/bin/zsh" } });
+  test("every shell it knows writes a line naming that shell", async () => {
+    for (const shell of SHELLS as readonly Shell[]) {
+      await withTempHome(async (home, env) => {
+        const result = await installShellInit(shell, { env, home });
 
-      expect(result.exitCode).toBe(ExitCode.ok);
-      expect(result.stdout).toBe(`${join(home, ".zshrc")}\n`);
-      expect(result.stderr).toContain("added to");
-    });
+        expect(result.outcome).toBe("installed");
+        expect(writtenLine(result)).toContain(`'shell-init' '${shell}'`);
+        expect(await Bun.file(result.rcFile).text()).toContain(writtenLine(result));
+      });
+    }
   });
 
   test("a $SHELL it cannot place is a usage error that says what to type", async () => {
-    await withTempHome(async (_home, env) => {
-      const result = await runCli(["install"], { env: { ...env, SHELL: "/bin/tcsh" } });
-
-      expect(result.exitCode).toBe(ExitCode.usage);
-      expect(result.stderr).toContain("could not tell which shell this is from $SHELL");
-      expect(result.stderr).toContain("grove install <shell>");
-    });
-  });
-
-  test("a shell it does not know is refused before anything is written", async () => {
     await withTempHome(async (home, env) => {
-      const result = await runCli(["install", "tcsh"], { env: { ...env, SHELL: "/bin/zsh" } });
+      const error = refused(
+        await attempt(() =>
+          installShellInit(undefined, { env: { ...env, SHELL: "/bin/tcsh" }, home }),
+        ),
+      );
 
-      expect(result.exitCode).toBe(ExitCode.usage);
-      expect(result.stderr).toContain("is not a shell this knows");
+      expect(error.code).toBe("usage");
+      expect(error.message).toContain("could not tell which shell this is from $SHELL");
+      // The hint is the whole value of refusing rather than guessing: it names
+      // the one thing that resolves it, and the words that are allowed in it.
+      expect(error.hint).toContain("grove install <shell>");
+      expect(error.hint).toContain("zsh, bash, fish");
+
+      // And nothing was written while it was working that out.
       expect(await Bun.file(join(home, ".zshrc")).exists()).toBe(false);
+      expect(await Bun.file(join(home, ".bashrc")).exists()).toBe(false);
     });
-  });
-
-  test("every shell it knows writes a line naming that shell", async () => {
-    const shells: readonly Shell[] = ["zsh", "bash", "fish"];
-
-    for (const shell of shells) {
-      await withTempHome(async (home, env) => {
-        const { result } = await install(home, ["install", shell], env);
-
-        expect(result.outcome).toBe("installed");
-        expect(result.line).toContain(`'shell-init' '${shell}'`);
-        expect(await Bun.file(result.rcFile).text()).toContain(result.line ?? "");
-      });
-    }
   });
 });
