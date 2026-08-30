@@ -34,7 +34,21 @@ function fail(error: unknown): never {
 
   // Anything else is a bug here. Show the stack — there is no user-facing
   // advice to give, and hiding it only makes the report harder to act on.
-  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+  //
+  // The stack is not trusted to carry the message, though, which it normally
+  // does on its first line. Under load Bun renders it as a bare `Error` with
+  // the message gone, and what is left is a report naming a file and a line
+  // number but not what went wrong — `Executable not found in $PATH: "git"`
+  // becomes six frames of stack and no sentence. It is added back only when it
+  // is actually missing, so the ordinary case does not say it twice.
+  const described =
+    error instanceof Error
+      ? error.stack === undefined || !error.stack.includes(error.message)
+        ? `${error.message}\n${error.stack ?? ""}`.trimEnd()
+        : error.stack
+      : String(error);
+
+  console.error(described);
   process.exit(ExitCode.internal);
 }
 
