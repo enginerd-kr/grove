@@ -24,7 +24,7 @@ app/tree.ts       the worktree paths, and one worktree's changed paths, as the t
 app/service.ts    what the screens are allowed to do: add, sync, remove, check out a PR
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
-e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
+e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulated screen
                   its piped sibling is ../cli/test-cli.ts, which is not a UI concern
 ```
 
@@ -131,10 +131,12 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn)
   column dims when its row is not selected; these two dim a zero and a `○` wherever they are, so
   the rows that have drifted or have changes in them are the ones that read. Both pair colour
   with something else — direction for the arrows, fill for the dot — because a status column
-  that only works in colour does not work for everyone. Colours cannot be asserted in
-  `App.test.tsx`: `supports-color` sees the `CI` variable that `e2e-utils` sets for Ink's repaint
-  loop and turns chalk off, so the tests check text and layout and the colours were checked by
-  eye in a PTY.
+  that only works in colour does not work for everyone. Colour is not asserted in
+  `App.test.tsx`, which has no terminal behind its fake stdout; the one assertion that a dirty
+  row's dot is undimmed and yellow *wherever the cursor is* lives in `App.e2e.test.tsx`, where
+  the emulated screen keeps the attributes, with the clean row beside it as the control that
+  stops it passing on a screen with no colour in it at all. `DriftCell`'s arrows are still an
+  eye check.
 - **A column is as wide as its heading, too.** Sizing `remote` to its rows alone truncates its
   own label the moment the rows are shorter than it — `↑0 ↓0` under `remo…`. `App.test.tsx`
   caught that one.
@@ -234,19 +236,37 @@ cannot load. It exists because `ink-testing-library` fakes stdout with `columns`
 and no `isTTY`, and both "is the Ink reporter selected at all" and "does a bare `grove` open
 anything" are answers that depend on `isTTY`. POSIX only — the tests skip themselves on Windows.
 
-Three details in `e2e-utils.ts` are load-bearing and were each found the hard way:
+**The PTY output goes through a terminal emulator**, and that is what `frame()` reads. A PTY
+returns a stream of repaints, not a screen: Ink walks the cursor back over the lines it drew
+and rewrites them, so stripping the escapes and accumulating the text gives you every frame
+since the process started, laid end to end. `not.toContain` means nothing against that, and
+the assertions worth making — is this row still listed, has that panel gone — are all of that
+shape. So the bytes are fed to [`@xterm/headless`](https://www.npmjs.com/package/@xterm/headless)
+(pure TypeScript, so unlike `node-pty` Bun loads it without complaint) and `frame()` returns the
+lines of `buffer.active` — `active` and not `normal`, because the app is on the alternate screen
+and the normal buffer still holds whatever the shell left there. `cellAt(row, column)` returns
+one position with the attributes text throws away, which is how the state dot's colour stopped
+being checked by eye. `raw()` still hands back the untouched bytes, for the assertions that are
+*about* the escapes: entering and leaving the alternate screen is a sequence and nothing else.
 
-- **`QUIET_MS`.** A repaint arrives in several chunks, so a predicate can match text from the
-  top of a frame while the bottom is still in flight. Waiting for the stream to go quiet is
-  what makes a frame whole.
+Four details in `e2e-utils.ts` are load-bearing and were each found the hard way:
+
+- **`QUIET_MS`.** The emulator retired half of what this was for — a predicate can no longer
+  match text from a frame that has already been painted over. The other half it makes worse.
+  A repaint still arrives in several chunks and Ink's is not atomic, and a grid fed half of one
+  does not look half-applied: it looks like a screen, with the new rows sitting on top of the
+  rows the last frame left underneath. Waiting for the stream to go quiet is still what makes a
+  frame whole.
+- **`clear()`.** No longer about readability, since the screen is not an accumulation any more.
+  It is the barrier: most of these predicates are already true of the screen before the key is
+  pressed, so without a mark saying "not until the child has spoken since", the wait returns on
+  its first poll and the assertion races the repaint.
 - **`pressUntil`.** Raw mode is enabled from an effect after the first paint, so a key written
   into that window is swallowed by the line discipline. Only for idempotent keys — `S` syncs
   everything however often it arrives, whereas an arrow key would count every repeat.
 - **`CI: "false"`.** Ink's `is-in-ci` disables repainting when `CI` is set, and every wait would
-  then time out on an empty buffer. `"false"` is the supported opt-out.
-
-A PTY returns a stream of repaints, not a screen: Ink erases the previous lines and rewrites
-the whole frame, so accumulated output still holds every older frame. `clear()` before an
-interaction makes the next repaint readable on its own, which is what keeps `not.toContain`
-honest. Assertions finer than that (cell colors, cursor position) would need a terminal
-emulator such as [`@xterm/headless`](https://www.npmjs.com/package/@xterm/headless).
+  then time out on an empty buffer. `"false"` is the supported opt-out — and `FORCE_COLOR` is
+  its bill: `supports-color` asks only whether `CI` is *present*, so the opt-out meant for Ink
+  turned chalk off, and turned it off on a laptop while leaving it on under GitHub Actions,
+  whose own variables win that branch. Pinning the level makes the colour on screen a decision
+  of the harness rather than of whoever is running it.

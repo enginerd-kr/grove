@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { runCli } from "../../cli/test-cli.ts";
 import { pathExists } from "../../core/fs.ts";
 import { type TempRepo, withTempRepo } from "../../core/test-utils.ts";
-import { startUi, type UiSession } from "../e2e-utils.ts";
+import { type Cell, startUi, type UiSession } from "../e2e-utils.ts";
 import { keys } from "../test-utils.ts";
 
 /**
@@ -27,6 +27,9 @@ const ALT_SCREEN_IN = `${ESC}[?1049h`;
 const ALT_SCREEN_OUT = `${ESC}[?1049l`;
 const CTRL_C = String.fromCharCode(3);
 
+/** `theme.warn`, which is chalk's `yellow`, as the palette slot it lands in. */
+const YELLOW = 3;
+
 /** A whole `bun` process, a clone, and a repaint per key: minutes, not seconds. */
 const SLOW = 90_000;
 const WAIT = 30_000;
@@ -48,28 +51,36 @@ async function managed(repo: TempRepo): Promise<string> {
   return root;
 }
 
-/**
- * The newest repaint in the buffer, rather than every repaint since the clear.
- *
- * Ink rewrites the whole frame on every update, so a buffer holding three of
- * them satisfies "contains" for anything any of them said — which is how a
- * `not.toContain` passes over a screen that still shows the thing. The column
- * heading is on every frame the list draws, so the last one starts there.
- */
-const HEADING = "    worktree";
-
-function lastPaint(frame: string): string {
-  const at = frame.lastIndexOf(HEADING);
-
-  return at === -1 ? frame : frame.slice(at);
-}
-
 /** The label of the row the cursor is on, as the marker column reports it. */
 function selected(frame: string): string {
-  const rows = frame.split("\n").filter((line) => line.trimStart().startsWith("▸"));
-  const row = (rows.at(-1) ?? "").replace("▸", "").trim();
+  const row = frame.split("\n").find((line) => line.trimStart().startsWith("▸")) ?? "";
+  const columns = row
+    .replace("▸", "")
+    .trim()
+    .split(/\s{2,}/);
 
-  return row.split(/\s{2,}/)[0] ?? "";
+  return columns[0] ?? "";
+}
+
+/**
+ * The state dot on the row for `label`, as the terminal actually drew it.
+ *
+ * The column is a string index into the rendered line, which is the cell index
+ * only while every glyph to its left is one cell wide — so the cell's own
+ * character is read back rather than assumed. Rows are matched on carrying a
+ * dot as well as the label, since the label also appears in the column heading
+ * and in a ref name down in the commit panel.
+ */
+function stateDot(ui: UiSession, label: string): Cell {
+  const rows = ui.frame().split("\n");
+  const row = rows.findIndex((line) => line.includes(label) && /[●○]/.test(line));
+  const cell = row === -1 ? undefined : ui.cellAt(row, rows[row]?.search(/[●○]/) ?? -1);
+
+  if (cell === undefined || !/[●○]/.test(cell.chars)) {
+    throw new Error(`no state dot for ${label} on:\n${rows.join("\n")}`);
+  }
+
+  return cell;
 }
 
 /**
@@ -91,9 +102,11 @@ async function open(cwd: string, cols = 100, rows = 30): Promise<UiSession> {
 /**
  * Sends one key and waits for the repaint it caused.
  *
- * The heading is required as well as the predicate, because the buffer starts
- * empty after the clear and an empty buffer satisfies every `not` a caller
- * could ask for — the wait would then pass before the key had been read.
+ * `clear()` first, and it earns its place: the screen is already there, so a
+ * predicate of the shape most of these are — the panel is gone, the row is no
+ * longer listed — is true of it before the key has even been read, and the
+ * wait would return on its first poll against the screen the key was meant to
+ * change. Clearing marks the point the child has to have spoken since.
  */
 async function press(
   ui: UiSession,
@@ -102,7 +115,7 @@ async function press(
 ): Promise<void> {
   ui.clear();
   ui.press(key);
-  await ui.waitForFrame((frame) => frame.includes(HEADING) && settled(lastPaint(frame)), WAIT);
+  await ui.waitForFrame(settled, WAIT);
 }
 
 describeUi("the app", () => {
@@ -127,18 +140,20 @@ describeUi("the app", () => {
           // rather than drawing off the edge of the screen.
           ui.clear();
           ui.resize(40, 14);
-          const narrow = await ui.waitForFrame(
-            (each) =>
-              lastPaint(each).includes(HEADING) &&
-              lastPaint(each)
-                .split("\n")
-                .every((line) => line.length <= 40),
-            WAIT,
-          );
+          const narrow = await ui.waitForFrame((each) => each.includes("q quit"), WAIT);
+
           // Fewer columns and fewer rows than the list wants, and it is still a
-          // list with keys under it rather than a wrapped mess.
-          expect(lastPaint(narrow)).toContain("main");
-          expect(lastPaint(narrow)).toContain("q quit");
+          // list with keys under it rather than a wrapped mess. Finding the key
+          // bar *is* the width assertion now: a row the app drew too wide would
+          // not run off the edge, it would wrap onto the next one and shove the
+          // bottom of the layout past row 14, where there is no screen left.
+          expect(narrow).toContain("main");
+          expect(narrow).toContain("q quit");
+          // And the banner traded its box for its one-line form. The emulator
+          // is what makes that assertable: the box was on this terminal a
+          // moment ago, and against an accumulated buffer this would have
+          // matched the frame from before the resize.
+          expect(narrow).not.toContain("╭─ grove");
 
           expect(await ui.pressUntilExit("q", WAIT)).toBe(0);
           // Handed back exactly as it was found.
@@ -164,12 +179,13 @@ describeUi("the app", () => {
           await press(ui, keys.down, (frame) => selected(frame) === "feat/");
           await press(ui, keys.down, (frame) => selected(frame) === "login");
           // The row under the cursor is the dirty one, so its files are beside it.
-          expect(lastPaint(ui.frame())).toContain("uncommitted in feat/login");
-          expect(lastPaint(ui.frame())).toContain("scratch.txt");
+          expect(ui.frame()).toContain("uncommitted in feat/login");
+          expect(ui.frame()).toContain("scratch.txt");
 
           await press(ui, "j", (frame) => selected(frame) === "signup");
           // ...and a clean row has nothing to say there.
-          expect(lastPaint(ui.frame())).not.toContain("uncommitted in");
+          expect(ui.frame()).not.toContain("uncommitted in");
+          expect(ui.frame()).not.toContain("scratch.txt");
 
           await press(ui, "k", (frame) => selected(frame) === "login");
           await press(ui, keys.up, (frame) => selected(frame) === "feat/");
@@ -190,6 +206,45 @@ describeUi("the app", () => {
     SLOW,
   );
 
+  // The one assertion in the suite that is about a cell rather than about text:
+  // `StateCell` dims on the worktree's own state rather than on where the
+  // cursor is, and a screen scraped back to plain text says nothing either way.
+  // It was checked by eye in a PTY until the emulator made it checkable.
+  test(
+    "the state dot colours on the row's own contents, not on the cursor",
+    async () => {
+      await withTempRepo(async (repo) => {
+        const root = await managed(repo);
+        const ui = await open(root);
+
+        try {
+          // The cursor is still on `main`, which makes `login` the row worth
+          // asking about: dirty, and nobody pointing at it. Every other column
+          // on that row is dimmed for being unselected — the dot is not,
+          // because what it answers is about the worktree and not about the
+          // cursor, and a dimmed dot is exactly how it would stop reading from
+          // across the terminal.
+          const dirty = stateDot(ui, "login");
+          expect(dirty.chars).toBe("●");
+          expect(dirty.dim).toBe(false);
+          expect(dirty.color).toBe(YELLOW);
+
+          // Its clean neighbour, equally unselected, and the reason this test
+          // is worth anything: with chalk off every cell comes back undimmed
+          // and default-coloured, so "not dimmed" alone would pass against a
+          // screen with no colour in it at all.
+          const clean = stateDot(ui, "signup");
+          expect(clean.chars).toBe("○");
+          expect(clean.dim).toBe(true);
+          expect(clean.color).toBeUndefined();
+        } finally {
+          ui.kill();
+        }
+      });
+    },
+    SLOW,
+  );
+
   test(
     "L takes the commit panel away and brings it back, and esc quits",
     async () => {
@@ -200,7 +255,7 @@ describeUi("the app", () => {
         try {
           // `open` already pressed R, so the refresh has been through the list
           // once and the panel below it belongs to the row under the cursor.
-          expect(lastPaint(ui.frame())).toContain("commits in main");
+          expect(ui.frame()).toContain("commits in main");
 
           await press(ui, "L", (frame) => !frame.includes("commits in"));
           await press(ui, "L", (frame) => frame.includes("commits in main"));
@@ -241,10 +296,18 @@ describeUi("the app", () => {
           await press(ui, "r", asked);
           await press(ui, "y", (frame) => frame.includes("removed feat/login"));
           expect(await pathExists(worktree)).toBe(false);
-          // Gone from the list too — the message line still names it, which is
-          // why this asks about rows rather than about the frame.
-          const rows = lastPaint(ui.frame()).split("\n");
-          expect(rows.some((line) => /^\s*▸?\s*login\b/.test(line))).toBe(false);
+
+          // Gone from the list too, but on the list's own schedule: the message
+          // is painted the moment the command returns and the rows are re-read
+          // a repaint or two later, so reading them out of the frame the
+          // message arrived in is a coin flip — and was one long before the
+          // screen was emulated. It asks about rows rather than about the frame
+          // because that message line names `feat/login` as well.
+          const listed = (frame: string) =>
+            frame.split("\n").some((line) => /^\s*▸?\s*login\b/.test(line));
+          const after = await ui.waitForFrame((frame) => !listed(frame), WAIT);
+          // ...and the message outlives the re-read that removed the row.
+          expect(after).toContain("removed feat/login");
         } finally {
           ui.kill();
         }
@@ -265,7 +328,7 @@ describeUi("the app", () => {
 
           await press(ui, "topic", (frame) => frame.includes("topic"));
           await press(ui, keys.backspace, (frame) => !frame.includes("topic"));
-          expect(lastPaint(ui.frame())).toContain("topi");
+          expect(ui.frame()).toContain("topi");
 
           // Nothing was made: the prompt is a question, and esc is a no.
           await press(ui, keys.esc, (frame) => !frame.includes("new branch"));
