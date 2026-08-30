@@ -68,6 +68,19 @@ export const GIT_FILE_CONTENTS = `gitdir: ./${BARE_DIR}\n`;
 const RESERVED = new Set(["", ".", "..", BARE_DIR, ".git"]);
 
 /**
+ * Segments naming a place rather than a thing, dropped instead of refused.
+ *
+ * None of them can occur in a branch name: git rejects a ref containing `..` or
+ * `~`, and forbids a component that begins with `.`. They arrive only from
+ * something built to walk out of the repository, and dropping them is what
+ * lands `a/../../b` at `a/b` rather than two directories above the root.
+ *
+ * Every *other* segment that slugs away to nothing is refused instead, and the
+ * difference is the whole point of the set existing — see `worktreeRelPath`.
+ */
+const TRAVERSAL = new Set(["", ".", "..", "~"]);
+
+/**
  * One path segment, made safe to put on a filesystem.
  *
  * Case is preserved deliberately. Lowercasing would map `Feat` and `feat` onto
@@ -98,13 +111,22 @@ export function slugifySegment(segment: string): string {
  * Note this makes `feat` and `feat/test` mutually exclusive as branches, since
  * one would have to be both a directory and a worktree. git already forbids
  * exactly that pair as a ref D/F conflict, so the filesystem agrees with it.
+ *
+ * A segment is dropped only when it named a place to begin with. A segment that
+ * had something in it and slugged away to nothing is refused, because dropping
+ * it would move the worktree up a level rather than reject the name: `feat/@@@`
+ * would land on `feat/` itself — the grouping directory every `feat/*` worktree
+ * lives in — and a worktree sitting there makes `refuseNesting` turn down every
+ * one of them from then on. The branch name is unusable either way; the
+ * difference is whether the repository says so or quietly absorbs it.
  */
 export function worktreeRelPath(branch: string): string {
   const segments = branch
     .split("/")
-    .map(slugifySegment)
-    .filter((s) => s.length > 0);
+    .filter((segment) => !TRAVERSAL.has(segment))
+    .map(slugifySegment);
 
+  // `RESERVED` holds the empty string, so an emptied slug lands here too.
   if (segments.length === 0 || segments.some((s) => RESERVED.has(s))) {
     throw new GroveError(
       "usage",

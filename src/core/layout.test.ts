@@ -116,6 +116,26 @@ describe("worktreeRelPath", () => {
       expect(error.message).toContain(JSON.stringify(branch));
     }
   });
+
+  /**
+   * The half of that rule that is easy to get wrong, because the wrong answer
+   * is a path rather than a crash.
+   *
+   * Every one of these is a branch git accepts, whose last segment carries
+   * nothing the filesystem can keep. Dropping the empty segment would return
+   * the grouping directory — `feat` — and `add` would then put a worktree on
+   * top of the folder its siblings live in, after which `refuseNesting` turns
+   * down every `feat/*` there will ever be. Nothing would report a fault: the
+   * command prints `✓ added feat` and means it.
+   */
+  test("refuses a segment that slugged away, rather than shortening the path", () => {
+    for (const branch of ["feat/@@@", "feat/日本語", "feat/---", "feat/++", "feat/%%", "feat/ "]) {
+      const error = usageErrorFrom(() => worktreeRelPath(branch));
+
+      expect(error.code).toBe("usage");
+      expect(error.message).toContain(JSON.stringify(branch));
+    }
+  });
 });
 
 describe("repoPaths", () => {
