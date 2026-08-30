@@ -5,7 +5,7 @@ import { runCommand } from "./cli/run.ts";
 import { isGroveError } from "./core/errors.ts";
 import { killRunningGit, traceGit } from "./core/git.ts";
 import { createInkReporter } from "./report/ink-reporter.tsx";
-import { createPlainReporter } from "./report/reporter.ts";
+import { createPlainReporter, type Reporter } from "./report/reporter.ts";
 import { runApp } from "./ui/app/run.tsx";
 
 const command = parseCliArgs(Bun.argv.slice(2));
@@ -65,11 +65,44 @@ if (command.kind === "app") {
   }
 }
 
+/**
+ * Whether Ctrl-C has been pressed, which decides three things below.
+ *
+ * The commands clean up after themselves on the way out — `cloneRepo` deletes a
+ * partial `.bare`, because discovery would otherwise find it and every later
+ * command would trip over a repository that is half a repository. That cleanup
+ * is a `catch`, and a `catch` only runs if the throw is allowed to travel. The
+ * handler used to call `process.exit` the moment `reporter.close()` settled,
+ * which for the plain reporter is a microtask — so the rollback was dead code
+ * on the one path that needed it, and what stood in for it was `git` happening
+ * to remove its own junk. That cover ends the instant the bare clone returns.
+ */
+let interrupted = false;
+
 // Drawn unless told otherwise, and no TTY guard either way: piped and scripted
 // are ordinary ways to run this, Ink writes its frame once when nothing is
 // watching, and `--headless` is the one switch for anyone who wants plain lines
 // regardless. Both reporters draw on stderr, so neither can disturb a result.
-const reporter = command.global.headless ? createPlainReporter() : createInkReporter();
+const drawn = command.global.headless ? createPlainReporter() : createInkReporter();
+
+/**
+ * The same reporter, with stdout shut off once Ctrl-C has been pressed.
+ *
+ * Letting the command unwind is what makes the rollbacks run, and it also means
+ * a command can reach its result on the way out: interrupt `add` while its
+ * `grove.setup` is installing and the worktree is genuinely there, so `add`
+ * genuinely has a path to report. Printing it would still be wrong. stdout is
+ * the data channel — the whole reporter interface exists to keep it that way —
+ * and a pipeline reading a path from a command that exited 130 would act on a
+ * result the person cancelled. The exit code says nothing to rely on came of
+ * this, and stdout has to say the same thing.
+ */
+const reporter: Reporter = {
+  ...drawn,
+  out: (text) => {
+    if (!interrupted) drawn.out(text);
+  },
+};
 
 // Progress, not results: `--verbose` must not put anything on stdout, or it
 // would break every pipeline it was turned on to debug.
@@ -78,8 +111,16 @@ if (command.global.verbose) traceGit((line) => reporter.info(line));
 // A half-finished `git clone` is worse than none, so stop the child rather than
 // letting it race the exit. 130 is the conventional 128 + SIGINT.
 process.on("SIGINT", () => {
+  // A second Ctrl-C means the unwind is taking longer than the person is
+  // willing to wait, and the answer to that is always to go. Whatever is left
+  // on disk at this point is what they chose over waiting.
+  if (interrupted) process.exit(ExitCode.interrupted);
+
+  // The first one stops the work and nothing else. Killing the child makes the
+  // git call reject, the rejection unwinds through the command's own `catch`,
+  // and the exit happens below once there is nothing half-made left behind.
+  interrupted = true;
   killRunningGit();
-  void reporter.close().finally(() => process.exit(ExitCode.interrupted));
 });
 
 try {
@@ -89,8 +130,17 @@ try {
     reporter,
   });
   await reporter.close();
-  process.exit(ExitCode.ok);
+
+  // Interrupted, but it finished anyway — the signal landed on the last step,
+  // or on one that had nothing left to stop. The work is done and correct, so
+  // the only honest thing left to report is that it was interrupted.
+  process.exit(interrupted ? ExitCode.interrupted : ExitCode.ok);
 } catch (error) {
   await reporter.close();
+
+  // The interrupt is the cause, so it is what the shell hears. Reporting the
+  // git error underneath would tell a script the remote had failed, when what
+  // actually happened is that somebody pressed Ctrl-C.
+  if (interrupted) process.exit(ExitCode.interrupted);
   fail(error);
 }
