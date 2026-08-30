@@ -4,6 +4,20 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.3.8 — 2026-08-30
+
+- `grove pr 42` gives a pull request a worktree of its own at `pr/42`, on a real local branch, so reviewing somebody's change becomes running it rather than reading it — and a plain `git push` from there goes back to the pull request's own branch, fork or not. `p` in the app picks from what is open, since the number is the one part you cannot supply without leaving to look it up
+- `grove prune` clears away the worktrees that are finished with — the branch the trunk already has, or the one the remote no longer does — and reports rather than touches anything holding uncommitted work, stopped mid-rebase, locked, or containing the directory you are standing in. The list badges those rows `merged` and `gone`, so `r` clears the one under the cursor
+- `grove rename feat/logn feat/login` moves the branch and its directory together, so the directory goes on being the branch's name, and clears up the folders the old name left empty behind it
+- `grove add feat/login --take` carries the changes you should have branched first into the new worktree and leaves the one you were standing in clean. Nothing goes near `refs/stash`, which every worktree in a repository shares
+- `.grove.toml` takes a `[teardown]` section: whatever `[setup]` started is stopped inside the worktree before `remove` deletes it. A command that fails there is reported loudly and the worktree still goes; `grove remove --no-teardown` skips the section outright
+- `grove doctor` confirms the repository states that otherwise arrive as a bug report about somewhere else — a bare clone with no fetch refspec, an `origin/HEAD` that resolves to nothing, worktrees git still lists that are gone from disk — and prints the fix rather than applying it
+- The name `a` asks for can be edited: `←`/`→` walk a caret through it, so a typo three characters back no longer costs every character after it, and a pasted branch name now arrives whole instead of submitting an empty prompt
+- Ctrl-C stops the work and nothing else — the git child is killed, the command unwinds through its own cleanup, and a second Ctrl-C exits at once — so an interrupted `clone` no longer leaves a half-made `.bare` that every later command trips over, and a `[setup]` command's whole process tree goes with the screen instead of outliving it
+- `sync` no longer says `rebased` when the push was refused, nor rebases onto a trunk whose fetch failed; `remove` refuses a worktree stopped part-way through a rebase, and `--force` does not override that, because half-applied commits are not what "discard my changes" means
+- `.grove.toml`'s `copy` refuses a symlink pointing out of the worktree, including one buried inside a copied directory, so a committed `certs -> ~/.ssh` no longer hands over the real key
+- Smaller: `prune --delete-branch` drops the `pr-<n>` remote along with the branch, a conflicted sync is coloured as one rather than as a success, a row's age is measured against the clock the columns were sized with, and a checkout with CRLF line endings no longer empties the banner's "What's new"
+
 ## 0.3.7 — 2026-08-29
 
 - The app's keys are back to the three things worktree management is made of: `a` adds, `r` removes — one worktree or a folder's worth — and `s`/`S` sync, with `R` and `q` beside them. The filter prompt and the raw git behind its `!`, `p`'s pull request and `x`'s discard are gone; `grove reset`, `grove path`, `grove cd` and `git` itself still do all of it a command away
