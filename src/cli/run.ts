@@ -7,6 +7,7 @@ import {
   formatDiagnosis,
 } from "../core/commands/doctor.ts";
 import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/list.ts";
+import { openWorktree } from "../core/commands/open.ts";
 import { worktreePath } from "../core/commands/path.ts";
 import { checkoutPullRequest } from "../core/commands/pr.ts";
 import { describePrune, formatPruneTable, pruneWorktrees } from "../core/commands/prune.ts";
@@ -128,6 +129,15 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       // is shorter: this one exists to be handed to `cd`, and a relative path
       // is only right from the directory it was relative to.
       report(result, () => reporter.out(result.path));
+      return;
+    }
+
+    case "open": {
+      const { name, ...options } = command;
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await openWorktree(repo, cwd, { ...options, open: canOpen }, reporter);
+
+      report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.opened ?? ""}`));
       return;
     }
 

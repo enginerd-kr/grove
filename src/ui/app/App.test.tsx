@@ -8,6 +8,7 @@ import { LineStore } from "../../report/lines.ts";
 import { keys, nextFrame, plain, waitFor } from "../test-utils.ts";
 import { theme } from "../theme.ts";
 import { App, describePending, pathOf } from "./App.tsx";
+import { commandsFor } from "./Menu.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, type TreeRow } from "./tree.ts";
 
@@ -99,6 +100,7 @@ type Calls = {
   readonly discarded: string[];
   readonly checkedOut: number[];
   readonly synced: (string | undefined)[];
+  readonly opened: string[];
   readonly trusted: string[];
 };
 
@@ -116,6 +118,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     discarded: [],
     checkedOut: [],
     synced: [],
+    opened: [],
     trusted: [],
   };
 
@@ -159,6 +162,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       reset: async (target) => {
         calls.discarded.push(target);
         return `discarded 2 changes in ${target}`;
+      },
+      open: async (target) => {
+        calls.opened.push(target);
+        return `opened ${target} with code .`;
       },
       // Nothing open by default: the popup is the thing being tested when it is
       // being tested, and everywhere else `p` should be a message line.
@@ -286,7 +293,7 @@ async function toLogin(ui: Driven & { lastFrame: () => string | undefined }) {
  *
  * The wait after the name is on the count rather than on the row: every row
  * this could type is already on screen when the menu opens, so `/refresh` is
- * true of the frame before a single character of it has been read. `1 of 4`
+ * true of the frame before a single character of it has been read. `1 of N`
  * only appears once the query has narrowed the list, which is the thing that
  * has to have happened before `enter` is aimed at anything.
  */
@@ -294,13 +301,23 @@ async function run(ui: Driven & { readonly lastFrame: () => string | undefined }
   ui.stdin.write("/");
   await settled(ui, (frame) => frame.includes("/sync-all"));
   ui.stdin.write(name);
-  await settled(ui, (frame) => frame.includes("1 of 4"));
+  await settled(ui, (frame) => frame.includes(`1 of ${MENU_TOTAL}`));
   ui.stdin.write(keys.enter);
   // One key per frame, the way `press` does it: without this the enter that
   // runs the command and whatever the caller sends next arrive together, and
   // the second is dropped by the `busy` the first one opened.
   await nextFrame();
 }
+
+/**
+ * How many commands the menu holds, read off the menu rather than counted here.
+ *
+ * The narrowing waits below are on `1 of N`, which is the one thing on the
+ * popup that says a query has been read — so `N` has to be right, and a command
+ * added to `Menu.tsx` would otherwise fail every one of these tests with a
+ * timeout rather than with anything about a menu.
+ */
+const MENU_TOTAL = commandsFor(false).length;
 
 /** `q quit` is on the key bar in `list` and in no other mode — see `MODE_HINTS`. */
 const IN_LIST = (frame: string) => frame.includes("q quit");
@@ -930,6 +947,26 @@ describe("the keys", () => {
     expect(calls.synced).toEqual(["/repo/feat/login", undefined]);
   });
 
+  test("`/open` opens the row under the cursor, and does nothing on a folder", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "open");
+    await settled(ui, (frame) => IN_LIST(frame) && frame.includes("opened"));
+
+    expect(calls.opened).toEqual(["/repo/feat/login"]);
+
+    // The one command behind the slash that is aimed at a row, so it is also
+    // the only one that can be aimed at something that is not one.
+    ui.stdin.write(keys.up);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+    await run(ui, "open");
+    await settled(ui, IN_LIST);
+
+    expect(calls.opened).toEqual(["/repo/feat/login"]);
+  });
+
   test("`s` on a folder does nothing, because a folder is not a worktree", async () => {
     const { service, calls } = stub();
     const ui = await opened_with(service);
@@ -1192,8 +1229,10 @@ describe("the keys", () => {
     ui.stdin.write("/");
     const frame = await settled(ui, (each) => each.includes("/sync-all"));
 
-    for (const name of ["/sync-all", "/review", "/refresh", "/log"]) {
-      expect(frame).toContain(name);
+    // Read off the menu: a command added there and drawn nowhere is exactly
+    // what this test is for, and a hardcoded list would not notice one.
+    for (const command of commandsFor(false)) {
+      expect(frame).toContain(`/${command.name}`);
     }
     // And the popup's own keys, in place of the list's.
     expect(frame).toContain("enter run");
@@ -1207,21 +1246,21 @@ describe("the keys", () => {
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
 
-    // `re` is in two of the four names, which is what makes this a filter
-    // rather than a lookup.
+    // `re` is in two of the names, which is what makes this a filter rather
+    // than a lookup.
     await press(ui, "re");
-    let frame = await settled(ui, (each) => each.includes("2 of 4"));
+    let frame = await settled(ui, (each) => each.includes(`2 of ${MENU_TOTAL}`));
     expect(frame).toContain("/review");
     expect(frame).toContain("/refresh");
     expect(frame).not.toContain("/sync-all");
 
     await press(ui, "v");
-    frame = await settled(ui, (each) => each.includes("1 of 4"));
+    frame = await settled(ui, (each) => each.includes(`1 of ${MENU_TOTAL}`));
     expect(frame).toContain("/review");
     expect(frame).not.toContain("/refresh");
 
     ui.stdin.write(keys.backspace);
-    frame = await settled(ui, (each) => each.includes("2 of 4"));
+    frame = await settled(ui, (each) => each.includes(`2 of ${MENU_TOTAL}`));
     expect(frame).toContain("/refresh");
   });
 
@@ -1255,7 +1294,7 @@ describe("the keys", () => {
     // `s` is in `sync-all` and in `refresh`, which is the whole of what a
     // filter over four short names can narrow to.
     await press(ui, "s");
-    await settled(ui, (frame) => frame.includes("2 of 4"));
+    await settled(ui, (frame) => frame.includes(`2 of ${MENU_TOTAL}`));
 
     await press(ui, keys.backspace);
     ui.stdin.write(keys.backspace);

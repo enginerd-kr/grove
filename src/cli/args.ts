@@ -75,6 +75,12 @@ export type GroveCommand =
       readonly force: boolean;
     }
   | { readonly name: "path"; readonly target?: string }
+  | {
+      readonly name: "open";
+      /** Absent means the worktree the shell is standing in. */
+      readonly target?: string;
+      readonly trust: boolean;
+    }
   | { readonly name: "shell-init"; readonly shell: Shell }
   | {
       readonly name: "completion";
@@ -264,6 +270,8 @@ function buildCommand(
     }
     case "path":
       return { name: "path", target: first };
+    case "open":
+      return { name: "open", target: first, trust: bool(values, "trust") };
     case "shell-init": {
       if (first === undefined) {
         return usageError(spec, `${spec.name} needs a shell: ${SHELLS.join(", ")}`);

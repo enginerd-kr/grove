@@ -903,8 +903,9 @@ export function App({
   /**
    * What a slash command does, which is exactly what its old key did.
    *
-   * Nothing new is reachable here: `/` moved four commands off the key bar and
-   * changed how they are spelled, not what they run. The menu closes first in
+   * `/open` is the one thing here that was never a key, and the one aimed at
+   * the row rather than at the repository — see `Menu.tsx` for why it is behind
+   * the slash anyway. The menu closes first in
    * every branch — `perform` and `openPrs` each put the screen into `busy` and
    * take it back to `list`, and a popup still up underneath that would be a
    * menu waiting for a key nobody can press.
@@ -914,6 +915,12 @@ export function App({
       setMode({ kind: "list" });
 
       switch (name) {
+        // The one command here aimed at the row under the cursor, which is why
+        // it is the only one that can find nothing to act on: a folder is not a
+        // worktree, and there is nothing to open about one.
+        case "open":
+          if (!selected) return;
+          return void perform(`opening ${selected.dir}`, () => service.open(selected.path));
         case "sync-all":
           return void perform("syncing every worktree", () => service.sync());
         case "review":
@@ -926,7 +933,7 @@ export function App({
           return setLogOn((on) => !on);
       }
     },
-    [perform, openPrs, service],
+    [perform, openPrs, selected, service],
   );
 
   useInput((input, key) => {

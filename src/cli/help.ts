@@ -166,6 +166,28 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     flags: [],
   },
   {
+    name: "open",
+    aliases: [],
+    args: "[target]",
+    summary: "open a worktree with what .grove.toml says to open it with",
+    description: [
+      "Runs the `open` line from [setup] in an existing worktree. `add` runs it",
+      "once, when the worktree is made; this is the same line on any day after",
+      "— the worktree is still there next week and the editor window is not.",
+      "",
+      "No [target] is the worktree you are standing in, which is where this is",
+      "usually reached for. It waits for the same --trust the commands do, and",
+      "a platform the file wrote no line for opens nothing.",
+    ],
+    flags: [
+      {
+        name: "trust",
+        type: "boolean",
+        summary: "run .grove.toml's open line, recording that you have read it",
+      },
+    ],
+  },
+  {
     name: "install",
     aliases: [],
     args: "[shell]",

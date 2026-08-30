@@ -3,6 +3,7 @@ import { cdCommand, copyToClipboard } from "../../core/clipboard.ts";
 import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
+import { openWorktree } from "../../core/commands/open.ts";
 import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
@@ -115,6 +116,20 @@ export type WorktreeService = {
    * key.
    */
   readonly reset: (target: string) => Promise<string>;
+  /**
+   * Opens a worktree with what `.grove.toml`'s `open` says opens it.
+   *
+   * `a` runs that line once, on the day the worktree is made. This is the same
+   * line on every day after, which is when you actually want it — the worktree
+   * is still there and the window is not.
+   *
+   * Not trusted by pressing it, unlike the setup commands `a` asks about. The
+   * question `a` asks covers this line too — `pendingCommands` lists it with
+   * the rest — so a file that has been agreed to opens from here, and one that
+   * has not says so rather than being agreed to by a command whose subject is
+   * an editor.
+   */
+  readonly open: (target: string) => Promise<string>;
   /**
    * The open pull requests, for the popup to pick one from.
    *
@@ -348,6 +363,15 @@ export function createWorktreeService(
       const tracked = result.changed - result.untracked;
 
       return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
+    },
+
+    open: async (target) => {
+      const result = await openWorktree(repo, cwd, { target, trust: false, open: true }, reporter);
+
+      if (result.untrusted) return `${result.dir} has an open line nobody has read here`;
+      if (result.opened === undefined) return `nothing opens ${result.dir} on this machine`;
+
+      return `opened ${result.dir} with ${result.opened}`;
     },
 
     pullRequests: () => listPullRequests(repo),

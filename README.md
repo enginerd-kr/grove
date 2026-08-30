@@ -51,6 +51,7 @@ grove rename <target> <new> # Rename a branch and move its worktree directory to
 grove reset <target>        # Discard all uncommitted changes in a worktree
 grove remove <target>       # Delete a worktree directory safely
 grove path [target]         # Print the absolute path of a selected worktree
+grove open [target]         # Open a worktree with what `.grove.toml`'s `open` says
 grove cd [target]           # Change directory to a worktree (requires shell integration)
 grove doctor                # Check the repository for the traps that break a later command
 grove completion <shell>    # Print the tab-completion script (`grove install` writes it for you)
@@ -71,6 +72,7 @@ Running `grove` with no arguments opens the screen above.
 - **Copy**: `Enter` puts the selected path on the clipboard, ready for another tab or an editor.
 - **Look**: the selected worktree's last few commits are drawn under the list, and its uncommitted files beside it, as the tree they sit in.
 - **More**: `/` opens everything that has no key of its own — type to narrow it, `Enter` to run it.
+  - `/open` opens the row under the cursor with what `.grove.toml`'s `open` says — the same line `a` ran when the worktree was made, on any day after.
   - `/sync-all` syncs every worktree, not just the one under the cursor.
   - `/review` lists the repository's open pull requests and checks the one you pick out at `pr/<number>`. Needs [`gh`](https://cli.github.com), the only tool besides git that `grove` ever runs.
   - `/refresh` re-reads the list now; `/log` puts the commit panel away when the list wants the rows.
@@ -116,6 +118,7 @@ run = ["docker compose down"]  # Shell commands run inside the worktree just bef
 
 - **`copy` and `link` run straight away**; `run` and `open` come from repository code a pull request could edit, so the CLI prints and skips them until you pass `--trust`. The UI runs them, since pressing `a` is consent.
 - **`open` is started and let go** — not waited for, and it outlives the shell you typed `grove add` into. It is skipped when there is no terminal to open into (`grove add | tee`, CI), and when a `run` command failed.
+- **`open` is not only for the day the worktree is made**: `grove open [target]` runs the same line again, and no target means the worktree you are standing in. `/open` in the app does it for the row under the cursor.
 - **`open` can be written per platform**, since one line rarely works everywhere. A platform the table leaves out opens nothing:
 
   ```toml

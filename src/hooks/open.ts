@@ -1,8 +1,19 @@
+import { GroveError } from "../core/errors.ts";
 import { openShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import type { Reporter } from "../report/reporter.ts";
 import { commandEnvFor, type HookFailure, type HookTarget } from "./command.ts";
-import { configuredFiles, type Hooks, openHere, openTargetFor, wantsOpen } from "./config.ts";
+import {
+  configuredFiles,
+  governingFiles,
+  type Hooks,
+  openGatedHere,
+  openHere,
+  openTargetFor,
+  repoHooks,
+  wantsOpen,
+} from "./config.ts";
+import { isTrusted, trust } from "./trust.ts";
 
 /**
  * `open` — the hook whose subject is a person rather than a worktree.
@@ -132,4 +143,74 @@ export async function openWhatItAsksFor(
   }
 
   return command;
+}
+
+export type OpenNowResult = {
+  /** The command that was started, if one was. See `SetupResult.opened`. */
+  readonly opened?: string;
+  /** The line is from a file git tracks, and this machine has not read it. */
+  readonly untrusted: boolean;
+};
+
+/**
+ * The same hook, asked for on its own — what `grove open` runs.
+ *
+ * `[setup]` opens a worktree once, at the end of the run that made it, and that
+ * covers the day it is created and no day after. The worktree is still there
+ * tomorrow; the editor is not. So the one key in the file whose subject is a
+ * person is the one worth being able to ask for again, and this is where that
+ * ask lands.
+ *
+ * Everything the hook refuses for it still refuses for, save one: there are no
+ * `run` commands here to have failed, because nothing is being set up. What is
+ * left is trust, a platform the file wrote no line for, and a terminal to open
+ * into — and the file that opens nothing at all, which is a mistake when it is
+ * what you asked for and merely quiet when it is the tail of an `add`.
+ */
+export async function openNow(
+  repo: RepoPaths,
+  target: HookTarget,
+  reporter: Reporter,
+  options: { readonly trust: boolean; readonly allowed: boolean },
+): Promise<OpenNowResult> {
+  const hooks = await repoHooks(repo, target.path);
+
+  if (!wantsOpen(hooks.open)) {
+    // Raised rather than reported, because this is the whole of what was asked
+    // for. `add` says the same thing as an aside and carries on, having made
+    // the worktree it was actually asked for.
+    throw new GroveError("usage", `nothing in ${configuredFiles(hooks).join(" or ")} opens`, {
+      hint: 'add an `open` line to [setup]: open = "code ."',
+    });
+  }
+
+  // Recorded before the line is read back, exactly as `trustAndRun` does it, so
+  // one answer covers the file's commands and its editor together.
+  if (options.trust && hooks.fingerprint !== undefined) {
+    await trust(repo.gitDir, hooks.fingerprint);
+  }
+
+  const untrusted =
+    openGatedHere(hooks) &&
+    hooks.fingerprint !== undefined &&
+    !(await isTrusted(repo.gitDir, hooks.fingerprint));
+
+  if (untrusted) {
+    reporter.warn(
+      `the open line in ${governingFiles(hooks, repo.root).join(" and ")} has not been ` +
+        "trusted here — read it, then open with --trust",
+    );
+
+    return { untrusted };
+  }
+
+  const opened = await openWhatItAsksFor(
+    repo,
+    target,
+    hooks,
+    { untrusted, allowed: options.allowed },
+    reporter,
+  );
+
+  return { opened, untrusted };
 }

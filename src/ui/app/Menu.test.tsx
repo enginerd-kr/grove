@@ -93,10 +93,14 @@ describe("Menu", () => {
   });
 
   // Only once the query has narrowed the list: a count beside the whole menu
-  // would be saying `4 of 4`, which is the popup counting itself.
+  // would be saying `5 of 5`, which is the popup counting itself.
   test("the count appears only when the query has left something out", () => {
-    expect(draw()).not.toContain("of 4");
-    expect(draw({ commands: matching(COMMANDS, "sync"), query: "sync" })).toContain("1 of 4");
+    // The total is read off the menu rather than written here, so a command
+    // added to it fails this test with a count and not with a stale number.
+    expect(draw()).not.toContain(` of ${COMMANDS.length}`);
+    expect(draw({ commands: matching(COMMANDS, "sync"), query: "sync" })).toContain(
+      `1 of ${COMMANDS.length}`,
+    );
   });
 
   test("the marker is on the row the cursor is on, and on no other", () => {

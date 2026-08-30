@@ -225,6 +225,26 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     }
   },
 
+  open: async ({ root, run, attempt }) => {
+    // The root is in no worktree, so a run that names none has nothing to open
+    // — the refusal this command's own resolution raises, which is what this
+    // probe is here to show.
+    const nowhere = await attempt({ name: "open", target: undefined, trust: false });
+    expect(isGroveError(nowhere.error) && nowhere.error.message).toContain("not inside a worktree");
+
+    // And with a worktree named, the refusal comes from the hook instead.
+    const nothing = await attempt({ name: "open", target: "main", trust: false });
+    expect(isGroveError(nothing.error) && nothing.error.message).toContain("opens");
+
+    await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nopen = "true"\n');
+    const log = await run({ name: "open", target: "main", trust: true });
+
+    // Whether the line is actually started depends on there being a terminal,
+    // which `bun test` has when it is run in one and has not when CI runs it.
+    // Both answers are narrated, and either proves the hook was reached.
+    expect(log.err.join("")).toMatch(/opening true|did not open/);
+  },
+
   "shell-init": async ({ run }) => {
     const log = await run({ name: "shell-init", shell: "zsh" });
 

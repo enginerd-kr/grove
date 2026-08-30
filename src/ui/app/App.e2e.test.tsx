@@ -5,6 +5,7 @@ import { pathExists } from "../../core/fs.ts";
 import { type TempRepo, withTempRepo } from "../../core/test-utils.ts";
 import { type Cell, startUi, type UiSession } from "../e2e-utils.ts";
 import { keys } from "../test-utils.ts";
+import { commandsFor } from "./Menu.tsx";
 
 /**
  * The app, driven through a real pseudo-terminal.
@@ -106,6 +107,9 @@ const FIRST_READ = "reading worktrees";
  * one read has to have been through the list before the panels below it belong
  * to the row under the cursor.
  */
+/** How many commands the menu holds — read off the menu, not counted here. */
+const MENU_TOTAL = commandsFor(false).length;
+
 async function open(cwd: string, cols = 100, rows = 30): Promise<UiSession> {
   const ui = startUi({ cwd, cols, rows });
   await ui.waitForFrame((frame) => frame.includes("worktree") && !frame.includes(FIRST_READ), WAIT);
@@ -116,7 +120,7 @@ async function open(cwd: string, cols = 100, rows = 30): Promise<UiSession> {
   // Nothing here needs the barrier anyway, since neither frame this waits for
   // is on screen before its key is sent.
   ui.press("refresh");
-  await ui.waitForFrame((frame) => frame.includes("1 of 4"), WAIT);
+  await ui.waitForFrame((frame) => frame.includes(`1 of ${MENU_TOTAL}`), WAIT);
   ui.press(keys.enter);
   await ui.waitForFrame((frame) => frame.includes("refreshed"), WAIT);
 
@@ -136,7 +140,7 @@ async function runCommand(
   done: (frame: string) => boolean,
 ): Promise<void> {
   await press(ui, "/", (frame) => frame.includes("/sync-all"));
-  await press(ui, name, (frame) => frame.includes("1 of 4"));
+  await press(ui, name, (frame) => frame.includes(`1 of ${MENU_TOTAL}`));
   await press(ui, keys.enter, done);
 }
 
