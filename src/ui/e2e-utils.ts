@@ -227,8 +227,19 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
   };
 
   let exitCode: number | null = null;
-  const exited = proc.exited.then((code) => {
+  const exited = proc.exited.then(async (code) => {
     exitCode = code;
+    // A reaped child is not a finished screen. The emulator applies a write on a
+    // later tick, so the last thing the child said is routinely still queued
+    // when the process is reaped — and a frame read the moment this resolves is
+    // then a frame short. For a child that paints and stays that costs nothing,
+    // because every wait here goes through `settled()` before reading. For one
+    // that writes once and goes, which is exactly what `--headless` is, the
+    // whole of its output is that last write, and the frame is an empty grid.
+    // So the exit waits for the same quiet a frame does: `await exited` means
+    // what a reader takes it to mean, which is that the screen holds everything
+    // the child said before it went.
+    await drained();
     proc.terminal?.close();
     return code;
   });
@@ -253,6 +264,25 @@ export function startUi({ cols = 80, rows = 24, args = [], cwd }: StartOptions =
    */
   const settled = () =>
     heardSinceClear && pendingWrites === 0 && Date.now() - lastDataAt >= QUIET_MS;
+
+  /**
+   * The same quiet, waited for rather than asked about, and without the
+   * `heardSinceClear` half — this runs on the way out, where a child that said
+   * nothing since the last `clear()` is an ordinary way to end and not a screen
+   * still owed an answer.
+   *
+   * Capped, because a child that never goes quiet would otherwise hold `exited`
+   * open until the test's own timeout, which reports as a hang instead of as
+   * whatever actually broke.
+   */
+  const drained = async (timeoutMs = 2000) => {
+    const deadline = Date.now() + timeoutMs;
+
+    while (pendingWrites > 0 || Date.now() - lastDataAt < QUIET_MS) {
+      if (Date.now() >= deadline) return;
+      await sleep(10);
+    }
+  };
 
   const waitForFrame = async (predicate: (frame: string) => boolean, timeoutMs = 5000) => {
     const deadline = Date.now() + timeoutMs;
