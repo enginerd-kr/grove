@@ -62,13 +62,16 @@ Two flags worth knowing:
 Running `grove` with no arguments opens the screen above.
 
 - **Move**: `↑`/`↓` or `j`/`k`, `←`/`→` or `h`/`l` to fold a directory, `q` to quit.
-- **Act**: `a` adds, `r` removes — a folder takes everything under it — `s` syncs, `S` syncs all, `R` re-reads the list. Removals confirm, and say what they would discard.
+- **Act**: `a` adds, `r` removes — a folder takes everything under it — and `s` syncs the row under the cursor. Removals confirm, and say what they would discard.
 - **Discard**: `x` throws away what a dirty worktree has changed — `reset --hard` and `clean -fd`, so untracked files go too — leaving the directory and the branch. It is offered only where there is something to take, it counts the tracked changes and the untracked files apart before you answer, and there is no undo.
 - **Copy**: `Enter` puts the selected path on the clipboard, ready for another tab or an editor.
-- **Look**: the selected worktree's last few commits are drawn under the list (`L` puts the panel away), and its uncommitted files beside it, as the tree they sit in.
-- **Review**: `p` lists the repository's open pull requests and checks the one you pick out at `pr/<number>`. Needs [`gh`](https://cli.github.com), the only tool besides git that `grove` ever runs.
+- **Look**: the selected worktree's last few commits are drawn under the list, and its uncommitted files beside it, as the tree they sit in.
+- **More**: `/` opens everything that has no key of its own — type to narrow it, `Enter` to run it.
+  - `/sync-all` syncs every worktree, not just the one under the cursor.
+  - `/review` lists the repository's open pull requests and checks the one you pick out at `pr/<number>`. Needs [`gh`](https://cli.github.com), the only tool besides git that `grove` ever runs.
+  - `/refresh` re-reads the list now; `/log` puts the commit panel away when the list wants the rows.
 
-The keys stay few on purpose. Everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out.
+The keys stay few on purpose: the bar holds what acts on the row under the cursor, `/` holds the rest, and everything else git can do is a `grove` subcommand or a `git` command away, where it has to be typed out.
 
 ## Directory layout
 

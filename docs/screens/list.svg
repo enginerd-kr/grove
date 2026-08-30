@@ -114,16 +114,10 @@
 <text x="261.6" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> add · </text>
 <text x="320.4" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">r</text>
 <text x="328.8" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> remove · </text>
-<text x="412.8" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">p</text>
-<text x="421.2" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> review · </text>
-<text x="505.2" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">s</text>
-<text x="513.6" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync · </text>
-<text x="580.8" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">S</text>
-<text x="589.2" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync all · </text>
-<text x="690.0" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">R</text>
-<text x="698.4" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> refresh · </text>
-<text x="790.8" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">L</text>
-<text x="799.2" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> hide log · </text>
-<text x="900.0" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">q</text>
-<text x="908.4" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> quit</text>
+<text x="412.8" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">s</text>
+<text x="421.2" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync · </text>
+<text x="488.4" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/</text>
+<text x="496.8" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> more · </text>
+<text x="564.0" y="685.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">q</text>
+<text x="572.4" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> quit</text>
 </svg>

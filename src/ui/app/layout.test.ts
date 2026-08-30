@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 import type { Line } from "../../report/lines.ts";
+import { statusBarRows } from "../components/StatusBar.tsx";
 import { columnWidths, GAP, hintsFor, type LayoutMode, regionsFor } from "./layout.ts";
 import type { Message } from "./message.ts";
 import { buildTree, type TreeRow } from "./tree.ts";
@@ -70,7 +71,7 @@ function input(overrides: Partial<Parameters<typeof regionsFor>[0]> = {}) {
   return {
     terminalRows: 30,
     columns: 100,
-    hints: hintsFor("list", TREE[0], true),
+    hints: hintsFor("list", TREE[0]),
     mode: { kind: "list" } as LayoutMode,
     message: undefined,
     lines: [] as readonly Line[],
@@ -101,6 +102,10 @@ describe("regionsFor", () => {
         { kind: "add" },
         { kind: "confirm" },
         { kind: "pick", prs: { length: 6 } },
+        { kind: "menu", matches: 4 },
+        // The query that matched nothing: the popup still draws a body row to
+        // say so, and the budget has to have counted it.
+        { kind: "menu", matches: 0 },
       ] as readonly LayoutMode[]) {
         for (const lines of [[], [line(1)], [line(1), line(2), line(3)]]) {
           for (const logOn of [true, false]) {
@@ -345,71 +350,97 @@ describe("hintsFor", () => {
     (row): row is Extract<TreeRow, { kind: "group" }> => row.kind === "group",
   );
   const leaf = TREE.find((row) => row.kind === "leaf");
+  const dirty = TREE.find((row) => row.kind === "leaf" && row.summary.dirty);
+  const clean = TREE.find((row) => row.kind === "leaf" && !row.summary.dirty);
+
+  if (dirty === undefined || clean === undefined) {
+    throw new Error("the fixture tree needs one dirty worktree and one clean one");
+  }
 
   test("a mode that takes the keyboard says only what it answers to", () => {
-    expect(hintsFor("add", leaf, true).map((hint) => hint.keys)).toEqual(["enter", "esc"]);
-    expect(hintsFor("busy", leaf, true).map((hint) => hint.keys)).toEqual(["ctrl+c"]);
-    expect(hintsFor("pick", leaf, true).map((hint) => hint.keys)).toEqual(["↑↓", "enter", "esc"]);
+    expect(hintsFor("add", leaf).map((hint) => hint.keys)).toEqual(["enter", "esc"]);
+    expect(hintsFor("busy", leaf).map((hint) => hint.keys)).toEqual(["ctrl+c"]);
+    expect(hintsFor("pick", leaf).map((hint) => hint.keys)).toEqual(["↑↓", "enter", "esc"]);
+    expect(hintsFor("menu", leaf).map((hint) => hint.keys)).toEqual(["↑↓", "enter", "esc"]);
     // Deliberately `n keep` though any key but `y` keeps: the bar is what to
     // press, not the whole truth table.
-    expect(hintsFor("confirm", leaf, true).map((hint) => hint.action)).toEqual(["remove", "keep"]);
+    expect(hintsFor("confirm", leaf).map((hint) => hint.action)).toEqual(["remove", "keep"]);
   });
 
   test("the confirmation spells `y` for the key that opened it", () => {
-    expect(hintsFor("confirm", leaf, true, "one").map((hint) => hint.action)).toEqual([
+    expect(hintsFor("confirm", leaf, "one").map((hint) => hint.action)).toEqual(["remove", "keep"]);
+    expect(hintsFor("confirm", leaf, "many").map((hint) => hint.action)).toEqual([
       "remove",
       "keep",
     ]);
-    expect(hintsFor("confirm", leaf, true, "many").map((hint) => hint.action)).toEqual([
-      "remove",
-      "keep",
-    ]);
-    expect(hintsFor("confirm", leaf, true, "reset").map((hint) => hint.action)).toEqual([
+    expect(hintsFor("confirm", leaf, "reset").map((hint) => hint.action)).toEqual([
       "discard",
       "keep",
     ]);
   });
 
   test("`x` is offered on a worktree with something to throw away, and nowhere else", () => {
-    const dirty = TREE.find((row) => row.kind === "leaf" && row.summary.dirty);
-    const clean = TREE.find((row) => row.kind === "leaf" && !row.summary.dirty);
-    if (dirty === undefined || clean === undefined) {
-      throw new Error("the fixture tree needs one dirty worktree and one clean one");
-    }
-
-    expect(hintsFor("list", dirty, true)).toContainEqual({ keys: "x", action: "discard" });
-    expect(hintsFor("list", clean, true).map((hint) => hint.keys)).not.toContain("x");
+    expect(hintsFor("list", dirty)).toContainEqual({ keys: "x", action: "discard" });
+    expect(hintsFor("list", clean).map((hint) => hint.keys)).not.toContain("x");
     // A folder is not a row `x` acts on: it discards one worktree's changes or
     // none at all.
-    expect(hintsFor("list", group, true).map((hint) => hint.keys)).not.toContain("x");
+    expect(hintsFor("list", group).map((hint) => hint.keys)).not.toContain("x");
   });
 
   test("a folder offers what a folder can do, and not `s`", () => {
     if (group === undefined) throw new Error("the fixture tree has no folder in it");
 
-    const keys = hintsFor("list", group, true).map((hint) => hint.keys);
+    const keys = hintsFor("list", group).map((hint) => hint.keys);
 
     expect(keys).toContain("←→");
     expect(keys).not.toContain("s");
-    expect(hintsFor("list", group, true)).toContainEqual({
+    expect(hintsFor("list", group)).toContainEqual({
       keys: "r",
       action: `remove all ${group.leaves.length}`,
     });
   });
 
   test("a worktree offers `s`, and no fold", () => {
-    const keys = hintsFor("list", leaf, true).map((hint) => hint.keys);
+    const keys = hintsFor("list", leaf).map((hint) => hint.keys);
 
     expect(keys).toContain("s");
     expect(keys).not.toContain("←→");
   });
 
   test("an empty tree takes the worktree list", () => {
-    expect(hintsFor("list", undefined, true)).toEqual(hintsFor("list", leaf, true));
+    expect(hintsFor("list", undefined)).toEqual(hintsFor("list", leaf));
   });
 
-  test("`L` says what it will do next, not what it did", () => {
-    expect(hintsFor("list", leaf, true)).toContainEqual({ keys: "L", action: "hide log" });
-    expect(hintsFor("list", leaf, false)).toContainEqual({ keys: "L", action: "show log" });
+  /**
+   * The bar is what stops growing, which is the whole point of `/`. These four
+   * had a key each and now have a row in the menu, and a key bar that kept
+   * advertising them would be advertising keys that no longer do anything.
+   */
+  test("the commands that moved to `/` are off the bar, and `/` is on it", () => {
+    const keys = hintsFor("list", leaf).map((hint) => hint.keys);
+
+    expect(keys).toContain("/");
+    for (const moved of ["p", "S", "R", "L"]) expect(keys).not.toContain(moved);
+  });
+
+  /**
+   * The bar packing onto a second line is legal — `statusBarRows` counts it and
+   * the layout hands the row over — but it is a row the list paid for, and
+   * moving four commands behind `/` was how it stopped being paid on an
+   * ordinary terminal.
+   *
+   * Worktree rows only, and two widths, because the bar is not one length. A
+   * clean row is the short one; `x discard` makes a dirty one longer; and a
+   * folder's is longer still and cannot be pinned at all, since `a add under
+   * feat/` spells out whatever the folder was named. So ninety is asserted
+   * over the rows the number can mean something for, and eighty over the clean
+   * one — which is almost every row of almost every repository.
+   */
+  test("a worktree's key bar is one line at ninety columns, dirty or clean", () => {
+    for (const row of TREE.filter((each) => each.kind === "leaf")) {
+      expect(statusBarRows(hintsFor("list", row), 90)).toBe(1);
+    }
+
+    expect(statusBarRows(hintsFor("list", clean), 80)).toBe(1);
   });
 });

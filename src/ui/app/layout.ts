@@ -7,6 +7,7 @@ import {
 import type { Line } from "../../report/lines.ts";
 import { type Hint, statusBarRows } from "../components/StatusBar.tsx";
 import { bannerRows } from "./Banner.tsx";
+import { menuRows } from "./Menu.tsx";
 import { type Message, messageRows } from "./message.ts";
 import { pullRequestRows } from "./PullRequests.tsx";
 import { leavesOf, type TreeRow } from "./tree.ts";
@@ -67,6 +68,17 @@ const LOG_MIN_ROWS = 2;
 const PR_ROWS = 8;
 
 /**
+ * The most commands the slash menu draws at once.
+ *
+ * Smaller than the pull-request popup's eight, because the two lists grow for
+ * different reasons: how many pull requests are open is the forge's business,
+ * while how many commands there are is ours. Past six the menu has stopped
+ * being a list you read and started being one you scroll, and the answer to
+ * that is fewer commands rather than a taller popup.
+ */
+const MENU_ROWS = 6;
+
+/**
  * The rows the list keeps whatever else wants them.
  *
  * The list is the thing being worked in. A screen that answers "what did that
@@ -102,7 +114,9 @@ export type LayoutMode =
   | { readonly kind: "busy" }
   | { readonly kind: "add" }
   | { readonly kind: "confirm" }
-  | { readonly kind: "pick"; readonly prs: { readonly length: number } };
+  | { readonly kind: "pick"; readonly prs: { readonly length: number } }
+  /** `matches` is what the query narrowed to, which is what the popup draws. */
+  | { readonly kind: "menu"; readonly matches: number };
 
 /** Which of them it is, which is all the key bar needs to know. */
 export type ModeKind = LayoutMode["kind"];
@@ -130,6 +144,13 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
     { keys: "enter", action: "check out" },
     { keys: "esc", action: "cancel" },
   ],
+  // No `type to narrow` hint: the prompt is on screen with a caret blinking in
+  // it, which says the same thing in the place you are already looking.
+  menu: [
+    { keys: "↑↓", action: "move" },
+    { keys: "enter", action: "run" },
+    { keys: "esc", action: "cancel" },
+  ],
 };
 
 /**
@@ -142,11 +163,16 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
  * `confirm` says `n keep` when in fact any key but `y` keeps. Joining the two
  * would make "which spelling to advertise" a field of the dispatcher, which is
  * presentation living in the wrong place.
+ *
+ * What it does *not* under-report is a whole command. Everything the list can
+ * do is either a key here or a row in `/`, and nothing is both — see
+ * `Menu.tsx` for where the line falls and why. That is also what stops this
+ * list growing: it is the keys aimed at the row under the cursor, and there
+ * are only so many things you can do to a worktree.
  */
 export function hintsFor(
   modeKind: ModeKind,
   current: TreeRow | undefined,
-  logOn: boolean,
   confirming?: ConfirmKind,
 ): readonly Hint[] {
   // What `y` does, said in the word the question used: a prompt that asks about
@@ -172,16 +198,18 @@ export function hintsFor(
     { keys: "enter", action: "copy path" },
     { keys: "a", action: group !== undefined ? `add under ${group.label}` : "add" },
     { keys: "r", action: group !== undefined ? `remove all ${group.leaves.length}` : "remove" },
-    // `x` only where it would do something. Offering it on a clean worktree
-    // would be a menu entry whose whole effect is to say "nothing to discard".
+    // `x` stays a key rather than moving behind `/` with the others: it acts on
+    // the row under the cursor, which is the whole of what the bar is for. And
+    // only where it would do something — offering it on a clean worktree would
+    // be an entry whose whole effect is to say "nothing to discard".
     ...(current?.kind === "leaf" && current.summary.dirty
       ? [{ keys: "x", action: "discard" }]
       : []),
-    { keys: "p", action: "review" },
     ...(group === undefined ? [{ keys: "s", action: "sync" }] : []),
-    { keys: "S", action: "sync all" },
-    { keys: "R", action: "refresh" },
-    { keys: "L", action: logOn ? "hide log" : "show log" },
+    // The one hint that is not a thing to do to the row under the cursor, and
+    // the reason the rest of this list can stay this short: everything aimed
+    // at the repository rather than at a row is behind it.
+    { keys: "/", action: "more" },
     { keys: "q", action: "quit" },
   ];
 }
@@ -192,6 +220,8 @@ export type Regions = {
   readonly detailRows: number;
   /** How many pull requests the popup may draw. */
   readonly prBody: number;
+  /** How many commands the slash menu may draw. */
+  readonly menuBody: number;
   /** Lines the activity area could not fit, said rather than silently dropped. */
   readonly clipped: number;
   readonly activity: readonly Line[];
@@ -249,23 +279,27 @@ export function regionsFor({
   // assumed, for the same reason as the banner.
   const footerRows = 1 + statusBarRows(hints, columns) + 1;
   /**
-   * How many pull requests the popup may draw, out of what is actually free.
+   * How many body rows a popup may draw, out of what is actually free.
    *
    * Budgeted like the log panel rather than like the `add` box: `add` reserves
-   * a flat three rows however long the branch name is, while this is as tall as
-   * the forge says — so it is capped at `PR_ROWS` and then capped again by the
-   * rows left once the header, the key bar and `MIN_LIST_ROWS` have taken
-   * theirs. At least one row either way: a popup you cannot see the cursor in
-   * is worse than a short one.
+   * a flat three rows however long the branch name is, while both popups are
+   * as tall as their contents — so each is capped at its own maximum and then
+   * capped again by the rows left once the header, the key bar and
+   * `MIN_LIST_ROWS` have taken theirs. At least one row either way: a popup you
+   * cannot see the cursor in is worse than a short one.
+   *
+   * One number behind both, because they are the same shape of thing in the
+   * same place, and two arithmetics for one hole is how they come to disagree
+   * about where the bottom of the screen is.
    */
-  const prBody = Math.max(
-    1,
-    Math.min(PR_ROWS, terminalRows - headerRows - footerRows - 3 - MIN_LIST_ROWS),
-  );
+  const popupBody = Math.max(1, terminalRows - headerRows - footerRows - 3 - MIN_LIST_ROWS);
+  const prBody = Math.min(PR_ROWS, popupBody);
+  const menuBody = Math.min(MENU_ROWS, popupBody);
 
   const detailRows =
     (mode.kind === "add" ? 3 : 0) +
     (mode.kind === "pick" ? pullRequestRows(mode.prs.length, prBody) : 0) +
+    (mode.kind === "menu" ? menuRows(mode.matches, menuBody) : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     // `busy` takes the message row rather than leaving it empty: it is one
     // line saying which key is being answered, and the message it displaces
@@ -331,6 +365,7 @@ export function regionsFor({
     footerRows,
     detailRows,
     prBody,
+    menuBody,
     clipped,
     activity,
     activityRows,

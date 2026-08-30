@@ -30,6 +30,7 @@ import { Banner } from "./Banner.tsx";
 import { clip, Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
 import { columnWidths, GAP, hintsFor, LOG_ROWS, regionsFor, type Widths } from "./layout.ts";
+import { type CommandName, commandsFor, Menu, matching } from "./Menu.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
 import { PullRequests } from "./PullRequests.tsx";
@@ -104,6 +105,19 @@ type Mode =
    * the cursor would move what `enter` is aimed at.
    */
   | { readonly kind: "pick"; readonly prs: readonly PullRequest[]; readonly index: number }
+  /**
+   * The slash menu: everything the list can do that has no key of its own.
+   *
+   * The rows are *not* carried here, unlike `pick`'s. They are a constant
+   * narrowed by `query`, so holding them would be holding a derivation — and
+   * the one thing they depend on besides the query, `logOn`, is changed only
+   * by running the command that closes the menu.
+   *
+   * `index` counts into what the query matched rather than into every command,
+   * which is why every edit to `query` puts it back to 0: a cursor left on the
+   * fourth row of a list that is now one row long is aimed at nothing.
+   */
+  | { readonly kind: "menu"; readonly query: string; readonly index: number }
   | { readonly kind: "busy"; readonly label: string };
 
 type Props = {
@@ -158,15 +172,15 @@ const MAX_FILES_COLS = 48;
  *
  * Both halves are on this one clock. The local half — is anything dirty, has a
  * worktree appeared — is edited from somewhere else, an editor or a build or
- * another terminal, so waiting for `R` would make the screen a photograph of
- * whenever you last pressed a key. The remote half is counted against
+ * another terminal, so waiting for `/ refresh` would make the screen a photograph
+ * of whenever you last pressed a key. The remote half is counted against
  * `origin/main`, which is a *local* ref: without a fetch of our own, a
  * colleague's push never appears at all.
  *
  * A minute because that is the pace the slower half sets, and running the
- * cheaper half faster buys little: an action you take refreshes immediately, `R`
- * refreshes on demand, and the rest is other people's work arriving, which does
- * not arrive by the second.
+ * cheaper half faster buys little: an action you take refreshes immediately,
+ * `/ refresh` refreshes on demand, and the rest is other people's work
+ * arriving, which does not arrive by the second.
  *
  * The fetch is also why this is quiet. It can fail for reasons that are nobody's
  * fault — a train, a VPN, a key that is not loaded — and a screen that reported
@@ -201,9 +215,13 @@ const GENERAL_TIPS: readonly Message[] = [
   { kind: "info", text: "tip: h and l don't stop at the first fold — they keep going" },
   { kind: "info", text: "tip: a starts the new branch from wherever the cursor is" },
   { kind: "info", text: "tip: r on a folder removes every worktree under it, after one question" },
-  { kind: "info", text: "tip: s syncs the row under the cursor, S syncs every worktree" },
+  { kind: "info", text: "tip: s syncs the row under the cursor, / sync-all syncs every one" },
+  {
+    kind: "info",
+    text: "tip: / opens everything that has no key of its own — type to narrow it",
+  },
   { kind: "info", text: "tip: enter copies the path under the cursor, for a paste elsewhere" },
-  { kind: "info", text: "tip: L puts the commits away when the list wants the rows" },
+  { kind: "info", text: "tip: / log puts the commits away when the list wants the rows" },
   {
     kind: "info",
     text: "tip: a row reading merged or gone has nothing left in it — r clears one",
@@ -526,9 +544,9 @@ export function App({
    *
    * On by default, because the panel is the answer to the question the columns
    * raise — `↑2` is a number until you can see what the two commits were — and
-   * a view you have to know about to turn on is one most people never see. `L`
-   * puts it away for the session when the rows are wanted for the list instead;
-   * it is a view, so it is not remembered anywhere on disk.
+   * a view you have to know about to turn on is one most people never see.
+   * `/ log` puts it away for the session when the rows are wanted for the list
+   * instead; it is a view, so it is not remembered anywhere on disk.
    *
    * The read is held with the path it was read for, so the panel can tell its
    * own commits from the ones still on screen from the row before.
@@ -871,6 +889,46 @@ export function App({
     };
   }, [logOn, selectedPath, rows, service]);
 
+  /**
+   * The menu's rows, and what `enter` on one does.
+   *
+   * The list is rebuilt whenever `logOn` changes because one row's summary
+   * reads off it, and narrowed by whatever has been typed. Both are needed in
+   * the key handler as well as in the render, which is why they are up here
+   * rather than beside the popup.
+   */
+  const commands = useMemo(() => commandsFor(logOn), [logOn]);
+  const narrowed = useCallback((query: string) => matching(commands, query), [commands]);
+
+  /**
+   * What a slash command does, which is exactly what its old key did.
+   *
+   * Nothing new is reachable here: `/` moved four commands off the key bar and
+   * changed how they are spelled, not what they run. The menu closes first in
+   * every branch — `perform` and `openPrs` each put the screen into `busy` and
+   * take it back to `list`, and a popup still up underneath that would be a
+   * menu waiting for a key nobody can press.
+   */
+  const runCommand = useCallback(
+    (name: CommandName) => {
+      setMode({ kind: "list" });
+
+      switch (name) {
+        case "sync-all":
+          return void perform("syncing every worktree", () => service.sync());
+        case "review":
+          return void openPrs();
+        case "refresh":
+          return void perform("reading worktrees", async () => "refreshed");
+        // A view, not an action: nothing is read, nothing is written, and the
+        // rows it gives back go straight to the list.
+        case "log":
+          return setLogOn((on) => !on);
+      }
+    },
+    [perform, openPrs, service],
+  );
+
   useInput((input, key) => {
     // Any key is "somebody's here," whatever it does — including the ones
     // handled below that leave the mode untouched. Snapping the delay back
@@ -917,6 +975,66 @@ export function App({
         return void perform(`checking out pull request ${pr.number}`, () =>
           service.checkoutPr(pr.number),
         ).then(() => runPendingCommands(`pr/${pr.number}`));
+      }
+
+      return;
+    }
+
+    if (mode.kind === "menu") {
+      if (key.escape) return setMode({ kind: "list" });
+      // Arrows only. `j` and `k` are letters here, and a menu you type into
+      // cannot have both — which is the trade `/` makes for being searchable
+      // at all, and why the popup advertises `↑↓` and nothing else.
+      if (key.upArrow) {
+        return setMode((now) =>
+          now.kind === "menu" ? { ...now, index: Math.max(0, now.index - 1) } : now,
+        );
+      }
+      if (key.downArrow) {
+        return setMode((now) =>
+          now.kind === "menu"
+            ? {
+                ...now,
+                index: Math.max(0, Math.min(narrowed(now.query).length - 1, now.index + 1)),
+              }
+            : now,
+        );
+      }
+      if (key.return) {
+        // Clamped the way the marker is, so `enter` cannot be aimed at a row
+        // other than the one the popup is pointing at.
+        const rows = narrowed(mode.query);
+        // Enter on nothing is a cancel, the same as it is in `add`: a query
+        // that matched no command is what "never mind" looks like from here.
+        const command = rows[Math.min(mode.index, rows.length - 1)];
+
+        return command === undefined ? setMode({ kind: "list" }) : runCommand(command.name);
+      }
+      if (key.backspace || key.delete) {
+        return setMode((now) => {
+          if (now.kind !== "menu") return now;
+          // Backspacing through the `/` that opened the menu closes it. The
+          // slash is on screen at the head of the prompt, and deleting back
+          // over it is the same "never mind" as `esc` — stopping dead at an
+          // empty query would leave the popup up with nothing left to delete.
+          if (now.query.length === 0) return { kind: "list" };
+
+          return { ...now, query: now.query.slice(0, -1), index: 0 };
+        });
+      }
+      // The same printable test the branch prompt uses, so an arrow key cannot
+      // type itself into the query.
+      if (input.length > 0 && !key.ctrl && !key.meta && /^[\x20-\x7e]+$/.test(input)) {
+        // A second `/` is a slip rather than a filter — no command name holds
+        // one — and dropping it is what makes `/` idempotent: pressing it again
+        // on an open menu leaves the menu exactly as it was, which is what the
+        // PTY tests lean on to know the app is reading keys at all.
+        const typed = input.replace(/\//g, "");
+        if (typed.length === 0) return;
+
+        return setMode((now) =>
+          now.kind !== "menu" ? now : { ...now, query: now.query + typed, index: 0 },
+        );
       }
 
       return;
@@ -1137,17 +1255,14 @@ export function App({
     if (input === "x" && selected?.dirty === true) {
       return setMode({ kind: "confirm", target: { kind: "reset", summary: selected } });
     }
-    // Not aimed at the row under the cursor, unlike every other key here: it
-    // asks the forge, and what comes back is a list of its own to move through.
-    if (input === "p") return void openPrs();
     if (input === "s" && selected) {
       return void perform(`syncing ${selected.dir}`, () => service.sync(selected.path));
     }
-    if (input === "S") return void perform("syncing every worktree", () => service.sync());
-    if (input === "R") return void perform("reading worktrees", async () => "refreshed");
-    // A view, not an action: nothing is read, nothing is written, and the rows
-    // it gives back go straight to the list.
-    if (input === "L") return setLogOn((on) => !on);
+    // The one key here not aimed at the row under the cursor, and the reason
+    // the others are still few: everything that acts on the repository rather
+    // than on a row, and every view the screen has an opinion about, is behind
+    // this rather than on a letter of its own. See `Menu.tsx`.
+    if (input === "/") return setMode({ kind: "menu", query: "", index: 0 });
     if (input === "q" || key.escape) return exit();
   });
 
@@ -1160,25 +1275,38 @@ export function App({
   // `remove` are not interchangeable words on a prompt that cannot be undone.
   const confirming = mode.kind === "confirm" ? mode.target.kind : undefined;
   const hints = useMemo(
-    () => hintsFor(mode.kind, current, logOn, confirming),
-    [mode.kind, current, logOn, confirming],
+    () => hintsFor(mode.kind, current, confirming),
+    [mode.kind, current, confirming],
   );
+
+  // What the menu is showing, which the height budget needs before the popup
+  // is drawn and `enter` needed before it was pressed. One derivation, read
+  // twice, rather than the mode carrying a copy that could fall behind it.
+  const matches = mode.kind === "menu" ? narrowed(mode.query) : [];
+  // Clamped here as well as where the arrows move it: `logOn` flipping is not
+  // the only way the list under the cursor can change length, and a popup
+  // drawing a marker beside no row is worse than one that has moved it.
+  const menuIndex =
+    mode.kind === "menu" ? Math.min(mode.index, Math.max(0, matches.length - 1)) : 0;
 
   const labelled = rows.length > 0;
   // Every section's height, worked out in `layout.ts` — see `regionsFor`, which
   // is where the arithmetic and the reasons for it now live.
-  const { prBody, clipped, activity, logBody, logHeight, listHeight, visible } = regionsFor({
-    terminalRows,
-    columns,
-    hints,
-    mode,
-    message,
-    lines,
-    logOn,
-    tree,
-    index,
-    labelled,
-  });
+  const { prBody, menuBody, clipped, activity, logBody, logHeight, listHeight, visible } =
+    regionsFor({
+      terminalRows,
+      columns,
+      hints,
+      // The one mode the layout cannot take as it stands: it needs the height
+      // the popup will be, and that is however many rows the query matched.
+      mode: mode.kind === "menu" ? { kind: "menu", matches: matches.length } : mode,
+      message,
+      lines,
+      logOn,
+      tree,
+      index,
+      labelled,
+    });
 
   /**
    * The moment every age on the screen is measured from, read once for the
@@ -1319,6 +1447,16 @@ export function App({
 
       {mode.kind === "pick" ? (
         <PullRequests prs={mode.prs} index={mode.index} rows={prBody} />
+      ) : null}
+
+      {mode.kind === "menu" ? (
+        <Menu
+          commands={matches}
+          index={menuIndex}
+          query={mode.query}
+          total={commands.length}
+          rows={menuBody}
+        />
       ) : null}
 
       {mode.kind === "add" ? (

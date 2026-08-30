@@ -18,6 +18,7 @@ app/Banner.tsx    the welcome: name, version, folder — and how many rows it to
 app/Log.tsx       the commits under the list, for the row the cursor is on
 app/Files.tsx     the uncommitted files beside the list, as the tree they sit in
 app/PullRequests.tsx  the open pull requests, as a list to pick one out of
+app/Menu.tsx      `/`: the commands with no key of their own, as a list to type at
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths, and one worktree's changed paths, as the trees they are
@@ -58,7 +59,7 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   thing twice, and the count says the part a chevron cannot — how much is behind it.
 - **The commit panel is a view, and it is budgeted like one.** `Log.tsx` draws `git log --oneline`
   for the row under the cursor — sha, age, ref names, subject, in columns, with git's own colours —
-  and `L` toggles it for the session (on by default; nothing is written to disk). It is read by
+  and `/log` toggles it for the session (on by default; nothing is written to disk). It is read by
   `service.log` when the selection changes and again whenever the list re-reads itself, rather than
   as a column of `listWorktreeSummaries`: that walks every worktree on the refresh tick, and a
   `git log` per row would pay for thirty answers to draw one. Its height comes out of what is left
@@ -66,6 +67,28 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   beats what was committed yesterday — and below `LOG_MIN_ROWS` it is dropped rather than drawn as
   a heading with one commit stuck to it. The panel renders its own fixed height, blank rows
   included, so a shallow history does not move the rule above it.
+- **`/` is the key bar's overflow, and the split it makes is the one the cursor makes.** The bar
+  is a fixed cost — drawn every frame, taking rows off the list, packing onto a second line the
+  moment it outgrows the terminal — so it cannot be where every new command lands. A key stays on
+  it when it acts on the row under the cursor and is reached often enough to be muscle memory:
+  move, `enter`, `a`, `r`, `s`, and `x` where there is anything to discard. A command moves into
+  `/` when it is aimed at the repository rather than at a row (`sync-all`, `review`) or is a
+  preference set once and then left (`log`, `refresh`) — the cases a letter buys the least, since
+  you reach for them rarely enough to have had to read the bar anyway. A moved command *loses* its
+  letter rather than keeping it quietly: the bar is the whole of what the screen advertises, and a
+  key that works but is not on it is one you have to already know about, which is the state `/`
+  exists to get out of. The menu is
+  budgeted like the pull-request popup — both take their rows out of the list underneath, so
+  `regionsFor` sizes them from one `popupBody` rather than from two arithmetics that could
+  disagree about where the bottom of the screen is.
+- **The menu's rows are not carried on the mode, unlike the picker's.** `pick` holds the pull
+  requests because reading them again would move what `enter` is aimed at; the commands are a
+  constant narrowed by a query, so holding them would be holding a derivation. `matching` is the
+  one place that narrowing happens, read once for the height budget and once for `enter`. Typing
+  puts the cursor back to 0 for the same reason the picker's clamps: an index into what the query
+  matched is aimed at nothing once the query matched less. And a second `/` is dropped rather than
+  typed — no command name holds one — which is what makes the key idempotent, and is what
+  `App.e2e`'s `open` leans on to know the app is reading keys at all.
 - **The pull-request popup is budgeted like the log panel, not like the `add` box.** `add`
   reserves a flat three rows however long the branch name is; a list of pull requests is as tall as
   the forge says, so `pullRequestRows` caps it at `PR_ROWS` and then caps *that* by what is free
@@ -182,10 +205,10 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   command line, where it has to be typed out on purpose rather than reached with one finger. That
   is what lets `App.test.tsx` drive every key with a stub and no repository, and it is why a
   keystroke cannot grow a capability the command line does not have.
-- **`p` is the one key whose answer is not `git`, and it is here for a reason the others are
-  not.** What it needs is not a command but a *choice*, out of a list only the forge can produce:
+- **`/review` is the one command whose answer is not `git`, and it is here for a reason the
+  others are not.** What it needs is not a command but a *choice*, out of a list only the forge can produce:
   `grove pr 42` already exists and works, but knowing that 42 is the number means leaving to go and
-  look it up — and not leaving is the whole argument for a key. It runs exactly what the command
+  look it up — and not leaving is the whole argument for it being on this screen at all. It runs exactly what the command
   line runs, through the same `checkoutPullRequest`, so the rule above still holds. `gh` is the
   only tool besides git that any of this spawns, and it answers only what git cannot: which
   repository the head is on, what the ref is called there, and whether the pull request is still
@@ -202,9 +225,10 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   Anything clipped is counted on a leading row rather than dropped, since a line going missing off
   the top without the screen admitting it is what started this.
 - **One `useInput`, one `mode`.** Every key goes through a single handler that switches on
-  `list | add | confirm | busy`, rather than each component claiming its own input. The failure
-  that prevents: `a` opening the branch prompt and the next keypress being read as a command.
-  While `busy`, keys are dropped — except Ctrl-C, which stops the git child before unmounting.
+  `list | add | confirm | pick | menu | busy`, rather than each component claiming its own input.
+  The failure that prevents: `a` opening the branch prompt and the next keypress being read as a
+  command. While `busy`, keys are dropped — except Ctrl-C, which stops the git child before
+  unmounting.
 - **Components are presentational; the state lives above them.** `ProgressBar` takes a `value`
   and renders. That is what makes them cheap to assert on, and it is why none of `src/core`
   imports React.

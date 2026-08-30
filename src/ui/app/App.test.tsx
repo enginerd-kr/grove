@@ -276,6 +276,32 @@ async function toLogin(ui: Driven & { lastFrame: () => string | undefined }) {
   await settled(ui, (frame) => /▸ +login/.test(frame));
 }
 
+/**
+ * Runs a slash command the way somebody would: `/`, the name, enter.
+ *
+ * The four commands that used to be `p`, `S`, `R` and `L` have no key of their
+ * own any more — `Menu.tsx` says which side of the line each fell and why — so
+ * the tests that are about what those commands *do* reach them through the
+ * menu rather than around it.
+ *
+ * The wait after the name is on the count rather than on the row: every row
+ * this could type is already on screen when the menu opens, so `/refresh` is
+ * true of the frame before a single character of it has been read. `1 of 4`
+ * only appears once the query has narrowed the list, which is the thing that
+ * has to have happened before `enter` is aimed at anything.
+ */
+async function run(ui: Driven & { readonly lastFrame: () => string | undefined }, name: string) {
+  ui.stdin.write("/");
+  await settled(ui, (frame) => frame.includes("/sync-all"));
+  ui.stdin.write(name);
+  await settled(ui, (frame) => frame.includes("1 of 4"));
+  ui.stdin.write(keys.enter);
+  // One key per frame, the way `press` does it: without this the enter that
+  // runs the command and whatever the caller sends next arrive together, and
+  // the second is dropped by the `busy` the first one opened.
+  await nextFrame();
+}
+
 /** `q quit` is on the key bar in `list` and in no other mode — see `MODE_HINTS`. */
 const IN_LIST = (frame: string) => frame.includes("q quit");
 /** `ctrl+c cancel` is the whole of the key bar while an action is out. */
@@ -481,7 +507,7 @@ describe("the list", () => {
     // back through `R` rather than through the timer, so what is under test is
     // the cursor and not the polling.
     listed = [...ROWS, summary({ dir: "chore/deps" })];
-    ui.stdin.write("R");
+    await run(ui, "refresh");
 
     const frame = await settled(ui, (each) => each.includes("deps"));
 
@@ -889,7 +915,7 @@ describe("the keys", () => {
     expect(calls.copied).toEqual(["/repo/feat/login", "/repo/feat"]);
   });
 
-  test("`s` syncs the row under the cursor and `S` syncs every worktree", async () => {
+  test("`s` syncs the row under the cursor and `/sync-all` syncs every worktree", async () => {
     const { service, calls } = stub();
     const ui = await opened_with(service);
 
@@ -897,7 +923,7 @@ describe("the keys", () => {
     ui.stdin.write("s");
     await settled(ui, (frame) => frame.includes("1 up-to-date"));
 
-    ui.stdin.write("S");
+    await run(ui, "sync-all");
     await settled(ui, (frame) => IN_LIST(frame) && frame.includes("1 up-to-date"));
 
     // The one action with no target, which is what `undefined` says here.
@@ -915,16 +941,16 @@ describe("the keys", () => {
     expect(ui.frame()).not.toMatch(/\bs sync\b/);
 
     await press(ui, "s");
-    // `S` after it, so the wait has something to land on: a key that did
-    // nothing leaves no frame to wait for, and the sync that follows is proof
-    // the screen was reading keys the whole time.
-    await press(ui, "S");
+    // `/sync-all` after it, so the wait has something to land on: a key that
+    // did nothing leaves no frame to wait for, and the sync that follows is
+    // proof the screen was reading keys the whole time.
+    await run(ui, "sync-all");
     await settled(ui, (frame) => frame.includes("1 up-to-date"));
 
     expect(calls.synced).toEqual([undefined]);
   });
 
-  test("`R` re-reads the list and says it did", async () => {
+  test("`/refresh` re-reads the list and says it did", async () => {
     let reads = 0;
     const { service } = stub({
       list: async () => {
@@ -935,7 +961,7 @@ describe("the keys", () => {
     const ui = await opened_with(service);
     const before = reads;
 
-    ui.stdin.write("R");
+    await run(ui, "refresh");
     await settled(ui, (frame) => frame.includes("refreshed"));
 
     // Not a promise the screen makes and does not keep: the word is on the
@@ -1060,12 +1086,12 @@ describe("the keys", () => {
   });
 
   /**
-   * `p` is the one key that leaves the machine for something that is not git,
-   * so it is the one key with a wait worth drawing. It borrows `busy` rather
-   * than going through `perform`, because there is no outcome to report — and
-   * borrowing it is what drops the keys while `gh` is out.
+   * `/review` is the one command that leaves the machine for something that is
+   * not git, so it is the one with a wait worth drawing. It borrows `busy`
+   * rather than going through `perform`, because there is no outcome to report
+   * — and borrowing it is what drops the keys while `gh` is out.
    */
-  test("`p` takes the keyboard while the forge is out, then opens the picker", async () => {
+  test("`/review` takes the keyboard while the forge is out, then opens the picker", async () => {
     let answer: (prs: readonly PullRequest[]) => void = () => {};
     const asked = new Promise<readonly PullRequest[]>((resolve) => {
       answer = resolve;
@@ -1073,7 +1099,7 @@ describe("the keys", () => {
     const { service } = stub({ pullRequests: () => asked });
     const ui = await opened_with(service);
 
-    ui.stdin.write("p");
+    await run(ui, "review");
     await settled(ui, BUSY);
 
     // A key pressed while the forge is out is dropped, not queued: the cursor
@@ -1096,11 +1122,11 @@ describe("the keys", () => {
 
   // An empty list is an answer, not a popup: one there is nothing to pick from
   // is chrome, so it goes where the other answers to a keypress go.
-  test("`p` with nothing open says so on the message line", async () => {
+  test("`/review` with nothing open says so on the message line", async () => {
     const { service } = stub();
     const ui = await opened_with(service);
 
-    ui.stdin.write("p");
+    await run(ui, "review");
     const frame = await settled(ui, (each) => each.includes("no open pull requests"));
 
     expect(frame).not.toContain("pull requests   0");
@@ -1117,7 +1143,7 @@ describe("the keys", () => {
     });
     const ui = await opened_with(service);
 
-    ui.stdin.write("p");
+    await run(ui, "review");
     const frame = await settled(ui, (each) => each.includes("gh is not installed"));
 
     // The refusal brought its advice with it, and the screen is still a screen.
@@ -1132,8 +1158,8 @@ describe("the keys", () => {
     });
     const ui = await opened_with(service);
 
-    ui.stdin.write("p");
-    await settled(ui, (frame) => frame.includes("pull requests"));
+    await run(ui, "review");
+    await settled(ui, (frame) => frame.includes("enter check out"));
 
     // Up from the top row: clamped, rather than wrapping to the bottom of a
     // list you would then have to look at the screen to find. Then down twice
@@ -1151,6 +1177,148 @@ describe("the keys", () => {
     // The file's commands run after the worktree exists, under the name the
     // checkout gave it — `pr/<n>`, not the branch the pull request came from.
     expect(calls.trusted).toEqual(["pr/34"]);
+  });
+
+  /**
+   * The menu is the key bar's overflow, so what is pinned here is the part
+   * that makes it usable without one: `/` opens it, typing narrows it, and
+   * every way out leaves the list as it was. What each command then does is
+   * asserted where that command's own test is.
+   */
+  test("`/` opens the menu with everything that has no key of its own", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("/");
+    const frame = await settled(ui, (each) => each.includes("/sync-all"));
+
+    for (const name of ["/sync-all", "/review", "/refresh", "/log"]) {
+      expect(frame).toContain(name);
+    }
+    // And the popup's own keys, in place of the list's.
+    expect(frame).toContain("enter run");
+    expect(IN_LIST(frame)).toBe(false);
+  });
+
+  test("typing narrows the menu, and backspace widens it again", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("/");
+    await settled(ui, (frame) => frame.includes("/sync-all"));
+
+    // `re` is in two of the four names, which is what makes this a filter
+    // rather than a lookup.
+    await press(ui, "re");
+    let frame = await settled(ui, (each) => each.includes("2 of 4"));
+    expect(frame).toContain("/review");
+    expect(frame).toContain("/refresh");
+    expect(frame).not.toContain("/sync-all");
+
+    await press(ui, "v");
+    frame = await settled(ui, (each) => each.includes("1 of 4"));
+    expect(frame).toContain("/review");
+    expect(frame).not.toContain("/refresh");
+
+    ui.stdin.write(keys.backspace);
+    frame = await settled(ui, (each) => each.includes("2 of 4"));
+    expect(frame).toContain("/refresh");
+  });
+
+  test("a query that matches nothing says so, and enter on it is a cancel", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("/");
+    await settled(ui, (frame) => frame.includes("/sync-all"));
+    await press(ui, "zzz");
+    await settled(ui, (frame) => frame.includes("no command matches"));
+
+    ui.stdin.write(keys.enter);
+    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("no command matches"));
+
+    expect(calls.synced).toEqual([]);
+  });
+
+  /**
+   * Backspacing through the `/` that opened the menu closes it. The slash is
+   * on screen at the head of the prompt, and deleting back over it is the same
+   * "never mind" as `esc` — stopping dead at an empty query would leave the
+   * popup up with nothing left to delete.
+   */
+  test("backspace past the slash closes the menu", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("/");
+    await settled(ui, (frame) => frame.includes("/sync-all"));
+    // `s` is in `sync-all` and in `refresh`, which is the whole of what a
+    // filter over four short names can narrow to.
+    await press(ui, "s");
+    await settled(ui, (frame) => frame.includes("2 of 4"));
+
+    await press(ui, keys.backspace);
+    ui.stdin.write(keys.backspace);
+    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("/sync-all"));
+  });
+
+  /**
+   * No command name holds a slash, so a second `/` is a slip rather than a
+   * filter — and dropping it is what makes the key idempotent. `App.e2e`'s
+   * `open` leans on exactly that: raw mode is enabled from an effect after the
+   * first paint, so the key that proves the app is reading has to survive
+   * being sent twice.
+   */
+  test("a second slash leaves the menu exactly as it was", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("/");
+    const opened = await settled(ui, (frame) => frame.includes("/sync-all"));
+
+    await press(ui, "/");
+    await press(ui, "/");
+
+    expect(ui.frame()).toBe(opened);
+  });
+
+  test("the menu's cursor moves with the arrows and stops at both ends", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    ui.stdin.write("/");
+    await settled(ui, (frame) => frame.includes("/sync-all"));
+
+    // Up from the top row is clamped rather than wrapped, the same as the
+    // picker's — and then down past the last row, which clamps the other way.
+    await press(ui, keys.up);
+    await press(ui, keys.down);
+    await press(ui, keys.down);
+    await press(ui, keys.down);
+    await press(ui, keys.down);
+    await press(ui, keys.down);
+    await settled(ui, (frame) => /▸ +\/log/.test(frame));
+
+    // And `enter` runs the row the marker is on, which is the last one.
+    ui.stdin.write(keys.enter);
+    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("commits in"));
+
+    expect(calls.synced).toEqual([]);
+  });
+
+  // A view, not an action: nothing is read, nothing is written, and it is not
+  // remembered anywhere on disk either.
+  test("`/log` puts the commit panel away and brings it back", async () => {
+    const { service } = stub();
+    const ui = await opened_with(service);
+
+    expect(await settled(ui, (frame) => frame.includes("commits in main"))).toContain("commits in");
+
+    await run(ui, "log");
+    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("commits in"));
+
+    await run(ui, "log");
+    await settled(ui, (frame) => frame.includes("commits in main"));
   });
 
   test("esc closes every popup, and leaves the list exactly as it was", async () => {
@@ -1172,10 +1340,17 @@ describe("the keys", () => {
     await settled(ui, (frame) => !frame.includes("remove main?") && IN_LIST(frame));
 
     // The picker.
-    ui.stdin.write("p");
-    await settled(ui, (frame) => frame.includes("pull requests"));
+    await run(ui, "review");
+    await settled(ui, (frame) => frame.includes("enter check out"));
     ui.stdin.write(keys.esc);
-    await settled(ui, (frame) => !frame.includes("pull requests") && IN_LIST(frame));
+    await settled(ui, (frame) => !frame.includes("enter check out") && IN_LIST(frame));
+
+    // The menu, which is the one popup `esc` can be reached from twice: once
+    // out of the picker it opened, and once out of the menu itself.
+    ui.stdin.write("/");
+    await settled(ui, (frame) => frame.includes("/sync-all"));
+    ui.stdin.write(keys.esc);
+    await settled(ui, (frame) => !frame.includes("/sync-all") && IN_LIST(frame));
 
     expect(calls.added).toEqual([]);
     expect(calls.removed).toEqual([]);
@@ -1207,8 +1382,8 @@ describe("the keys", () => {
     ui.stdin.write("y");
     await settled(ui, (frame) => frame.includes("removed /repo/main") && IN_LIST(frame));
 
-    ui.stdin.write("p");
-    await settled(ui, (frame) => frame.includes("pull requests"));
+    await run(ui, "review");
+    await settled(ui, (frame) => frame.includes("enter check out"));
     ui.stdin.write(keys.enter);
     await settled(ui, (frame) => frame.includes("added pr/12") && IN_LIST(frame));
 
@@ -1233,7 +1408,7 @@ describe("the keys", () => {
     });
     const ui = await opened_with(service);
 
-    ui.stdin.write("S");
+    await run(ui, "sync-all");
     const frame = await settled(ui, (each) => each.includes("stopped on a conflict"));
 
     // Everything the refusal carried, and a screen that is still a screen: the

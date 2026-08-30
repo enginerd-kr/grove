@@ -89,24 +89,55 @@ const FIRST_READ = "reading worktrees";
 /**
  * Starts the app and waits until it is reading keys.
  *
- * `R` rather than a sleep: raw mode is enabled from an effect that runs after
+ * `/` rather than a sleep: raw mode is enabled from an effect that runs after
  * the first paint, so a key sent into that window is eaten by the line
- * discipline. `R` is the one key worth resending — it refreshes however often
- * it arrives — and the activity line it leaves is proof the app took it.
+ * discipline. `/` is the one key worth resending — a second one lands in the
+ * menu the first one opened and is dropped there, since no command name holds
+ * a slash — and the popup it leaves is proof the app took it.
  *
  * The first read has to be waited out before that key is sent, and the column
  * heading is not the signal for it: the heading is drawn while the app is still
- * `busy`, and `perform` blocks the keyboard for as long as it is. An `R` sent
+ * `busy`, and `perform` blocks the keyboard for as long as it is. A `/` sent
  * there is dropped rather than queued, so what followed was a resend landing on
  * an app that had just started reading the first one — and the test's next key
  * arriving inside that second refresh, to be dropped in turn.
+ *
+ * It then runs `/refresh` on the way out, which is what the old `R` did here:
+ * one read has to have been through the list before the panels below it belong
+ * to the row under the cursor.
  */
 async function open(cwd: string, cols = 100, rows = 30): Promise<UiSession> {
   const ui = startUi({ cwd, cols, rows });
   await ui.waitForFrame((frame) => frame.includes("worktree") && !frame.includes(FIRST_READ), WAIT);
-  await ui.pressUntil("R", (frame) => frame.includes("refreshed"), WAIT);
+  await ui.pressUntil("/", (frame) => frame.includes("/refresh"), WAIT);
+  // Not through `press`: its `clear()` is the barrier the later waits need, and
+  // it takes the bytes the session has seen so far with it — including the
+  // alternate-screen sequence one test below asserts the app opened with.
+  // Nothing here needs the barrier anyway, since neither frame this waits for
+  // is on screen before its key is sent.
+  ui.press("refresh");
+  await ui.waitForFrame((frame) => frame.includes("1 of 4"), WAIT);
+  ui.press(keys.enter);
+  await ui.waitForFrame((frame) => frame.includes("refreshed"), WAIT);
 
   return ui;
+}
+
+/**
+ * Runs a slash command: the menu, the name, and enter.
+ *
+ * The commands that used to be `p`, `S`, `R` and `L` have no key of their own
+ * any more — `Menu.tsx` says which side of that line each fell and why — so
+ * the tests reach them the way a person does.
+ */
+async function runCommand(
+  ui: UiSession,
+  name: string,
+  done: (frame: string) => boolean,
+): Promise<void> {
+  await press(ui, "/", (frame) => frame.includes("/sync-all"));
+  await press(ui, name, (frame) => frame.includes("1 of 4"));
+  await press(ui, keys.enter, done);
 }
 
 /**
@@ -256,19 +287,20 @@ describeUi("the app", () => {
   );
 
   test(
-    "L takes the commit panel away and brings it back, and esc quits",
+    "`/log` takes the commit panel away and brings it back, and esc quits",
     async () => {
       await withTempRepo(async (repo) => {
         const root = await managed(repo);
         const ui = await open(root);
 
         try {
-          // `open` already pressed R, so the refresh has been through the list
-          // once and the panel below it belongs to the row under the cursor.
+          // `open` already ran `/refresh`, so the read has been through the
+          // list once and the panel below it belongs to the row under the
+          // cursor.
           expect(ui.frame()).toContain("commits in main");
 
-          await press(ui, "L", (frame) => !frame.includes("commits in"));
-          await press(ui, "L", (frame) => frame.includes("commits in main"));
+          await runCommand(ui, "log", (frame) => !frame.includes("commits in"));
+          await runCommand(ui, "log", (frame) => frame.includes("commits in main"));
 
           expect(await ui.pressUntilExit(keys.esc, WAIT)).toBe(0);
         } finally {
