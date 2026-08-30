@@ -101,13 +101,17 @@ export function open(element: ReactElement, columns: number, rows: number): Sess
       await settleFor(50);
     },
     async until(text, timeoutMs = 10_000) {
-      const deadline = Date.now() + timeoutMs;
+      // `performance.now()`, because `clock.ts` stops `Date` for the pictures:
+      // a deadline measured against a clock that never advances never arrives,
+      // and a shot waiting for a line that will never be drawn would hang
+      // instead of failing with the frame that explains why.
+      const deadline = performance.now() + timeoutMs;
 
       for (;;) {
         const current = screen.last ?? "";
         if (plain(current).includes(text)) return current;
 
-        if (Date.now() > deadline) {
+        if (performance.now() > deadline) {
           throw new Error(`never drew ${JSON.stringify(text)}. Last frame:\n${plain(current)}`);
         }
 

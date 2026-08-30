@@ -93,21 +93,21 @@
 <text x="354.0" y="495.0" fill="#e4e6ea" opacity="0.6" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○</text>
 <text x="429.6" y="495.0" fill="#e4e6ea" opacity="0.6" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2d ago</text>
 <text x="18.0" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="940.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">── commits in main ─────────────────────────────────────────────────────────────────────────────────────────────</text>
-<text x="34.8" y="590.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2ca8564</text>
+<text x="34.8" y="590.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">79654ca</text>
 <text x="110.4" y="590.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">1d ago          </text>
 <text x="261.6" y="590.0" fill="#56b6c2" textLength="453.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(HEAD -&gt; main, origin/main, origin/HEAD, feat/paging) </text>
 <text x="715.2" y="590.0" fill="#e4e6ea" textLength="142.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Start a changelog</text>
-<text x="34.8" y="609.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">d74a706</text>
+<text x="34.8" y="609.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">c99f82f</text>
 <text x="110.4" y="609.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">1d ago          </text>
 <text x="244.8" y="609.0" fill="#e4e6ea" textLength="210.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Tighten the entry point</text>
-<text x="34.8" y="628.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">d91b0cb</text>
-<text x="110.4" y="628.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-13 23:44</text>
+<text x="34.8" y="628.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">e2d44d2</text>
+<text x="110.4" y="628.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-08 13:00</text>
 <text x="244.8" y="628.0" fill="#e4e6ea" textLength="243.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Set worktrees up on arrival</text>
-<text x="34.8" y="647.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">80137f1</text>
-<text x="110.4" y="647.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-13 13:44</text>
+<text x="34.8" y="647.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3c03a3d</text>
+<text x="110.4" y="647.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-08 03:00</text>
 <text x="244.8" y="647.0" fill="#e4e6ea" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add the entry point</text>
-<text x="34.8" y="666.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">df84280</text>
-<text x="110.4" y="666.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-13 03:44</text>
+<text x="34.8" y="666.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">d7a9e97</text>
+<text x="110.4" y="666.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-07 17:00</text>
 <text x="244.8" y="666.0" fill="#e4e6ea" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add a readme</text>
 <text x="18.0" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="940.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
 <text x="18.0" y="704.0" fill="#98c379" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">✓</text>
@@ -126,14 +126,16 @@
 <text x="261.6" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> add · </text>
 <text x="320.4" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">r</text>
 <text x="328.8" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> remove · </text>
-<text x="412.8" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">s</text>
-<text x="421.2" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync · </text>
-<text x="488.4" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">S</text>
-<text x="496.8" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync all · </text>
-<text x="597.6" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">R</text>
-<text x="606.0" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> refresh · </text>
-<text x="698.4" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">L</text>
-<text x="706.8" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> hide log · </text>
-<text x="807.6" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">q</text>
-<text x="816.0" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> quit</text>
+<text x="412.8" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">p</text>
+<text x="421.2" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="84.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> review · </text>
+<text x="505.2" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">s</text>
+<text x="513.6" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync · </text>
+<text x="580.8" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">S</text>
+<text x="589.2" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> sync all · </text>
+<text x="690.0" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">R</text>
+<text x="698.4" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> refresh · </text>
+<text x="790.8" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">L</text>
+<text x="799.2" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="100.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> hide log · </text>
+<text x="900.0" y="818.0" fill="#56b6c2" font-weight="600" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">q</text>
+<text x="908.4" y="818.0" fill="#e4e6ea" opacity="0.6" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> quit</text>
 </svg>

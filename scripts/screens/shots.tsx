@@ -1,4 +1,5 @@
 import "./colour.ts";
+import "./clock.ts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createStoreReporter, LineStore } from "../../src/report/lines.ts";
@@ -53,6 +54,19 @@ type Shot = {
 const SCROLLED = /\b\d+ of \d+\b/;
 
 /**
+ * A spinner glyph, which is a coin flip rather than a picture.
+ *
+ * Whichever animation tick the save happened to land on is what a frame with
+ * one in it holds, so the same shot is a different picture on a machine a few
+ * milliseconds slower — and the committed pictures are checked byte for byte
+ * against a re-shoot on a machine nobody chose. A caught spinner always means
+ * the same thing: the shot stopped waiting while something was still running,
+ * and the fix is to wait for that thing's settled spelling rather than for a
+ * number of milliseconds.
+ */
+const SPINNING = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
+
+/**
  * The refresh is turned off for the pictures, not sped up.
  *
  * It fetches, and a fetch landing between the frame being drawn and the frame
@@ -67,14 +81,23 @@ const NO_REFRESH = 3_600_000;
  * The frame comes with it, because the useful half of "the shot is wrong" is
  * seeing what was drawn instead — and the fix is almost always a row count.
  */
-function check(shot: Shot, frame: string): void {
+function check(shot: Shot, frame: string, root: string): void {
   const missing = shot.expects.filter((text) => !frame.includes(text));
   const scrolled = SCROLLED.test(frame);
-  if (missing.length === 0 && !scrolled) return;
+  const spinning = SPINNING.test(frame);
+  // The fixture's temp directory, which is a different path on every run and on
+  // every machine. It reaches the screen only through a bug — the banner
+  // shortens it to `~/work/acme` against the `HOME` the fixture set — but a
+  // published picture with one in it is a drift check that can never pass, and
+  // the character that gives it away is easy to miss by eye.
+  const leaked = frame.includes(root);
+  if (missing.length === 0 && !scrolled && !spinning && !leaked) return;
 
   const why = [
     ...missing.map((text) => `it never drew ${JSON.stringify(text)}`),
     ...(scrolled ? [`the list is scrolled — give ${shot.name} more rows`] : []),
+    ...(spinning ? ["something was still spinning — wait for it to settle"] : []),
+    ...(leaked ? [`the fixture's own path is in the frame: ${root}`] : []),
   ];
 
   throw new Error(
@@ -114,7 +137,7 @@ async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
     // had loaded perfectly well and simply had no room to show that row.
     await session.until(`${fixture.branches.length} worktrees`);
     await shot.drive(session);
-    check(shot, session.plain());
+    check(shot, session.plain(), fixture.root);
     await mkdir(OUT, { recursive: true });
     await writeFile(
       join(OUT, `${shot.name}.svg`),
@@ -159,11 +182,19 @@ const add: Shot = {
     await session.press("a");
     await session.type("feat/paging");
     await session.press(keys.enter);
-    await session.until("bun install");
-    await session.settle(400);
+    // The settled spelling, not the ambiguous one: the step reads `running bun
+    // install` while it runs and `ran bun install` once it has, and a wait on
+    // `bun install` alone is satisfied by the first — so the picture was a
+    // spinner and a half-written panel on any machine where the install took
+    // longer than the pause that followed. It takes a fraction of a second
+    // here and it will not on a cold runner.
+    await session.until("ran bun install");
+    await session.settle(200);
   },
-  // The worktree the shot is of, and the file's own command running in it.
-  expects: ["paging", "bun install"],
+  // The worktree the shot is of, the file's own command having run in it, and
+  // the summary the setup closes with — which is the shot's real subject, and
+  // the last thing drawn, so a frame holding it is a frame that waited.
+  expects: ["paging", "ran bun install", "kept in feat/paging"],
 };
 
 process.stdout.write("shooting the README:\n");

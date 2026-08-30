@@ -6,6 +6,7 @@ import { cloneRepo } from "../../src/core/commands/clone.ts";
 import { runGitOrThrow } from "../../src/core/git.ts";
 import { type RepoPaths, repoPaths } from "../../src/core/layout.ts";
 import { createPlainReporter } from "../../src/report/reporter.ts";
+import { NOW } from "./clock.ts";
 
 /**
  * A repository worth taking a picture of.
@@ -19,9 +20,15 @@ import { createPlainReporter } from "../../src/report/reporter.ts";
  */
 
 /**
- * Dates pinned, so a re-shot README differs where the UI changed and nowhere
- * else. The `last` column reads relative to now, so these are set at build
- * time against the clock rather than as literals.
+ * How long before `NOW` each branch was last worked in — which is what the
+ * `last` column ends up reading, since the column measures against the same
+ * pinned moment the dates are built from.
+ *
+ * Offsets rather than dates, so the column can be *chosen*: these are the
+ * spellings the picture should show — `2h ago`, `1d ago`, `4d ago` — rather
+ * than whatever a set of literal dates happened to work out to. Keep them
+ * clear of the boundaries `describeAge` turns on (an hour, a day, a week) so a
+ * reader of this table can tell what the picture will say.
  */
 const AGES_HOURS: Readonly<Record<string, number>> = {
   main: 26,
@@ -56,6 +63,16 @@ const IDENTITY: Readonly<Record<string, string>> = {
 
 export type Fixture = {
   readonly repo: RepoPaths;
+  /**
+   * The temp directory the whole thing was built in.
+   *
+   * Handed back so a shot can refuse to publish a frame with it in: the path
+   * is different on every run and on every machine, and a picture that had one
+   * character of it showing would fail the check that the committed pictures
+   * still match the program, for a reason that has nothing to do with the
+   * program.
+   */
+  readonly root: string;
   /** Where the app is standing: the worktree a person would have opened it in. */
   readonly cwd: string;
   /**
@@ -77,7 +94,7 @@ const BRANCHES = ["feat/login", "feat/search", "fix/crash", "chore/docs"] as con
 const quiet = createPlainReporter({ out: () => {}, err: () => {} });
 
 function at(hoursAgo: number): string {
-  return new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
+  return new Date(NOW - hoursAgo * 3_600_000).toISOString();
 }
 
 /** git, with the identity pinned and a commit date that will not move. */
@@ -121,7 +138,14 @@ async function seedOrigin(root: string): Promise<string> {
   // No trailing slash on `node_modules`: what `link` puts in a worktree is a
   // symlink, and `node_modules/` matches a directory only — with the slash,
   // every worktree in the pictures would read as dirty.
-  await Bun.write(join(seed, ".gitignore"), ".env\nnode_modules\n");
+  //
+  // `bun.lock` is there for the same reason one step removed: the `add` picture
+  // runs a real `bun install` in the worktree it has just made, and the row it
+  // is a picture of reads clean. A bun that writes a lockfile for a package
+  // with no dependencies — this one does not, a later one on a CI runner might
+  // — would turn that `○` into a `●` on whichever machine had it, and the
+  // pictures are committed and compared byte for byte.
+  await Bun.write(join(seed, ".gitignore"), ".env\nnode_modules\nbun.lock\n");
   await Bun.write(join(seed, "package.json"), '{ "name": "acme", "private": true }\n');
   await commit(seed, ".grove.toml", SETUP_FILE, "Set worktrees up on arrival", 380);
   await git(seed, ["push", "-u", "origin", "main"], 380);
@@ -157,7 +181,12 @@ export async function buildFixture(): Promise<Fixture> {
   // what `shortenPath` compares against, and `USER` is what the greeting says:
   // left alone it would put whoever re-shot the README into the picture.
   process.env.HOME = root;
+  // Both spellings the banner tries, because it falls through to the second
+  // only when the first is missing — and on a machine that sets `USERNAME`,
+  // clearing `USER` alone would still put whoever re-shot the README into the
+  // greeting.
   process.env.USER = "";
+  process.env.USERNAME = "";
   for (const [key, value] of Object.entries(IDENTITY)) process.env[key] = value;
 
   const origin = await seedOrigin(root);
@@ -199,6 +228,7 @@ export async function buildFixture(): Promise<Fixture> {
 
   return {
     repo,
+    root,
     cwd: trunk,
     branches: [TRUNK, ...BRANCHES],
     dispose: () => rm(root, { recursive: true, force: true }),
