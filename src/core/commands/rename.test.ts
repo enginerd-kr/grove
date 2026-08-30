@@ -377,4 +377,33 @@ describe("grove rename", () => {
       expect(await pathExists(join(root, "spike"))).toBe(true);
     });
   });
+
+  test("refuses a new name that differs from another worktree's only by case", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const root = repo.root;
+      await seedWorktree(repo, "feat/login");
+      await seedWorktree(repo, "feat/other");
+
+      // `add` has always refused this pair; for a while `rename` did not, and the
+      // asymmetry only ever showed up on Linux — where both directories can be
+      // made, and the repository that results is one no macOS or Windows
+      // checkout can reproduce. On a case-folding filesystem the branch check
+      // happened to catch it first and say something else, which is why this
+      // asserts the hint: it is the only thing that distinguishes the two.
+      const collision = refused(await attemptRename(repo, "feat/other", "feat/Login"));
+      expect(collision.code).toBe("state-conflict");
+      expect(errorToExitCode(collision.code)).toBe(ExitCode.stateConflict);
+      expect(collision.message).toBe("feat/login already exists here");
+      expect(collision.hint).toBe(
+        "directories differing only by case collide on macOS and Windows; pick a name that differs by more",
+      );
+
+      // Refused before `git branch -m`, so both branches keep the names they had.
+      const branches = await localBranches(repo);
+      expect(branches).toContain("feat/other");
+      expect(branches).not.toContain("feat/Login");
+      expect(await pathExists(join(root, "feat", "other"))).toBe(true);
+    });
+  });
 });

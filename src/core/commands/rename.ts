@@ -7,6 +7,7 @@ import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase, worktreePathFor } from "../layout.ts";
 import { listWorktrees, resolveTarget, worktreeDir } from "../worktrees.ts";
+import { refuseNameCollision } from "./add.ts";
 import { pruneEmptyParents } from "./remove.ts";
 
 /**
@@ -192,6 +193,13 @@ async function refuseUnsafe(
       hint: "renaming it locally does not rename it on the remote; pass --force if you are sure",
     });
   }
+
+  // Ahead of the branch check, because on a case-folding filesystem that check
+  // answers "yes" for the case-variant of a branch that exists — loose refs are
+  // files, so `refs/heads/feat/Login` and `refs/heads/feat/login` are one file
+  // on APFS — and reports the collision as "that branch already exists", which
+  // hides what it is and what to do about it. Here it is named.
+  refuseNameCollision(repo.root, toPath, worktrees, fromPath);
 
   if (await localBranchExists(repo.gitDir, options.to)) {
     throw new GroveError("state-conflict", `${options.to} already exists`, {

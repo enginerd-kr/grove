@@ -281,15 +281,36 @@ async function checkAlreadyThere(
  * macOS and Windows filesystems fold case, so `Feat/Login` and `feat/login`
  * would be the same directory there and a different one on Linux. Refusing is
  * better than a repository that only works on the machine it was made on.
+ *
+ * A worktree sitting exactly at `path` is not what this is for — the directory
+ * check that follows it says so in plainer words — so only a *different*
+ * directory folding onto the same name gets here.
+ *
+ * Exported for `rename`, which lands a worktree on a name derived by the same
+ * `worktreePathFor` and so has to refuse by the same rule. Spelled twice, the
+ * two would drift, and the drift would be a `rename` that produces the layout
+ * `add` exists to refuse: on Linux both directories are made, and the
+ * repository is then one no macOS or Windows checkout can reproduce.
  */
-function refuseNameCollision(
+export function refuseNameCollision(
   root: string,
   path: string,
-  worktrees: readonly WorktreeRecord[],
+  worktrees: readonly { readonly path: string }[],
+  /**
+   * The worktree being moved onto `path`, when a command is moving one.
+   *
+   * `rename` passes it so a worktree may change nothing but its own case;
+   * without it `feat/login` → `feat/Login` would be refused for colliding with
+   * itself. `add` has none to pass — it is making a worktree, not moving one.
+   */
+  moving?: string,
 ): void {
   const wanted = worktreeDir(root, path).toLowerCase();
   const clash = worktrees.find(
-    (record) => record.path !== path && worktreeDir(root, record.path).toLowerCase() === wanted,
+    (record) =>
+      record.path !== path &&
+      record.path !== moving &&
+      worktreeDir(root, record.path).toLowerCase() === wanted,
   );
 
   if (clash) {
