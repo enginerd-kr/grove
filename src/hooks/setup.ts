@@ -6,15 +6,8 @@ import { runGit } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
-import { type HookFailure, type HookTarget, plural, runCommands } from "./command.ts";
-import {
-  HOOKS_FILE,
-  type Hooks,
-  openHere,
-  plannedCount,
-  repoHooks,
-  sourceWorktree,
-} from "./config.ts";
+import { type HookFailure, type HookTarget, plural, runCommands, setupGate } from "./command.ts";
+import { HOOKS_FILE, type Hooks, plannedCount, repoHooks, sourceWorktree } from "./config.ts";
 import { openWhatItAsksFor } from "./open.ts";
 import { trust } from "./trust.ts";
 
@@ -430,7 +423,7 @@ export async function runSetup(
     hooks,
     { noun: "command", tail: "read it, then add with --trust" },
     reporter,
-    openHere(hooks) === "" ? 0 : 1,
+    setupGate(hooks),
   );
 
   const opened = await openWhatItAsksFor(

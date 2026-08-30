@@ -122,6 +122,20 @@ run = ["docker compose down"]  # Shell commands run inside the worktree just bef
 
 - **`[teardown]` never blocks a removal**: a command that fails there is reported loudly and the worktree still goes. `grove remove --no-teardown` skips it.
 
+### The part that is yours, not the project's
+
+`.grove.toml` is committed, which is its point and also its limit: there is nowhere to write in a repository you do not own, and `grove pr 42` on somebody else's project still needs the `.env` and the install. So two more files stack under and over it:
+
+| File | Where | Who it is for |
+| --- | --- | --- |
+| `~/.config/grove/config.toml` | once per machine | your editor, your defaults, every repository |
+| `.grove.toml` | the default branch's worktree | the project, committed and reviewed |
+| `.grove.local.toml` | beside it, gitignored | this repository, this machine |
+
+**Each layer adds to the ones under it.** `copy`, `link` and `run` collect what every layer named, in that order — so the project's `bun install` runs before the step you put on top of it. `open` and each `env` name are the exception, because there is only one editor and one value for a name: the nearest layer that says anything wins, and `open` decides that per platform.
+
+**`--trust` only ever asks about the files git tracks.** A `run` line needs agreeing to because a `git pull` can change it, and nothing pulls the two files above — so yours run without being asked about, and a project file that only copies things gates nothing. The one exception is the repository that commits a `.grove.local.toml` anyway: grove asks git rather than taking the name's word for it.
+
 <p align="center">
   <img src="docs/screens/add.svg" alt="grove's screen after pressing a: the new worktree in the tree, and under it the .grove.toml steps that copied the .env, shared node_modules, and ran bun install" width="100%">
 </p>

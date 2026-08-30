@@ -1,7 +1,7 @@
 import type { RepoPaths } from "../core/layout.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
-import { type HookFailure, type HookTarget, runCommands } from "./command.ts";
+import { type HookFailure, type HookTarget, runCommands, teardownGate } from "./command.ts";
 import { repoHooks } from "./config.ts";
 
 /**
@@ -58,6 +58,7 @@ export async function runTeardown(
       tail: "the worktree still goes, but nothing was run in it",
     },
     reporter,
+    teardownGate(hooks),
   );
 
   return { dir, planned: commands.length, ran, failed, untrusted };

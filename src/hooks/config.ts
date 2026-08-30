@@ -1,6 +1,8 @@
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { basename, join, relative } from "node:path";
 import { defaultBranch } from "../core/branches.ts";
 import { GroveError } from "../core/errors.ts";
+import { runGit } from "../core/git.ts";
 import { BARE_DIR, type RepoPaths } from "../core/layout.ts";
 import { listWorktrees } from "../core/worktrees.ts";
 import { fingerprintOf } from "./trust.ts";
@@ -76,6 +78,51 @@ import { fingerprintOf } from "./trust.ts";
  */
 
 export const HOOKS_FILE = ".grove.toml";
+
+/**
+ * `.grove.local.toml` — the same file, for the part that is not the project's.
+ *
+ * `.grove.toml` travels, and that is both its point and its limit: it is a
+ * tracked file on the default branch, so there is nowhere to write in a
+ * repository you do not own. `grove pr 42` on somebody else's project is the
+ * case that makes it concrete — the worktree still needs the `.env` and the
+ * install, and a pull request is not where you put your own.
+ *
+ * So this one sits beside it, unignored at your peril and never committed:
+ * whatever this machine wants that the project has not said. It is read out of
+ * the same worktree the committed file is, which keeps one rule about where
+ * configuration is read from rather than two.
+ *
+ * It is not gated on `--trust`, because trust answers a question this file does
+ * not raise: a `run` line is dangerous when a `git pull` can change it, and
+ * nothing pulls this. The exception is the repository that commits one anyway —
+ * see `gatedLayer`, which asks git rather than taking the name's word for it.
+ */
+export const LOCAL_HOOKS_FILE = ".grove.local.toml";
+
+/**
+ * The same file again, once per machine rather than once per repository.
+ *
+ * `open = "code ."` is a fact about you and not about any project, and writing
+ * it into every repository's `.grove.local.toml` is the bookkeeping this tool
+ * exists to remove. This is where it goes instead, and every repository on the
+ * machine reads it.
+ *
+ * `$XDG_CONFIG_HOME/grove/config.toml`, or `~/.config` where XDG is silent —
+ * the same rule `update-check.ts` follows for the cache, one directory over.
+ * Named `config.toml` and not `.grove.toml`: it is not beside a worktree, so
+ * the leading dot would hide it in the one directory whose whole contents are
+ * configuration.
+ */
+export function globalHooksPath(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string {
+  const xdg = env.XDG_CONFIG_HOME;
+  const base = xdg !== undefined && xdg !== "" ? xdg : join(home, ".config");
+
+  return join(base, "grove", "config.toml");
+}
 
 /** One `NAME=value` from `env`, split where the first `=` is. */
 export type HookEnv = {
@@ -177,11 +224,99 @@ export type Hooks = {
    * version of the file they were reading.
    */
   readonly teardown: TeardownHook;
-  /** Absent when the worktree has no `.grove.toml`. */
-  readonly path?: string;
-  /** The file's contents, hashed — what `trust` records and compares. */
+  /**
+   * The files this was read from, lowest priority first.
+   *
+   * Kept rather than thrown away after the merge, because two questions later
+   * on can only be answered by the layer a line came from: which files the
+   * trust record covers, and which file to name when telling somebody to go
+   * and read one.
+   */
+  readonly layers: readonly HookLayer[];
+  /** How much of the above came from a file git could hand you. See `GatedCounts`. */
+  readonly gated: GatedCounts;
+  /** The gated layers' contents, hashed — what `trust` records and compares. */
   readonly fingerprint?: string;
 };
+
+/**
+ * One file that was read, and whether trust has anything to say about it.
+ *
+ * `gated` is the whole of the security story for layering: a `run` line waits
+ * for `--trust` when a `git pull` could have written it, and does not when it
+ * could not. See `gatedLayer` for how that question is put to git.
+ */
+export type HookLayer = {
+  readonly path: string;
+  readonly gated: boolean;
+  /** The file as it was read, for the fingerprint the gated ones are keyed on. */
+  readonly text: string;
+};
+
+/**
+ * How much of a merged file came from a layer that answers to `--trust`.
+ *
+ * Counted per section, and per platform for `open`, because that is the
+ * precision the gate needs: a `.grove.toml` that only copies files has nothing
+ * for trust to hold back, and holding back the `run` line your own
+ * `.grove.local.toml` added on top of it would be asking you to agree to your
+ * own file. Zero here means the gate is not in the way at all.
+ */
+export type GatedCounts = {
+  readonly commands: number;
+  readonly teardown: number;
+  /** Per platform, because `open` merges per platform — see `mergeHooks`. */
+  readonly open: Readonly<Record<OpenTarget, boolean>>;
+};
+
+export const NOTHING_GATED: GatedCounts = {
+  commands: 0,
+  teardown: 0,
+  open: { macos: false, linux: false, windows: false },
+};
+
+/** Whether the `open` line that would actually run came from a gated layer. */
+export function openGatedHere(hooks: Hooks, platform: NodeJS.Platform = process.platform): boolean {
+  return hooks.gated.open[openTargetFor(platform)];
+}
+
+/**
+ * Every file that was read, by the name it is written as.
+ *
+ * `governingFiles`'s counterpart, and the difference is the subject: that one
+ * answers "what do I have to read before this will run", which only a gated
+ * file can be the answer to, and this one answers "where was this decided",
+ * which any layer can be. Bare names, because the sentence it feeds is about
+ * the configuration and not about a file to go and open.
+ */
+export function configuredFiles(hooks: Hooks): readonly string[] {
+  return hooks.layers.length === 0
+    ? [HOOKS_FILE]
+    : hooks.layers.map((layer) => basename(layer.path));
+}
+
+/**
+ * The gated files, as paths somebody can open.
+ *
+ * Relative to the repository root, so the answer is `main/.grove.toml` and not
+ * `.grove.toml`: the sentence this feeds says "go and read this", and there is
+ * a copy of that name in every worktree, only one of which governs.
+ *
+ * An ungated layer is left out on purpose — there is nothing to go and read in
+ * a file you wrote yourself — and a gated one is inside the repository by
+ * construction, which is why the relative path is the readable spelling.
+ */
+export function governingFiles(hooks: Hooks, root: string): readonly string[] {
+  const gated = hooks.layers
+    .filter((layer) => layer.gated)
+    .map((layer) => {
+      const rel = relative(root, layer.path);
+
+      return rel === "" || rel.startsWith("..") ? basename(layer.path) : rel;
+    });
+
+  return gated.length === 0 ? [HOOKS_FILE] : gated;
+}
 
 export const NO_TEARDOWN: TeardownHook = { env: [], commands: [] };
 
@@ -192,6 +327,8 @@ export const NO_HOOKS: Hooks = {
   commands: [],
   open: NO_OPEN,
   teardown: NO_TEARDOWN,
+  layers: [],
+  gated: NOTHING_GATED,
 };
 
 /** How much of the file asked for something. Zero means there is nothing to do. */
@@ -223,6 +360,8 @@ const EXAMPLES: Readonly<Record<string, string>> = {
  * pedantry about a shape that has exactly one sensible reading.
  */
 function stringsAt(
+  /** The file being read, so a refusal names the one that has to be edited. */
+  file: string,
   section: string,
   table: Record<string, unknown>,
   key: string,
@@ -232,7 +371,7 @@ function stringsAt(
   if (typeof value === "string") return [value];
 
   if (!Array.isArray(value) || value.some((each) => typeof each !== "string")) {
-    throw new GroveError("usage", `${HOOKS_FILE}: ${section}.${key} must be a list of strings`, {
+    throw new GroveError("usage", `${file}: ${section}.${key} must be a list of strings`, {
       hint: `for example: ${key} = [${JSON.stringify(EXAMPLES[key] ?? ".env")}]`,
     });
   }
@@ -255,7 +394,7 @@ function stringsAt(
  * the team is on, and inventing a name for a platform they left out would be
  * guessing at an application that is not installed.
  */
-function openAt(setup: Record<string, unknown>): OpenHook {
+function openAt(file: string, setup: Record<string, unknown>): OpenHook {
   const value = setup.open;
   if (value === undefined) return NO_OPEN;
 
@@ -266,19 +405,19 @@ function openAt(setup: Record<string, unknown>): OpenHook {
 
       throw new GroveError(
         "usage",
-        `${HOOKS_FILE}: [setup.open] has no key named ${JSON.stringify(key)}`,
+        `${file}: [setup.open] has no key named ${JSON.stringify(key)}`,
         { hint: `the keys are ${[...OPEN_TARGETS].join(", ")}` },
       );
     }
 
     return {
-      macos: commandAt("setup.open", table, "macos"),
-      linux: commandAt("setup.open", table, "linux"),
-      windows: commandAt("setup.open", table, "windows"),
+      macos: commandAt(file, "setup.open", table, "macos"),
+      linux: commandAt(file, "setup.open", table, "linux"),
+      windows: commandAt(file, "setup.open", table, "windows"),
     };
   }
 
-  const line = commandAt("setup", setup, "open");
+  const line = commandAt(file, "setup", setup, "open");
 
   return { macos: line, linux: line, windows: line };
 }
@@ -295,12 +434,17 @@ function openAt(setup: Record<string, unknown>): OpenHook {
  * nothing", and what it would do is start a shell that exits, which grove would
  * report as having opened something.
  */
-function commandAt(section: string, table: Record<string, unknown>, key: string): string {
+function commandAt(
+  file: string,
+  section: string,
+  table: Record<string, unknown>,
+  key: string,
+): string {
   const value = table[key];
   if (value === undefined) return "";
 
   if (typeof value !== "string") {
-    throw new GroveError("usage", `${HOOKS_FILE}: ${section}.${key} must be one command line`, {
+    throw new GroveError("usage", `${file}: ${section}.${key} must be one command line`, {
       hint:
         `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)} — ` +
         "and [setup.open] to say it differently per platform",
@@ -308,7 +452,7 @@ function commandAt(section: string, table: Record<string, unknown>, key: string)
   }
 
   if (value.trim().length === 0) {
-    throw new GroveError("usage", `${HOOKS_FILE}: ${section}.${key} has nothing to open`, {
+    throw new GroveError("usage", `${file}: ${section}.${key} has nothing to open`, {
       hint: `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)}`,
     });
   }
@@ -325,10 +469,10 @@ const KNOWN_TEARDOWN = new Set(["env", "run"]);
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** The name, checked once, wherever the two spellings below found it. */
-function checkedEnvName(section: string, name: string, wrote: string): string {
+function checkedEnvName(file: string, section: string, name: string, wrote: string): string {
   if (ENV_NAME.test(name)) return name;
 
-  throw new GroveError("usage", `${HOOKS_FILE}: ${section}.env has no name in ${wrote}`, {
+  throw new GroveError("usage", `${file}: ${section}.env has no name in ${wrote}`, {
     hint: `a name, then its value: ${EXAMPLES.env} — or UV_INDEX_USERNAME = "PLACE_HOLDER"`,
   });
 }
@@ -342,11 +486,11 @@ function checkedEnvName(section: string, name: string, wrote: string): string {
  * list or a table is a different matter: there is no obvious string for those,
  * and guessing one is how a config file starts lying.
  */
-function scalar(section: string, value: unknown, name: string): string {
+function scalar(file: string, section: string, value: unknown, name: string): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
 
-  throw new GroveError("usage", `${HOOKS_FILE}: ${section}.env.${name} must be a string`, {
+  throw new GroveError("usage", `${file}: ${section}.env.${name} must be a string`, {
     hint: `for example: ${name} = "PLACE_HOLDER"`,
   });
 }
@@ -384,21 +528,21 @@ function scalar(section: string, value: unknown, name: string): string {
  * pushed. For a real secret, keep pointing the tool at a credential store; this
  * is for the settings that merely have to *be there*.
  */
-function envAt(section: string, table: Record<string, unknown>): readonly HookEnv[] {
+function envAt(file: string, section: string, table: Record<string, unknown>): readonly HookEnv[] {
   const value = table.env;
 
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     return Object.entries(value).map(([name, each]) => ({
-      name: checkedEnvName(section, name, JSON.stringify(name)),
-      value: scalar(section, each, name),
+      name: checkedEnvName(file, section, name, JSON.stringify(name)),
+      value: scalar(file, section, each, name),
     }));
   }
 
-  return stringsAt(section, table, "env").map((line) => {
+  return stringsAt(file, section, table, "env").map((line) => {
     const at = line.indexOf("=");
 
     return {
-      name: checkedEnvName(section, at === -1 ? "" : line.slice(0, at), JSON.stringify(line)),
+      name: checkedEnvName(file, section, at === -1 ? "" : line.slice(0, at), JSON.stringify(line)),
       value: line.slice(at + 1),
     };
   });
@@ -411,20 +555,20 @@ function envAt(section: string, table: Record<string, unknown>): readonly HookEn
  * that quietly does nothing is the exact failure this file exists to prevent —
  * somebody would find out weeks later, from a worktree that would not build.
  */
-export function parseHooks(text: string): Hooks {
+export function parseHooks(text: string, file: string = HOOKS_FILE): Hooks {
   let parsed: unknown;
   try {
     parsed = Bun.TOML.parse(text);
   } catch (error) {
-    throw new GroveError("usage", `${HOOKS_FILE} is not valid TOML`, {
+    throw new GroveError("usage", `${file} is not valid TOML`, {
       details: [error instanceof Error ? error.message : String(error)],
       cause: error,
     });
   }
 
   const root = (parsed ?? {}) as Record<string, unknown>;
-  const setup = tableAt(root, "setup", KNOWN);
-  const teardown = tableAt(root, "teardown", KNOWN_TEARDOWN);
+  const setup = tableAt(file, root, "setup", KNOWN);
+  const teardown = tableAt(file, root, "teardown", KNOWN_TEARDOWN);
 
   // Read apart rather than one gating the other: a repository whose worktrees
   // need nothing on the way in and a `docker compose down` on the way out is an
@@ -432,15 +576,20 @@ export function parseHooks(text: string): Hooks {
   // absent would be the silent no-op this file's unknown-key check exists to
   // prevent, arrived at from the other side.
   return {
-    copy: stringsAt("setup", setup, "copy"),
-    link: stringsAt("setup", setup, "link"),
-    env: envAt("setup", setup),
-    commands: stringsAt("setup", setup, "run"),
-    open: openAt(setup),
+    copy: stringsAt(file, "setup", setup, "copy"),
+    link: stringsAt(file, "setup", setup, "link"),
+    env: envAt(file, "setup", setup),
+    commands: stringsAt(file, "setup", setup, "run"),
+    open: openAt(file, setup),
     teardown: {
-      env: envAt("teardown", teardown),
-      commands: stringsAt("teardown", teardown, "run"),
+      env: envAt(file, "teardown", teardown),
+      commands: stringsAt(file, "teardown", teardown, "run"),
     },
+    // What was read, and not where from: a text alone has no path and answers
+    // to no trust record. `readLayer` is what knows both, and it is the only
+    // caller that can say either honestly.
+    layers: [],
+    gated: NOTHING_GATED,
   };
 }
 
@@ -452,6 +601,7 @@ export function parseHooks(text: string): Hooks {
  * exact failure this file exists to prevent.
  */
 function tableAt(
+  file: string,
   root: Record<string, unknown>,
   name: string,
   known: ReadonlySet<string>,
@@ -460,18 +610,16 @@ function tableAt(
   if (section === undefined) return {};
 
   if (typeof section !== "object" || section === null || Array.isArray(section)) {
-    throw new GroveError("usage", `${HOOKS_FILE}: [${name}] must be a table`);
+    throw new GroveError("usage", `${file}: [${name}] must be a table`);
   }
 
   const table = section as Record<string, unknown>;
   for (const key of Object.keys(table)) {
     if (known.has(key)) continue;
 
-    throw new GroveError(
-      "usage",
-      `${HOOKS_FILE}: [${name}] has no key named ${JSON.stringify(key)}`,
-      { hint: `the keys are ${[...known].join(", ")}` },
-    );
+    throw new GroveError("usage", `${file}: [${name}] has no key named ${JSON.stringify(key)}`, {
+      hint: `the keys are ${[...known].join(", ")}`,
+    });
   }
 
   return table;
@@ -484,15 +632,140 @@ function tableAt(
  * need none of this, and the ones that do should be the ones that say so.
  */
 export async function readHooksFile(worktree: string): Promise<Hooks> {
-  const path = join(worktree, HOOKS_FILE);
+  const hooks = await readLayer(join(worktree, HOOKS_FILE), true);
+  if (hooks === undefined) return NO_HOOKS;
+
+  return { ...hooks, fingerprint: fingerprintOfLayers(hooks.layers) };
+}
+
+/**
+ * One file, parsed, and told what trust has to say about it.
+ *
+ * A file that is not there is `undefined` and not `NO_HOOKS`: the difference
+ * matters one level up, where a layer that exists and asks for nothing is still
+ * a layer whose contents the trust record covers.
+ */
+async function readLayer(path: string, gated: boolean): Promise<Hooks | undefined> {
   const file = Bun.file(path);
-  if (!(await file.exists())) return NO_HOOKS;
+  if (!(await file.exists())) return undefined;
 
   const text = await file.text();
-  const hooks = parseHooks(text);
+  const hooks = parseHooks(text, basename(path));
 
-  return { ...hooks, path, fingerprint: fingerprintOf(text) };
+  return {
+    ...hooks,
+    layers: [{ path, gated, text }],
+    gated: gated
+      ? {
+          commands: hooks.commands.length,
+          teardown: hooks.teardown.commands.length,
+          open: mapTargets((target) => hooks.open[target] !== ""),
+        }
+      : NOTHING_GATED,
+  };
 }
+
+/** The same answer for each platform, which is what half the merging here is. */
+function mapTargets<T>(of: (target: OpenTarget) => T): Readonly<Record<OpenTarget, T>> {
+  return { macos: of("macos"), linux: of("linux"), windows: of("windows") };
+}
+
+/**
+ * Whether git tracks a file, which is whether a pull could have written it.
+ *
+ * The question the trust gate actually wants asked. `.grove.local.toml` is not
+ * gated because nothing pushes it — but that is a claim about your repository,
+ * not about the name, and a project that commits one has made it false. So it
+ * is put to git rather than assumed, once, when the file turns up.
+ *
+ * A repository that cannot answer — no index, a worktree that has gone —
+ * counts as tracked. The costly direction is the one that runs a command
+ * nobody agreed to, and "ask again after `--trust`" is the cheap one.
+ */
+async function gatedLayer(worktree: string, name: string): Promise<boolean> {
+  const result = await runGit(["ls-files", "--error-unmatch", "--", name], { cwd: worktree });
+
+  return result.code === 0 || result.code > 1;
+}
+
+/**
+ * Two layers, folded into the one file the rest of this package reads.
+ *
+ * **Each layer adds to the ones under it.** `copy` and `link` collect the paths
+ * every layer named, and `run` collects the commands in the order the layers are
+ * read, so the project's install runs before the step you added on top of it.
+ * `open` and each `env` name are the exception, because there is only one editor
+ * and one value for a name: the nearest layer that says anything wins, and
+ * `open` decides that per platform, since a layer may name only the machine it
+ * was written on.
+ *
+ * What a higher layer cannot do is un-say something. There is no key for
+ * "not that one", and adding one would make the effective configuration a thing
+ * you work out rather than read. A `run` line you want gone belongs out of the
+ * file that has it.
+ */
+export function mergeHooks(base: Hooks, over: Hooks): Hooks {
+  const names = new Set(over.env.map((each) => each.name));
+  const teardownNames = new Set(over.teardown.env.map((each) => each.name));
+  const takes = (target: OpenTarget) => over.open[target] !== "";
+
+  return {
+    copy: union(base.copy, over.copy),
+    link: union(base.link, over.link),
+    env: [...base.env.filter((each) => !names.has(each.name)), ...over.env],
+    commands: [...base.commands, ...over.commands],
+    open: mapTargets((target) => (takes(target) ? over.open[target] : base.open[target])),
+    teardown: {
+      env: [
+        ...base.teardown.env.filter((each) => !teardownNames.has(each.name)),
+        ...over.teardown.env,
+      ],
+      commands: [...base.teardown.commands, ...over.teardown.commands],
+    },
+    layers: [...base.layers, ...over.layers],
+    gated: {
+      commands: base.gated.commands + over.gated.commands,
+      teardown: base.gated.teardown + over.gated.teardown,
+      // The line that would run is the one whose gating counts, so this follows
+      // `open` above exactly: whoever supplied the line supplies the answer.
+      open: mapTargets((target) =>
+        takes(target) ? over.gated.open[target] : base.gated.open[target],
+      ),
+    },
+  };
+}
+
+/** Appended, minus what is already there: a path names the same thing twice. */
+function union(base: readonly string[], over: readonly string[]): readonly string[] {
+  return [...base, ...over.filter((path) => !base.includes(path))];
+}
+
+/**
+ * What `trust` records, once there can be more than one file to record.
+ *
+ * Only the gated layers, because they are the only ones the record is about —
+ * and a change to your own `.grove.local.toml` withdrawing the agreement you
+ * gave to the project's file would be a question asked for no reason.
+ *
+ * One gated layer hashes its own text and nothing else, which is what this did
+ * before layers existed. That is deliberate: every repository already carrying a
+ * trust record has exactly one, and a fingerprint that changed shape would ask
+ * every one of them to agree again to a file they have not touched.
+ */
+function fingerprintOfLayers(layers: readonly HookLayer[]): string | undefined {
+  const gated = layers.filter((layer) => layer.gated);
+  const first = gated[0];
+  if (first === undefined) return undefined;
+  if (gated.length === 1) return fingerprintOf(first.text);
+
+  return fingerprintOf(gated.map((layer) => `${basename(layer.path)}\0${layer.text}`).join("\0"));
+}
+
+/** Where the machine-wide layer is read from, and who is allowed to say otherwise. */
+export type HooksOptions = {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly home?: string;
+};
 
 /**
  * A configured path, checked rather than rewritten.
@@ -534,13 +807,29 @@ export function checkedPath(key: "copy" | "link" | string, value: string): strin
  * paths and then explained the third would leave a worktree nobody can reason
  * about.
  */
-export async function readHooks(worktree: string): Promise<Hooks> {
-  const hooks = await readHooksFile(worktree);
+export async function readHooks(worktree: string, options: HooksOptions = {}): Promise<Hooks> {
+  // Read in the order they take effect, lowest first: the machine, then the
+  // project, then the machine again with the project in front of it. The
+  // sequence is the whole of the precedence rule, which is why it is one list
+  // and not three calls with a comment each.
+  const local = join(worktree, LOCAL_HOOKS_FILE);
+  const found = [
+    await readLayer(globalHooksPath(options.env, options.home), false),
+    await readLayer(join(worktree, HOOKS_FILE), true),
+    // Asked of git only once there is a file to ask about: the tracked check is
+    // a process, and the repository that has no local layer is every repository.
+    (await Bun.file(local).exists())
+      ? await readLayer(local, await gatedLayer(worktree, LOCAL_HOOKS_FILE))
+      : undefined,
+  ].filter((layer): layer is Hooks => layer !== undefined);
+
+  const hooks = found.reduce(mergeHooks, NO_HOOKS);
 
   return {
     ...hooks,
     copy: hooks.copy.map((value) => checkedPath("copy", value)),
     link: hooks.link.map((value) => checkedPath("link", value)),
+    fingerprint: fingerprintOfLayers(hooks.layers),
   };
 }
 
@@ -574,10 +863,22 @@ async function trunkWorktree(repo: RepoPaths): Promise<string | undefined> {
  * removed it — where reading nothing at all would be a worse answer than
  * reading what is in front of us.
  */
-export async function repoHooks(repo: RepoPaths, fallback?: string): Promise<Hooks> {
+export async function repoHooks(
+  repo: RepoPaths,
+  fallback?: string,
+  options: HooksOptions = {},
+): Promise<Hooks> {
   const trunk = (await trunkWorktree(repo)) ?? fallback;
+  // No worktree to read a project's file out of still leaves the machine's own,
+  // which is about you and not about this repository — so it applies to the
+  // repository that has lost its trunk exactly as it does to every other one.
+  if (trunk === undefined) {
+    const global = await readLayer(globalHooksPath(options.env, options.home), false);
 
-  return trunk === undefined ? NO_HOOKS : readHooks(trunk);
+    return global ?? NO_HOOKS;
+  }
+
+  return readHooks(trunk, options);
 }
 
 export async function sourceWorktree(

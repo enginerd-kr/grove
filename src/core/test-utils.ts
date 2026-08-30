@@ -176,7 +176,17 @@ export async function withTempRepo(body: (repo: TempRepo) => Promise<void>): Pro
   const root = await realpath(await mkdtemp(join(tmpdir(), "grove-")));
   const restore = new Map<string, string | undefined>();
 
-  for (const [key, value] of Object.entries(GIT_ENV)) {
+  const pinned = {
+    ...GIT_ENV,
+    // The machine-wide `.grove.toml` layer, pointed at a directory that has
+    // none — for the same reason `GIT_CONFIG_GLOBAL` points at `/dev/null`. A
+    // developer with `open = "code ."` in their own `~/.config/grove/config.toml`
+    // would otherwise be running a different suite from CI, and the tests that
+    // would notice are the ones about what a repository asked for.
+    XDG_CONFIG_HOME: join(root, "config"),
+  };
+
+  for (const [key, value] of Object.entries(pinned)) {
     restore.set(key, process.env[key]);
     process.env[key] = value;
   }

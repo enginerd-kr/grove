@@ -355,12 +355,12 @@ describe("readHooksFile", () => {
       const hooks = await readHooksFile(repo.work);
 
       expect(hooks).toEqual(NO_HOOKS);
-      expect(hooks.path).toBeUndefined();
+      expect(hooks.layers).toEqual([]);
       expect(hooks.fingerprint).toBeUndefined();
     });
   });
 
-  test("carries the file's path and fingerprint", async () => {
+  test("carries the file it read and the fingerprint of it", async () => {
     await withTempRepo(async (repo) => {
       const text = '[setup]\ncopy = [".env"]\nrun = ["bun install"]\n';
       await Bun.write(join(repo.work, HOOKS_FILE), text);
@@ -368,7 +368,7 @@ describe("readHooksFile", () => {
       const hooks = await readHooksFile(repo.work);
 
       expect(hooks.copy).toEqual([".env"]);
-      expect(hooks.path).toBe(join(repo.work, HOOKS_FILE));
+      expect(hooks.layers).toEqual([{ path: join(repo.work, HOOKS_FILE), gated: true, text }]);
       expect(hooks.fingerprint).toBe(fingerprintOf(text));
     });
   });
@@ -491,7 +491,7 @@ describe("repoHooks", () => {
 
       expect(hooks.copy).toEqual([".env"]);
       expect(hooks.commands).toEqual([]);
-      expect(hooks.path).toBe(join(fixture.trunk, HOOKS_FILE));
+      expect(hooks.layers.map((layer) => layer.path)).toEqual([join(fixture.trunk, HOOKS_FILE)]);
     });
   });
 

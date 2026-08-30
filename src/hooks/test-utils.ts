@@ -5,7 +5,7 @@ import { entryExists } from "../core/fs.ts";
 import { type RepoPaths, repoPaths } from "../core/layout.ts";
 import { seedGit, type TempRepo, withTempRepo } from "../core/test-utils.ts";
 import type { Reporter, Step } from "../report/reporter.ts";
-import { HOOKS_FILE } from "./config.ts";
+import { globalHooksPath, HOOKS_FILE, LOCAL_HOOKS_FILE } from "./config.ts";
 import { runSetup, type SetupOptions, type SetupResult } from "./setup.ts";
 
 /**
@@ -77,6 +77,21 @@ export type Fixture = {
   readonly log: Recorder;
   /** Writes the trunk's `.grove.toml`, which is the one that governs. */
   readonly configure: (text: string) => Promise<void>;
+  /** Writes the trunk's `.grove.local.toml` — the layer that is yours, not the project's. */
+  readonly configureLocal: (text: string) => Promise<void>;
+  /**
+   * Writes the machine-wide layer, under the throwaway `XDG_CONFIG_HOME`
+   * `withTempRepo` installs — which is what keeps a developer's real one out.
+   */
+  readonly configureGlobal: (text: string) => Promise<void>;
+  /**
+   * Commits what the trunk holds, which is what makes a layer gated.
+   *
+   * The fixture's files are written and not committed, so `.grove.local.toml`
+   * arrives untracked — the ordinary case, and the one the gate lets through.
+   * A test about the repository that commits one anyway calls this.
+   */
+  readonly commitTrunk: () => Promise<void>;
 };
 
 /**
@@ -107,6 +122,16 @@ export async function withRepo(body: (fixture: Fixture) => Promise<void>): Promi
       log,
       configure: async (text) => {
         await Bun.write(join(clone.worktree, HOOKS_FILE), text);
+      },
+      configureLocal: async (text) => {
+        await Bun.write(join(clone.worktree, LOCAL_HOOKS_FILE), text);
+      },
+      configureGlobal: async (text) => {
+        await Bun.write(globalHooksPath(), text);
+      },
+      commitTrunk: async () => {
+        await seedGit(clone.worktree, ["add", "-A"]);
+        await seedGit(clone.worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "Configure"]);
       },
     });
   });

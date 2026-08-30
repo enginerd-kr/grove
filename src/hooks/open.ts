@@ -2,7 +2,7 @@ import { openShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import type { Reporter } from "../report/reporter.ts";
 import { commandEnvFor, type HookFailure, type HookTarget } from "./command.ts";
-import { HOOKS_FILE, type Hooks, openHere, openTargetFor, wantsOpen } from "./config.ts";
+import { configuredFiles, type Hooks, openHere, openTargetFor, wantsOpen } from "./config.ts";
 
 /**
  * `open` — the hook whose subject is a person rather than a worktree.
@@ -82,7 +82,10 @@ export async function openWhatItAsksFor(
     // the rest of the team and not for you is a thing to find out from the run
     // that did not open one, not from asking why afterwards.
     if (wantsOpen(hooks.open) && !untrusted) {
-      reporter.info(`nothing in ${HOOKS_FILE} opens on ${openTargetFor(process.platform)}`);
+      reporter.info(
+        `nothing in ${configuredFiles(hooks).join(" and ")} opens on ` +
+          openTargetFor(process.platform),
+      );
     }
 
     return undefined;

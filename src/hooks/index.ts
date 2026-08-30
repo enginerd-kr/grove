@@ -18,7 +18,7 @@
  *
  * Inside, one file per hook and three they share:
  *
- * - `config.ts`   the file: what it says, and which copy of it governs
+ * - `config.ts`   the files: what they say, and how the three of them stack up
  * - `trust.ts`    the record of having read it, kept out of the repository
  * - `command.ts`  a command line, its environment, and the gate they pass
  * - `setup.ts`    `[setup]` — filling a new worktree in
@@ -29,8 +29,24 @@
  * themselves reach for the module they mean.
  */
 
-export { failureFor, type HookFailure, type HookTarget, pendingCommands } from "./command.ts";
-export { HOOKS_FILE, type Hooks, repoHooks } from "./config.ts";
+export {
+  failureFor,
+  type HookFailure,
+  type HookTarget,
+  pendingCommands,
+  setupGate,
+} from "./command.ts";
+export {
+  configuredFiles,
+  globalHooksPath,
+  HOOKS_FILE,
+  type Hooks,
+  LOCAL_HOOKS_FILE,
+  openHere,
+  repoHooks,
+  wantsOpen,
+} from "./config.ts";
+export { openWhatItAsksFor } from "./open.ts";
 export {
   describeSetup,
   runSetup,

@@ -1,9 +1,15 @@
-import { relative } from "node:path";
 import { GroveError } from "../core/errors.ts";
 import { runShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import type { Reporter } from "../report/reporter.ts";
-import { HOOKS_FILE, type HookEnv, type Hooks, openHere, repoHooks } from "./config.ts";
+import {
+  governingFiles,
+  type HookEnv,
+  type Hooks,
+  openGatedHere,
+  openHere,
+  repoHooks,
+} from "./config.ts";
 import { isTrusted } from "./trust.ts";
 
 /**
@@ -48,10 +54,49 @@ export async function pendingCommands(
   // makes it more worth listing rather than less.
   const opening = openHere(hooks);
   const waiting = opening === "" ? hooks.commands : [...hooks.commands, opening];
-  if (waiting.length === 0 || hooks.fingerprint === undefined) return [];
+  // Nothing gated is nothing to ask about, whatever else the file asks for: a
+  // `.grove.local.toml` you wrote is not a thing to be shown and asked to agree
+  // to. Those commands run, and this returns the empty answer that says so.
+  if (waiting.length === 0 || setupGate(hooks).gated === 0) return [];
+  if (hooks.fingerprint === undefined) return [];
 
   return (await isTrusted(repo.gitDir, hooks.fingerprint)) ? [] : waiting;
 }
+
+/**
+ * How much of `[setup]` the trust record answers for, and how much there is.
+ *
+ * Both halves, because the warning needs both: the count that has not been
+ * trusted is the one to name, and the difference is what is being held back
+ * with it. `open` is one either way — one application, however many arguments
+ * spell it — and it is in here because the gate has to cover the whole of what
+ * the file would start.
+ */
+export function setupGate(hooks: Hooks): Gate {
+  return {
+    gated: hooks.gated.commands + (openGatedHere(hooks) ? 1 : 0),
+    total: hooks.commands.length + (openHere(hooks) === "" ? 0 : 1),
+  };
+}
+
+/** `[teardown]`'s half of the same question. It has no `open`, so it is a count. */
+export function teardownGate(hooks: Hooks): Gate {
+  return { gated: hooks.gated.teardown, total: hooks.teardown.commands.length };
+}
+
+/**
+ * What waits for `--trust`, and what waits with it.
+ *
+ * `gated` is what a `git pull` could have written — the part trust is actually
+ * about. `total` is every command the section holds, gated or not, because a
+ * refusal stops all of them: they were written as a sequence, and running the
+ * half nobody had to agree to would be running it against the absence of the
+ * other half.
+ */
+export type Gate = {
+  readonly gated: number;
+  readonly total: number;
+};
 
 /**
  * The error a failed command becomes, or nothing.
@@ -122,36 +167,42 @@ export async function runCommands(
   warning: { readonly noun: string; readonly tail: string },
   reporter: Reporter,
   /**
-   * How much else this gate answers for without running it — `[setup]`'s `open`.
+   * How much of this section the trust record answers for — see `Gate`.
    *
-   * A count and not a list, because `open` is one application however many
-   * arguments spell it. The gate is here and not beside the caller that opens,
-   * so that the promise this file makes stays literally true: one piece of code
-   * decides trust for the whole file. Counted in the warning as well, because
-   * "1 command has not been trusted" beside a file asking for two things is the
-   * wrong number to read.
+   * Worked out by the caller, which is the one that knows whether `open` is
+   * part of its question, and passed rather than recomputed here so that the
+   * promise this file makes stays literally true: one piece of code decides
+   * trust for the whole file.
    */
-  alsoGated = 0,
+  gate: Gate,
 ): Promise<{ ran: readonly string[]; failed?: HookFailure; untrusted: boolean }> {
   const { commands, env } = section;
-  const gated = commands.length + alsoGated;
 
   const untrusted =
-    gated > 0 &&
+    gate.gated > 0 &&
     hooks.fingerprint !== undefined &&
     !(await isTrusted(repo.gitDir, hooks.fingerprint));
 
   if (untrusted) {
-    // Named by the file that actually governs, which is the trunk's — pointing
+    // Named by the files that actually govern, which are the trunk's — pointing
     // at the worktree being set up would send somebody to read a copy that
-    // nothing consults, or to a file that is not there at all.
-    const where = hooks.path === undefined ? HOOKS_FILE : relative(repo.root, hooks.path);
+    // nothing consults, or to a file that is not there at all. Only the gated
+    // ones: there is nothing to go and read in a file you wrote yourself.
+    const where = governingFiles(hooks, repo.root).join(" and ");
 
     reporter.warn(
-      `${plural(gated, warning.noun)} in ${where} ${
-        gated === 1 ? "has" : "have"
+      `${plural(gate.gated, warning.noun)} in ${where} ${
+        gate.gated === 1 ? "has" : "have"
       } not been trusted here — ${warning.tail}`,
     );
+
+    // The ones nobody has to agree to, held back with the ones they do. Said
+    // out loud because it is otherwise a file of your own that silently did
+    // nothing, which is the failure `.grove.toml` refuses unknown keys over.
+    const held = gate.total - gate.gated;
+    if (held > 0) {
+      reporter.info(`${plural(held, warning.noun)} of your own waited with ${where}`);
+    }
 
     return { ran: [], untrusted };
   }
