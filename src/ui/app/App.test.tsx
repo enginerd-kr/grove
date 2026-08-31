@@ -1084,9 +1084,17 @@ describe("the keys", () => {
 
     await toLogin(ui);
     ui.stdin.write("s");
+    // `feat/login` has commits of its own under a trunk that has moved, so
+    // both spellings of the sync stop to ask before they force-push — which
+    // rows those are is `wouldForcePush`'s to pin, and answering is this
+    // test's, since the key does nothing at all until it is answered.
+    await settled(ui, (frame) => frame.includes("sync feat/login?"));
+    ui.stdin.write("y");
     await settled(ui, (frame) => frame.includes("1 up-to-date"));
 
     await run(ui, "sync-all");
+    await settled(ui, (frame) => frame.includes("sync every worktree?"));
+    ui.stdin.write("y");
     await settled(ui, (frame) => IN_LIST(frame) && frame.includes("1 up-to-date"));
 
     // The one action with no target, which is what `undefined` says here.
@@ -1192,8 +1200,11 @@ describe("the keys", () => {
     await press(ui, "s");
     // `/sync-all` after it, so the wait has something to land on: a key that
     // did nothing leaves no frame to wait for, and the sync that follows is
-    // proof the screen was reading keys the whole time.
+    // proof the screen was reading keys the whole time. It asks first, over
+    // `feat/login`, which is also proof `s` opened no question of its own.
     await run(ui, "sync-all");
+    await settled(ui, (frame) => frame.includes("sync every worktree?"));
+    ui.stdin.write("y");
     await settled(ui, (frame) => frame.includes("1 up-to-date"));
 
     expect(calls.synced).toEqual([undefined]);
@@ -1660,6 +1671,8 @@ describe("the keys", () => {
     const ui = await opened_with(service);
 
     await run(ui, "sync-all");
+    await settled(ui, (each) => each.includes("sync every worktree?"));
+    ui.stdin.write("y");
     const frame = await settled(ui, (each) => each.includes("stopped on a conflict"));
 
     // Everything the refusal carried, and a screen that is still a screen: the
