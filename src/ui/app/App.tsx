@@ -231,7 +231,7 @@ const IDLE_AFTER_FACTOR = 2;
 const MAX_REFRESH_FACTOR = 5;
 
 // Standing advice about features that are easy to miss, shown alongside
-// whatever the session earned (a release, a missing shell function) so the
+// whatever the session earned (a release waiting to be upgraded to) so the
 // slot always has more than one thing to say and rotation is never a no-op.
 const GENERAL_TIPS: readonly Message[] = [
   { kind: "info", text: "tip: h and l don't stop at the first fold — they keep going" },
@@ -636,8 +636,8 @@ export function App({
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
   const [message, setMessage] = useState<Message | undefined>(undefined);
-  // Every tip that earned the slot on this open: whichever of the release
-  // and missing-shell-function tips apply, plus the standing `GENERAL_TIPS`.
+  // Every tip that earned the slot on this open: the release tip when there is
+  // one to give, plus the standing `GENERAL_TIPS`.
   // Never empty once set. See the rotation `useInterval` below.
   const [tipPool, setTipPool] = useState<readonly Message[]>([]);
   /**
@@ -964,7 +964,7 @@ export function App({
       if (!live) return;
       // One slot, several claims: whatever already owns the line — an error,
       // an action's outcome — keeps it. A released upgrade goes first because
-      // it is news; the shell tip is standing advice, so it can wait its turn.
+      // it is news; the rest is standing advice, so it can wait its turn.
       const tips: Message[] = [];
       if (latest !== undefined) {
         tips.push({

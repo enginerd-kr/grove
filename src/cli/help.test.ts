@@ -26,7 +26,7 @@ function requiredArgs(spec: SubcommandSpec): readonly string[] {
   return spec.args
     .split(/\s+/)
     .filter((token) => token.startsWith("<"))
-    .map((token) => (token === "<shell>" ? "zsh" : "x"));
+    .map(() => "x");
 }
 
 /** A value the flag will accept, so a `run` command is what comes back. */

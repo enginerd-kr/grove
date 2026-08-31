@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { type GroveError, isGroveError } from "../core/errors.ts";
 import { pathExists } from "../core/fs.ts";
@@ -16,7 +15,6 @@ import type { GlobalOptions, GroveCommand } from "./args.ts";
 import { ExitCode, errorToExitCode } from "./exit-codes.ts";
 import { SUBCOMMANDS } from "./help.ts";
 import { runCommand } from "./run.ts";
-import { runCli } from "./test-cli.ts";
 
 /**
  * The wiring between a parsed command line and a command.
@@ -122,29 +120,6 @@ async function gitOnlyPath(root: string): Promise<string> {
 }
 
 /**
- * Whether a child process would take `HOME` for its home directory.
- *
- * A guard, not an assertion about the product: `homedir()` is read once at
- * startup and ignores a later `process.env.HOME`, so `install` — the one
- * command that writes outside the repository — is only ever run as a child.
- * If that child would not honour `HOME` either, the rc file it appends to is
- * the developer's own, and this has to stop before that happens rather than
- * report it afterwards.
- */
-async function homeIsHonoured(home: string): Promise<boolean> {
-  const probe = Bun.spawn(["bun", "-e", 'process.stdout.write(require("node:os").homedir())'], {
-    env: { ...process.env, HOME: home },
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-
-  const [, seen] = await Promise.all([probe.exited, new Response(probe.stdout).text()]);
-
-  return seen === home;
-}
-
-/**
  * One probe per subcommand, each asserting an outcome only that command's
  * implementation could produce.
  *
@@ -203,28 +178,6 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     expect(log.out).toEqual([`${root}\n`]);
   },
 
-  install: async () => {
-    const home = await mkdtemp(join(tmpdir(), "grove-home-"));
-
-    try {
-      expect(await homeIsHonoured(home)).toBe(true);
-
-      const result = await runCli(["install", "zsh", "--json"], {
-        // Cleared rather than inherited: either would relocate the rc file out
-        // of the throwaway home and into the real one.
-        env: { HOME: home, ZDOTDIR: undefined, XDG_CONFIG_HOME: undefined },
-      });
-
-      expect(result.exitCode).toBe(ExitCode.ok);
-
-      const written = JSON.parse(result.stdout) as { outcome: string; rcFile: string };
-      expect(written.rcFile).toBe(join(home, ".zshrc"));
-      expect(written.outcome).toBe("installed");
-    } finally {
-      await rm(home, { recursive: true, force: true });
-    }
-  },
-
   open: async ({ root, run, attempt }) => {
     // The root is in no worktree, so a run that names none has nothing to open
     // — the refusal this command's own resolution raises, which is what this
@@ -243,27 +196,6 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     // which `bun test` has when it is run in one and has not when CI runs it.
     // Both answers are narrated, and either proves the hook was reached.
     expect(log.err.join("")).toMatch(/opening true|did not open/);
-  },
-
-  "shell-init": async ({ run }) => {
-    const log = await run({ name: "shell-init", shell: "zsh" });
-
-    // The function body, which nothing else prints.
-    expect(log.out.join("")).toContain("GROVE_CD_FILE");
-    expect(log.err).toEqual([]);
-  },
-
-  completion: async ({ run }) => {
-    const script = await run({ name: "completion", what: "zsh" });
-
-    // The completion function, which nothing else prints.
-    expect(script.out.join("")).toContain("compdef _grove grove");
-    expect(script.err).toEqual([]);
-
-    // And the other half of the same subcommand: the list its script asks for,
-    // which is a repository question and not a shell one.
-    const words = await run({ name: "completion", what: "targets" });
-    expect(words.out.join("")).toContain("main");
   },
 
   list: async ({ run }) => {
@@ -711,7 +643,7 @@ describe("the context a command is handed", () => {
 
   test("the reporter's out is the only route to stdout", async () => {
     await withFixture(async ({ run }) => {
-      const log = await run({ name: "shell-init", shell: "zsh" });
+      const log = await run({ name: "path", target: undefined });
 
       // A command that has nothing to narrate narrates nothing — the writers
       // are two destinations, not one stream split by convention.

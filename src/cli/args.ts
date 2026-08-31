@@ -1,6 +1,5 @@
 import { parseArgs } from "node:util";
 import { version } from "../../package.json";
-import { type CompletionWord, isCompletionWord } from "./completion.ts";
 import type { FlagSpec, SubcommandSpec } from "./help.ts";
 import {
   BIN_NAME,
@@ -10,7 +9,6 @@ import {
   GLOBAL_FLAGS,
   SUBCOMMANDS,
 } from "./help.ts";
-import { isShell, SHELLS, type Shell } from "./shell-init.ts";
 
 /**
  * Argument parsing, kept apart from the process it drives.
@@ -96,18 +94,6 @@ export type GroveCommand =
       readonly target?: string;
       readonly trust: boolean;
     }
-  | { readonly name: "shell-init"; readonly shell: Shell }
-  | {
-      readonly name: "completion";
-      /**
-       * A shell to print a script for, or a word one of those scripts asks back
-       * with — the two are one subcommand because they are one feature, and a
-       * separate `__complete` nobody would ever type would be a second name for
-       * the same thing.
-       */
-      readonly what: Shell | CompletionWord;
-    }
-  | { readonly name: "install"; readonly shell?: Shell }
   | {
       readonly name: "reset";
       readonly target: string;
@@ -162,19 +148,6 @@ function text(output: string): CliCommand {
 }
 
 function unknownSubcommand(name: string): CliCommand {
-  // `grove cd` reaching the binary means the shell function is not installed —
-  // a child process cannot move its parent shell, so the answer is the one
-  // line that installs the function, not a list of commands that are not it.
-  if (name === "cd") {
-    return {
-      kind: "error",
-      message:
-        "`grove cd` is a shell function, and it is not installed in this shell.\n" +
-        "Run `grove install`, or add to your shell's rc file yourself:\n" +
-        '  eval "$(grove shell-init zsh)"   # or bash, fish',
-    };
-  }
-
   return {
     kind: "error",
     message: `unknown command ${JSON.stringify(name)}. Expected one of: ${SUBCOMMANDS.map(
@@ -206,13 +179,6 @@ function globalsFrom(values: ParsedValues): GlobalOptions {
     verbose: bool(values, "verbose"),
     headless: bool(values, "headless"),
   };
-}
-
-function notAShell(spec: SubcommandSpec, value: string): CliCommand {
-  return usageError(
-    spec,
-    `${JSON.stringify(value)} is not a shell this knows; expected ${SHELLS.join(", ")}`,
-  );
 }
 
 function buildCommand(
@@ -315,27 +281,6 @@ function buildCommand(
       return { name: "path", target: first };
     case "open":
       return { name: "open", target: first, trust: bool(values, "trust") };
-    case "shell-init": {
-      if (first === undefined) {
-        return usageError(spec, `${spec.name} needs a shell: ${SHELLS.join(", ")}`);
-      }
-      if (!isShell(first)) return notAShell(spec, first);
-      return { name: "shell-init", shell: first };
-    }
-    case "completion": {
-      if (first === undefined) {
-        return usageError(spec, `${spec.name} needs a shell: ${SHELLS.join(", ")}`);
-      }
-      // The callback words are accepted and not advertised in the refusal: they
-      // are what the printed scripts run, and somebody who mistyped a shell name
-      // is not helped by being offered two words about worktree names.
-      if (!isShell(first) && !isCompletionWord(first)) return notAShell(spec, first);
-      return { name: "completion", what: first };
-    }
-    case "install": {
-      if (first !== undefined && !isShell(first)) return notAShell(spec, first);
-      return { name: "install", shell: first };
-    }
     case "reset": {
       if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to reset`);
       return {

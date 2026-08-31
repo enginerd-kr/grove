@@ -239,7 +239,7 @@ export function worktreeDir(root: string, path: string): string {
  *
  * Order matters. Branch first, because that is what people say out loud; then
  * the directory, which for a nested layout is the whole relative path (`feat`
- * alone is a folder, not a worktree); then a path, for tab completion.
+ * alone is a folder, not a worktree); then a path, for what a shell filled in.
  */
 export function resolveTarget(
   target: string,

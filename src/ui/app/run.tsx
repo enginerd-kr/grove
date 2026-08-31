@@ -2,7 +2,6 @@ import { resolve } from "node:path";
 import { render } from "ink";
 import { useMemo, useState } from "react";
 import { version } from "../../../package.json";
-import { hasSeenShellSetup, markShellSetupSeen } from "../../cli/install.ts";
 import { type Discovery, findRepo } from "../../core/discover.ts";
 import { isEmptyOrMissing } from "../../core/fs.ts";
 import { killRunningGit } from "../../core/git.ts";
@@ -13,7 +12,6 @@ import type { Reporter } from "../../report/reporter.ts";
 import { App } from "./App.tsx";
 import { Pick } from "./Pick.tsx";
 import { Setup } from "./Setup.tsx";
-import { ShellSetup } from "./ShellSetup.tsx";
 import { createSetupService, createWorktreeService } from "./service.ts";
 
 /**
@@ -46,23 +44,6 @@ export type AppOptions = {
 function updateCheckEnabled(): boolean {
   if (process.env.GROVE_UPDATE_CHECK === "0") return false;
   if (process.env.GROVE_UPDATE_CHECK === "1") return true;
-
-  return process.env.GROVE_RELEASE === "true";
-}
-
-/**
- * Whether a fresh `grove` may open on `ShellSetup` instead of going straight
- * to the app.
- *
- * Gated the same way as the update check, and for the same reason: a source
- * checkout is a developer's, not the audience this onboards, and it is also
- * every test in this repository — without the gate, whichever machine ran the
- * test suite first would decide, from real state under its real `$HOME`,
- * whether every run after it saw the screen.
- */
-function shellSetupEnabled(): boolean {
-  if (process.env.GROVE_SHELL_SETUP === "0") return false;
-  if (process.env.GROVE_SHELL_SETUP === "1") return true;
 
   return process.env.GROVE_RELEASE === "true";
 }
@@ -152,26 +133,6 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: Grove
 }
 
 /**
- * `ShellSetup`, ahead of everything else, when this launch earned it.
- *
- * A local `seen` rather than folding the flag into `GroveProps`: `Grove`
- * itself has nothing to say about shell setup, and threading a prop through
- * it just to gate what wraps it would make it lie about what it depends on.
- */
-function Root({
-  showShellSetup,
-  ...groveProps
-}: GroveProps & { readonly showShellSetup: boolean }) {
-  const [seen, setSeen] = useState(!showShellSetup);
-
-  if (!seen) {
-    return <ShellSetup folder={groveProps.folder} onDone={() => setSeen(true)} />;
-  }
-
-  return <Grove {...groveProps} />;
-}
-
-/**
  * How the screen came down, which is the one thing its caller has to know.
  *
  * An interrupt is not a quit and a script wrapping this should be able to tell
@@ -190,18 +151,6 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<App
 
   const store = new LineStore();
 
-  // Whether the wrapper `shell-init` installs is what started this. It hands
-  // every run a temp file through `GROVE_CD_FILE` — nothing here writes to it
-  // any more, but its presence is still the only signal that says the function
-  // is in this shell's rc file, which is what decides whether `grove cd` works.
-  const shellWrapped = (process.env.GROVE_CD_FILE ?? "").length > 0;
-
-  // Stamped before the screen is even rendered, the same way `installShellInit`
-  // stamps a decline: a launch that opens the screen has been offered it,
-  // whatever happens next.
-  const showShellSetup = shellSetupEnabled() && !shellWrapped && !(await hasSeenShellSetup());
-  if (showShellSetup) await markShellSetupSeen();
-
   // Results have nowhere else to go in an app: there is no pipeline waiting on
   // stdout, so a command's output becomes another progress line.
   const reporter = createStoreReporter(store, (text) => {
@@ -217,9 +166,8 @@ export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<App
   };
 
   const instance = render(
-    <Root
+    <Grove
       onCancel={cancel}
-      showShellSetup={showShellSetup}
       found={found}
       folder={folder}
       inPlace={inPlace}

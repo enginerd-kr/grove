@@ -35,7 +35,7 @@ function requiredArgs(spec: SubcommandSpec): readonly string[] {
   return spec.args
     .split(/\s+/)
     .filter((token) => token.startsWith("<"))
-    .map((token) => (token === "<shell>" ? "zsh" : "x"));
+    .map(() => "x");
 }
 
 describe("the subcommand table", () => {
@@ -75,16 +75,6 @@ describe("the subcommand table", () => {
     expect(parsed.message).toContain('unknown command "nope"');
     for (const spec of SUBCOMMANDS) expect(parsed.message).toContain(spec.name);
     expect(parsed.usage).toContain("Usage: grove <command>");
-  });
-
-  test("`grove cd` is answered with the line that installs the shell function", () => {
-    // Reaching the binary at all means the function is not installed, and a list
-    // of commands would be the one answer that cannot help.
-    const parsed = error(["cd"]);
-
-    expect(parsed.message).toContain("shell function");
-    expect(parsed.message).toContain("grove install");
-    expect(parsed.usage).toBeUndefined();
   });
 });
 
@@ -184,7 +174,6 @@ describe("positional arity", () => {
     expect(error(["rename", "a"]).message).toContain("needs a new branch name");
     expect(error(["remove"]).message).toContain("needs a worktree to remove");
     expect(error(["reset"]).message).toContain("needs a worktree to reset");
-    expect(error(["shell-init"]).message).toContain("needs a shell");
   });
 
   test("too many is a usage error naming the extras", () => {
@@ -198,7 +187,7 @@ describe("positional arity", () => {
   test("optional positionals may be left out", () => {
     expect(run(["path"]).command).toEqual({ name: "path", target: undefined });
     expect(run(["clone", "url"]).command).toMatchObject({ url: "url", dir: undefined });
-    expect(run(["install"]).command).toEqual({ name: "install", shell: undefined });
+    expect(run(["open"]).command).toEqual({ name: "open", target: undefined, trust: false });
   });
 
   test("every command's arity comes from the usage line, not from a second list", () => {
@@ -304,19 +293,6 @@ describe("flags land where the command expects them", () => {
       abortOnConflict: false,
       push: false,
     });
-  });
-
-  test("a shell is checked while it is still an argument", () => {
-    expect(run(["shell-init", "fish"]).command).toEqual({ name: "shell-init", shell: "fish" });
-    expect(run(["install", "bash"]).command).toEqual({ name: "install", shell: "bash" });
-
-    for (const argv of [
-      ["shell-init", "tcsh"],
-      ["install", "tcsh"],
-    ]) {
-      expect(error(argv).message).toContain("is not a shell this knows");
-      expect(error(argv).message).toContain("zsh, bash, fish");
-    }
   });
 });
 
