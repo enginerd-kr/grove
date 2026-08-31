@@ -197,10 +197,27 @@ const add: Shot = {
   expects: ["paging", "ran bun install", "kept in feat/paging"],
 };
 
+/** The command menu: one keystroke, and every verb the list does not spell out. */
+const menu: Shot = {
+  name: "menu",
+  columns: 112,
+  rows: 45,
+  title: "grove — / opens the command menu",
+  async drive(session) {
+    for (let step = 0; step < 4; step++) await session.press(keys.down);
+    await session.press("/");
+    await session.until("sync every worktree");
+    await session.settle(300);
+  },
+  // One command from the menu's top and one from near its bottom: the popup is
+  // whole, not clipped by a frame that came too soon.
+  expects: ["sync every worktree", "re-read the worktrees"],
+};
+
 process.stdout.write("shooting the README:\n");
 const fixture = await buildFixture();
 try {
-  for (const shot of [list, add]) await shoot(fixture, shot);
+  for (const shot of [list, menu, add]) await shoot(fixture, shot);
 } finally {
   await fixture.dispose();
 }
