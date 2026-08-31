@@ -127,7 +127,7 @@ export type ModeKind = LayoutMode["kind"];
  * The same shape as the screen's own `Pending["kind"]`, spelled again here so
  * the arithmetic does not have to import the component it lays out.
  */
-export type ConfirmKind = "one" | "many" | "reset" | "sync" | "sync-all";
+export type ConfirmKind = "one" | "many" | "reset" | "sync" | "sync-all" | "trust-open";
 
 // The keys each popup answers to. A mode that takes the keyboard says so here
 // rather than in `hintsFor` below, where only the list's own hints are decided.
@@ -159,7 +159,8 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
  * A prompt that asks about discarding changes and offers `y remove` is two
  * answers to one question. `n` is spelled the same way: it is `keep` where
  * something was about to be taken away, and `leave it` where nothing was —
- * a sync that does not happen leaves the branch where it stands.
+ * a sync that does not happen leaves the branch where it stands, and an open
+ * line nobody trusted stays a line in a file.
  *
  * A record rather than a chain of ternaries, so a new confirmation cannot be
  * added without deciding what its two keys say.
@@ -183,6 +184,12 @@ const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
   ],
   "sync-all": [
     { keys: "y", action: "sync" },
+    { keys: "n", action: "leave it" },
+  ],
+  // The one `y` that is an answer to "have you read this" rather than to "shall
+  // I", so it says both halves: what is being agreed to and what happens next.
+  "trust-open": [
+    { keys: "y", action: "trust and open" },
     { keys: "n", action: "leave it" },
   ],
 };

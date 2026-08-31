@@ -220,6 +220,13 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   folder's worth of removals; the question is always "is this the row you meant", and the answer
   should not depend on how many rows are behind it. What `y` costs is spelled out before it is
   pressed — the directory goes, the branch stays, and uncommitted changes are counted by kind.
+- **`/open` asks where the line is one nobody here has read, rather than refusing.** The command
+  line can only warn and name `--trust`: `grove open` in a pipe has nobody to ask, and behaving one
+  way there and another under a terminal would make it two commands. The screen does have somebody
+  sitting at it, and what trust wants is exactly that they saw the line before it ran — so the
+  refusal becomes a `confirm` with the command quoted in it, and `y` records having read it. The
+  same record `--trust` writes, covering the same whole file, which is why `a`'s commands stop
+  asking afterwards too.
 - **The activity area is budgeted out of the leftovers, not out of the terminal.** Progress asks
   for six rows, and that is then capped by what is actually free once the banner, message and key
   bar have taken theirs, with `MIN_LIST_ROWS` held back for the list. A fixed number is one that

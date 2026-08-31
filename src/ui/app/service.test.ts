@@ -12,6 +12,7 @@ import {
   type TempRepo,
   withTempRepo,
 } from "../../core/test-utils.ts";
+import { waitForEntry } from "../../hooks/test-utils.ts";
 import type { Reporter, Step } from "../../report/reporter.ts";
 import { createSetupService, createWorktreeService, type WorktreeService } from "./service.ts";
 
@@ -663,6 +664,47 @@ describe("createWorktreeService", () => {
 
         expect(await service.pendingCommands()).toEqual([]);
         expect(await service.trustAndRun("feat/login")).toBe("no .grove.toml in feat/login");
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "the open line waits for the same answer, and the screen is where it is given",
+    async () => {
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
+
+        // `touch` stands in for an editor: grove lets go of the line it starts,
+        // so a file turning up is all there is to look at.
+        await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nopen = "touch opened.txt"\n');
+        await service.add("feat/login");
+
+        // What `/open` reads before it decides whether to ask: the exact line,
+        // and the file to go and read it in.
+        expect(await service.pendingOpen("feat/login")).toEqual({
+          command: "touch opened.txt",
+          files: ["main/.grove.toml"],
+        });
+
+        // Unanswered, it is the refusal the command line gives.
+        expect(await service.open("feat/login")).toBe(
+          "feat/login has an open line nobody has read here",
+        );
+        expect(await pathExists(join(root, "feat", "login", "opened.txt"))).toBe(false);
+
+        // `y`, which is `--trust`: the line runs.
+        expect(await service.open("feat/login", true)).toBe(
+          "opened feat/login with touch opened.txt",
+        );
+        expect(await waitForEntry(join(root, "feat", "login", "opened.txt"))).toBe(true);
+
+        // One record for the whole file, so nothing is left to ask about — from
+        // this key or from the one that runs the setup commands.
+        expect(await service.pendingOpen("feat/login")).toBeUndefined();
+        expect(await service.pendingCommands()).toEqual([]);
       });
     },
     SLOW,

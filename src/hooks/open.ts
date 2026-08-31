@@ -214,3 +214,38 @@ export async function openNow(
 
   return { opened, untrusted };
 }
+
+/** The line, and where to go and read it — what a screen needs to ask. */
+export type PendingOpen = {
+  readonly command: string;
+  /** The gated files, as `governingFiles` spells them — what `trust` covers. */
+  readonly files: readonly string[];
+};
+
+/**
+ * The open line waiting on somebody here having read it, when one is waiting.
+ *
+ * `pendingCommands`' counterpart for the one hook whose subject is a person,
+ * and it is here for the reason that one is: a screen cannot ask about a line
+ * it cannot show. The command line has nobody to ask — `grove open` in a pipe
+ * is the same tool as under a terminal — so it warns and names `--trust`. A
+ * screen can put the exact line in front of whoever is sitting at it, and
+ * reading it there is the whole of what trust was ever asking for.
+ *
+ * `undefined` is every case where opening simply happens: a file that opens
+ * nothing on this platform, an open line out of a layer you wrote yourself, and
+ * a file this machine has already read.
+ */
+export async function pendingOpen(
+  repo: RepoPaths,
+  target: HookTarget,
+): Promise<PendingOpen | undefined> {
+  const hooks = await repoHooks(repo, target.path);
+
+  const command = openHere(hooks);
+  if (command === "") return undefined;
+  if (!openGatedHere(hooks) || hooks.fingerprint === undefined) return undefined;
+  if (await isTrusted(repo.gitDir, hooks.fingerprint)) return undefined;
+
+  return { command, files: governingFiles(hooks, repo.root) };
+}

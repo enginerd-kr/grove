@@ -47,7 +47,7 @@ export {
   repoHooks,
   wantsOpen,
 } from "./config.ts";
-export { openWhatItAsksFor } from "./open.ts";
+export { openWhatItAsksFor, type PendingOpen, pendingOpen } from "./open.ts";
 export {
   describeSetup,
   runSetup,

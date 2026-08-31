@@ -100,7 +100,7 @@ type Calls = {
   readonly discarded: string[];
   readonly checkedOut: number[];
   readonly synced: (string | undefined)[];
-  readonly opened: string[];
+  readonly opened: { target: string; trust: boolean }[];
   readonly filledIn: string[];
   readonly trusted: string[];
 };
@@ -165,10 +165,14 @@ function stub(overrides: Partial<WorktreeService> = {}): {
         calls.discarded.push(target);
         return `discarded 2 changes in ${target}`;
       },
-      open: async (target) => {
-        calls.opened.push(target);
+      open: async (target, trust = false) => {
+        calls.opened.push({ target, trust });
         return `opened ${target} with code .`;
       },
+      // Nothing waiting by default, the way `pendingCommands` answers nothing:
+      // a file already read here is every ordinary repository, and `/open`
+      // there opens rather than asking.
+      pendingOpen: async () => undefined,
       setup: async (target) => {
         calls.filledIn.push(target);
         return `2 copied, 1 run in ${target}`;
@@ -401,6 +405,27 @@ describe("describePending", () => {
     // head before `y` is pressed and a `1 have` is a sentence you re-read.
     expect(under(2).text).toContain("2 have uncommitted changes");
     expect(under(2).colour).toBe(theme.danger);
+  });
+
+  /**
+   * The one question here that grants rather than takes, and the only one whose
+   * text is doing the work: `y` means "I have read this", so the thing read has
+   * to be the line itself rather than a description of it.
+   */
+  test("`/open` on an unread line quotes it, names the file, and asks in amber", () => {
+    const target = {
+      kind: "trust-open",
+      summary: summary({ dir: "feat/login" }),
+      waiting: { command: "code .", files: ["main/.grove.toml"] },
+    } as const;
+
+    expect(describePending(target)).toEqual({
+      text: "open feat/login with `code .`? nobody here has read main/.grove.toml",
+      colour: theme.warn,
+    });
+    // Amber, not red: nothing is being thrown away, and the red is what says
+    // "there is no undo" everywhere else on this prompt.
+    expect(describePending(target).colour).not.toBe(theme.danger);
   });
 
   test("`s` counts the commits it would rewrite, names where they go, and asks in amber", () => {
@@ -1076,7 +1101,7 @@ describe("the keys", () => {
     await run(ui, "open");
     await settled(ui, (frame) => IN_LIST(frame) && frame.includes("opened"));
 
-    expect(calls.opened).toEqual(["/repo/feat/login"]);
+    expect(calls.opened).toEqual([{ target: "/repo/feat/login", trust: false }]);
 
     // One of the two commands behind the slash that are aimed at a row, so it
     // is also one of the two that can be aimed at something that is not one.
@@ -1085,7 +1110,55 @@ describe("the keys", () => {
     await run(ui, "open");
     await settled(ui, IN_LIST);
 
-    expect(calls.opened).toEqual(["/repo/feat/login"]);
+    expect(calls.opened).toEqual([{ target: "/repo/feat/login", trust: false }]);
+  });
+
+  /**
+   * The gap this closes: a clone whose `.grove.toml` nobody has read here had
+   * no way to read it. `/open` reported the refusal the command line reports
+   * and stopped there, and the only way through was to leave for a terminal and
+   * type `grove open --trust` — on the one surface that could have shown the
+   * line and asked.
+   */
+  test("`/open` on a line nobody has read asks with the line, and `y` trusts it", async () => {
+    const { service, calls } = stub({
+      pendingOpen: async () => ({ command: "code .", files: ["main/.grove.toml"] }),
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "open");
+    const asked = await settled(ui, (frame) => frame.includes("nobody here has read"));
+
+    // The command itself, because that is what `y` agrees to: a prompt that
+    // said "an untrusted line" would be asking somebody to trust a description.
+    expect(asked).toContain("open feat/login with `code .`?");
+    expect(asked).toContain("main/.grove.toml");
+    expect(asked).toContain("y trust and open");
+    // Nothing has run yet — the question is asked before the line is.
+    expect(calls.opened).toEqual([]);
+
+    ui.stdin.write("y");
+    await settled(ui, (frame) => frame.includes("opened /repo/feat/login"));
+
+    expect(calls.opened).toEqual([{ target: "/repo/feat/login", trust: true }]);
+  });
+
+  test("`n` on that question leaves the line untrusted and nothing opened", async () => {
+    const { service, calls } = stub({
+      pendingOpen: async () => ({ command: "code .", files: ["main/.grove.toml"] }),
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "open");
+    await settled(ui, (frame) => frame.includes("nobody here has read"));
+
+    ui.stdin.write("n");
+    await settled(ui, IN_LIST);
+
+    // Not opened without trust either: an answer of `n` is not a quieter `y`.
+    expect(calls.opened).toEqual([]);
   });
 
   test("`/setup` fills the row under the cursor in again, and does nothing on a folder", async () => {

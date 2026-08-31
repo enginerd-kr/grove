@@ -34,7 +34,7 @@ import { type CommandName, commandsFor, Menu, matching } from "./Menu.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
 import { PullRequests } from "./PullRequests.tsx";
-import type { WorktreeService } from "./service.ts";
+import type { PendingOpen, WorktreeService } from "./service.ts";
 import { buildTree, firstChildOf, parentOf, type TreeRow } from "./tree.ts";
 
 /**
@@ -54,13 +54,18 @@ import { buildTree, firstChildOf, parentOf, type TreeRow } from "./tree.ts";
  */
 
 /**
- * What a destructive key is about to do that cannot be undone, held until it is
- * confirmed.
+ * What a key is about to do that nobody should be able to do by accident, held
+ * until it is confirmed.
  *
  * One worktree, a folder's worth of them, or one worktree's changes, asked the
  * same `y`/`n` every way: the question is the same one — is this the row you
  * meant — and the answer should not depend on how many rows are behind it or on
  * remembering which key you pressed.
+ *
+ * `trust-open` is the one that is not destructive at all, and it belongs here
+ * anyway: what it asks about is a command somebody else wrote arriving on this
+ * machine, which is a thing to agree to on purpose even though every part of it
+ * can be undone.
  */
 type Pending =
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
@@ -76,7 +81,20 @@ type Pending =
   /** `s`, where the sync it starts would rewrite commits the remote already has. */
   | { readonly kind: "sync"; readonly summary: WorktreeSummary }
   /** `/sync-all`, where `count` of the worktrees would. */
-  | { readonly kind: "sync-all"; readonly count: number };
+  | { readonly kind: "sync-all"; readonly count: number }
+  /**
+   * `/open`, where the line that would open it is one nobody here has read.
+   *
+   * The one question here that grants something instead of taking it away, and
+   * the only one whose *text* is the point rather than the count: trust is
+   * somebody having read the exact line, so the line is what the prompt says,
+   * and pressing `y` is the reading.
+   */
+  | {
+      readonly kind: "trust-open";
+      readonly summary: WorktreeSummary;
+      readonly waiting: PendingOpen;
+    };
 
 type Mode =
   | { readonly kind: "list" }
@@ -489,6 +507,20 @@ export function describePending(target: Pending): {
     };
   }
 
+  // The one question here that takes nothing away, and the only one that has to
+  // quote something: what `y` agrees to is this exact text, so the text is the
+  // prompt. Amber and not red, which is the distinction the two colours are
+  // carrying — a line that opens an editor is a thing to look at before it runs,
+  // not a thing there is no coming back from.
+  if (target.kind === "trust-open") {
+    const { command, files } = target.waiting;
+
+    return {
+      text: `open ${target.summary.dir} with \`${command}\`? nobody here has read ${files.join(" or ")}`,
+      colour: theme.warn,
+    };
+  }
+
   const all = `remove all ${target.paths.length} under ${target.label}?`;
   if (target.dirty > 0) {
     return {
@@ -801,6 +833,46 @@ export function App({
   }, [perform, reread, service, store]);
 
   /**
+   * `/open`: find out whether the line has been read here, then run it or show
+   * it to be read.
+   *
+   * The command line answers an untrusted `open` with a warning and the flag to
+   * pass next time, and it has to: `grove open` in a pipe has nobody to ask, and
+   * behaving one way there and another under a terminal would make it two
+   * commands. The screen is the surface that does have somebody sitting at it,
+   * and what trust wants is exactly that they saw the line before it ran — so
+   * here the refusal becomes the question, with the command on the row above the
+   * `y`.
+   *
+   * The read comes first and costs a second look at the file, the way `s`'s does:
+   * a prompt is only worth putting up where there is something to agree to, and
+   * every repository whose file is already trusted goes straight to opening.
+   */
+  const beginOpen = useCallback(
+    async (summary: WorktreeSummary) => {
+      store.clear();
+      setMessage(undefined);
+      setMode({ kind: "busy", label: `opening ${summary.dir}` });
+
+      const run = () => void perform(`opening ${summary.dir}`, () => service.open(summary.path));
+
+      let waiting: PendingOpen | undefined;
+      try {
+        waiting = await service.pendingOpen(summary.path);
+      } catch {
+        // Nothing to decide on. `open` reads the same file a moment from now
+        // and says what went wrong in its own words.
+        return run();
+      }
+
+      if (waiting === undefined) return run();
+
+      return setMode({ kind: "confirm", target: { kind: "trust-open", summary, waiting } });
+    },
+    [perform, service, store],
+  );
+
+  /**
    * What follows an `a` that made a worktree whose file wants to run commands.
    *
    * Run here and not asked about, unlike `grove add` on the command line: that
@@ -1059,9 +1131,9 @@ export function App({
    * `/open` is the one thing here that was never a key, and the one aimed at
    * the row rather than at the repository — see `Menu.tsx` for why it is behind
    * the slash anyway. The menu closes first in
-   * every branch — `perform` and `openPrs` each put the screen into `busy` and
-   * take it back to `list`, and a popup still up underneath that would be a
-   * menu waiting for a key nobody can press.
+   * every branch — `perform`, `openPrs` and `beginOpen` each put the screen into
+   * `busy` and take it somewhere else afterwards, and a popup still up
+   * underneath that would be a menu waiting for a key nobody can press.
    */
   const runCommand = useCallback(
     (name: CommandName) => {
@@ -1073,7 +1145,7 @@ export function App({
         // worktree, and there is nothing to open about one.
         case "open":
           if (!selected) return;
-          return void perform(`opening ${selected.dir}`, () => service.open(selected.path));
+          return void beginOpen(selected);
         // Aimed at the row for the same reason `open` is, and can find nothing
         // to act on for the same one: a folder is not a worktree, and there is
         // nothing to fill in about one.
@@ -1092,7 +1164,7 @@ export function App({
           return setLogOn((on) => !on);
       }
     },
-    [perform, beginSyncAll, openPrs, selected, service],
+    [perform, beginOpen, beginSyncAll, openPrs, selected, service],
   );
 
   useInput((input, key) => {
@@ -1321,6 +1393,17 @@ export function App({
 
         if (target.kind === "sync-all") {
           return void perform("syncing every worktree", () => service.sync());
+        }
+
+        // `y` here records having read the line that was on the row, which is
+        // what the trust record is — and it is one record for the whole file,
+        // so the same `.grove.toml`'s setup commands run from `a` afterwards
+        // without asking again. That is the same thing `grove open --trust`
+        // does, reached from the one surface that can show the line first.
+        if (target.kind === "trust-open") {
+          return void perform(`opening ${target.summary.dir}`, () =>
+            service.open(target.summary.path, true),
+          );
         }
 
         // `discardDirty` carries the answer just given: the question counted

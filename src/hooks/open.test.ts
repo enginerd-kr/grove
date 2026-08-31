@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { failureFor, pendingCommands } from "./command.ts";
 import { HOOKS_FILE, openTargetFor, repoHooks } from "./config.ts";
+import { pendingOpen } from "./open.ts";
 import { describeSetup, runSetup, trustAndRun } from "./setup.ts";
 import { NOT_OPENED, setUp, waitForEntry, withRepo } from "./test-utils.ts";
 import { trust } from "./trust.ts";
@@ -102,6 +103,45 @@ describe("open", () => {
       expect(await waitForEntry(join(fixture.worktree, "opened.txt"), NOT_OPENED)).toBe(false);
       expect(fixture.log.warnings.join("\n")).toContain("1 command in");
       expect(fixture.log.warnings.join("\n")).toContain("--trust");
+    });
+  });
+
+  /**
+   * The same gate, asked rather than enforced — which is what a screen needs.
+   *
+   * `pendingCommands` covers the file's whole ask, at the moment `add` has just
+   * made a worktree. This is the one line, for the key that is aimed at one
+   * worktree on a day nothing was added: the screen has to be able to put the
+   * command in front of somebody before it runs, because reading it is the
+   * whole of what trust ever wanted.
+   */
+  test("the line waiting to be read is offered on its own, for a screen to show", async () => {
+    await withRepo(async (fixture) => {
+      await fixture.configure(OPENS);
+
+      const waiting = await pendingOpen(fixture.repo, { path: fixture.worktree });
+
+      expect(waiting?.command).toBe("touch opened.txt");
+      // Where to go and read it: the trunk's copy, which is the one that
+      // governs — there is a copy of that name in every worktree.
+      expect(waiting?.files).toEqual([`main/${HOOKS_FILE}`]);
+
+      const hooks = await repoHooks(fixture.repo);
+      await trust(fixture.repo.gitDir, hooks.fingerprint ?? "");
+
+      // Read here now, so there is nothing left to put a question in front of.
+      expect(await pendingOpen(fixture.repo, { path: fixture.worktree })).toBeUndefined();
+    });
+  });
+
+  test("a line out of your own file is not a thing to be asked about", async () => {
+    await withRepo(async (fixture) => {
+      // `.grove.local.toml` is untracked, so no pull could have written it and
+      // the gate is not in the way — asking here would be asking somebody to
+      // agree to what they typed themselves.
+      await fixture.configureLocal(OPENS);
+
+      expect(await pendingOpen(fixture.repo, { path: fixture.worktree })).toBeUndefined();
     });
   });
 

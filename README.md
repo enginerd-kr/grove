@@ -153,9 +153,9 @@ env = { COMPOSE_PROJECT_NAME = "acme" }
 run = ["docker compose down"]  # Shell commands run inside the worktree just before it is removed
 ```
 
-- **`copy` and `link` run straight away**; `run` and `open` come from repository code a pull request could edit, so the CLI prints and skips them until you pass `--trust`. The UI runs them, since pressing `a` is consent.
+- **`copy` and `link` run straight away**; `run` and `open` come from repository code a pull request could edit, so the CLI prints and skips them until you pass `--trust`. The UI runs them, since pressing `a` is consent — and where that consent was never given, `/open` puts the line on screen and asks for it: `y` is the reading `--trust` stands for.
 - **`open` is started and let go** — not waited for, and it outlives the shell you typed `grove add` into. It is skipped when there is no terminal to open into (`grove add | tee`, CI), and when a `run` command failed.
-- **`open` is not only for the day the worktree is made**: `grove open [target]` runs the same line again, and no target means the worktree you are standing in. `/open` in the app does it for the row under the cursor.
+- **`open` is not only for the day the worktree is made**: `grove open [target]` runs the same line again, and no target means the worktree you are standing in. `/open` in the app does it for the row under the cursor, asking first — with the command quoted and the file to go and read it in — where nobody on this machine has read that file yet.
 - **Neither is the rest of `[setup]`.** `add` fills a worktree in on the day it makes one, and the file goes on changing afterwards — so a `copy` line added in a pull request would otherwise reach only the worktrees made after it. `grove setup [target]`, or `grove setup --all`, catches the older ones up: `copy` takes the trunk's version over what is there, `link` leaves what the worktree already has, and the commands wait for the same `--trust`. It opens nothing — `--all` over eleven worktrees would be eleven editor windows, and `grove open` is that half.
 - **`open` can be written per platform**, since one line rarely works everywhere. A platform the table leaves out opens nothing:
 

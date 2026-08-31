@@ -17,8 +17,21 @@ import { GroveError } from "../../core/errors.ts";
 import { type Commit, recentCommits } from "../../core/history.ts";
 import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
-import { describeSetup, failureFor, pendingCommands, trustAndRun } from "../../hooks/index.ts";
+import {
+  describeSetup,
+  failureFor,
+  type PendingOpen,
+  pendingCommands,
+  pendingOpen,
+  trustAndRun,
+} from "../../hooks/index.ts";
 import type { Reporter } from "../../report/reporter.ts";
+
+/**
+ * Passed straight through, so the screen holds the answer without reaching past
+ * this module for the shape of it — the same way it takes `WorktreeSummary`.
+ */
+export type { PendingOpen };
 
 /**
  * What the screen is allowed to do: make a worktree, sync one, remove one, and
@@ -124,13 +137,25 @@ export type WorktreeService = {
    * line on every day after, which is when you actually want it — the worktree
    * is still there and the window is not.
    *
-   * Not trusted by pressing it, unlike the setup commands `a` asks about. The
-   * question `a` asks covers this line too — `pendingCommands` lists it with
-   * the rest — so a file that has been agreed to opens from here, and one that
-   * has not says so rather than being agreed to by a command whose subject is
-   * an editor.
+   * `trust` is the answer to the question `pendingOpen` opened, and it is the
+   * only way a line out of a file nobody here has read gets to run from this
+   * key: the screen put the command on the row, somebody read it and pressed
+   * `y`, and that is the whole of what `--trust` means on the command line too.
+   * Left off — which is every file already agreed to, and every one with
+   * nothing gated — this opens what it is allowed to and says so when it is
+   * not.
    */
-  readonly open: (target: string) => Promise<string>;
+  readonly open: (target: string, trust?: boolean) => Promise<string>;
+  /**
+   * The line that would open this worktree, when nobody here has read it yet.
+   *
+   * `pendingCommands`' counterpart for the one command aimed at a row, and it
+   * is here for the reason that one is: the screen can ask about what it can
+   * show. Nothing comes back for the ordinary repository — a file already
+   * trusted, a line you wrote yourself, a platform this one says nothing about
+   * — and `open` is simply run.
+   */
+  readonly pendingOpen: (target: string) => Promise<PendingOpen | undefined>;
   /**
    * `.grove.toml`'s `[setup]`, run again in a worktree that already has one.
    *
@@ -399,13 +424,26 @@ export function createWorktreeService(
       return `${describeSetup(only)} in ${only.dir}`;
     },
 
-    open: async (target) => {
-      const result = await openWorktree(repo, cwd, { target, trust: false, open: true }, reporter);
+    open: async (target, trust = false) => {
+      const result = await openWorktree(repo, cwd, { target, trust, open: true }, reporter);
 
+      // The unanswered path, and the same sentence `grove open` prints: `trust`
+      // records the file before the gate reads it back, so a run that carries
+      // one never lands here. It is the screen's `/open` before the question.
       if (result.untrusted) return `${result.dir} has an open line nobody has read here`;
       if (result.opened === undefined) return `nothing opens ${result.dir} on this machine`;
 
       return `opened ${result.dir} with ${result.opened}`;
+    },
+
+    pendingOpen: async (target) => {
+      // Resolved the way `trustAndRun` resolves its branch, and for the same
+      // reason: which worktree a name means is `git worktree list`'s answer,
+      // and this has to be asking about the worktree `open` is about to act on.
+      const worktrees = await listWorktrees(repo.gitDir);
+      const record = resolveTarget(target, worktrees, { root: repo.root, cwd });
+
+      return pendingOpen(repo, { path: record.path, branch: record.branch });
     },
 
     pullRequests: () => listPullRequests(repo),
