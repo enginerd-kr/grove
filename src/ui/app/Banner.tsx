@@ -89,11 +89,14 @@ function shortenPath(path: string, max: number): string {
 }
 
 /** What the folder holds, and whereabouts in it you are standing. */
-function describeFolder(worktrees?: number, here?: string): string {
-  // Two different nothings, and the difference is what the screen is for: an
-  // empty folder is waiting for a URL, a repository with no worktrees is waiting
+function describeFolder(worktrees?: number, here?: string, repos?: number): string {
+  // Three different nothings, and the difference is what each screen is for: an
+  // empty folder is waiting for a URL, a folder of repositories is waiting for
+  // one of them to be picked, and a repository with no worktrees is waiting
   // for `a`.
-  if (worktrees === undefined) return "no repository here yet";
+  if (worktrees === undefined) {
+    return repos === undefined ? "no repository here yet" : `${repos} repositories here`;
+  }
   if (worktrees === 0) return "no worktrees yet";
 
   const counted = `${worktrees} worktree${worktrees === 1 ? "" : "s"}`;
@@ -109,11 +112,15 @@ function greeting(): string {
 }
 
 /**
- * One tip, picked by what the folder is waiting for. The same three states
+ * One tip, picked by what the folder is waiting for. The same four states
  * `describeFolder` reads, answered with the key that moves each one along.
  */
-function tipFor(worktrees?: number): string {
-  if (worktrees === undefined) return `run ${BIN_NAME} clone <url> to plant a repository here`;
+function tipFor(worktrees?: number, repos?: number): string {
+  if (worktrees === undefined) {
+    return repos === undefined
+      ? `run ${BIN_NAME} clone <url> to plant a repository here`
+      : "press enter to open the one you meant";
+  }
   if (worktrees === 0) return "press a to plant your first worktree";
 
   return "press a to add, s to sync, r to remove";
@@ -126,12 +133,18 @@ type Props = {
   readonly worktrees?: number;
   /** The worktree the app was started from, when it was started from one. */
   readonly here?: string;
+  /**
+   * How many repositories sit in this folder, for the one screen where none of
+   * them is open yet. Read only while `worktrees` is absent — once a repository
+   * has been picked, what the folder beside it holds stops being the news.
+   */
+  readonly repos?: number;
   readonly columns: number;
   readonly rows: number;
 };
 
-export function Banner({ repoRoot, worktrees, here, columns, rows }: Props) {
-  const folder = describeFolder(worktrees, here);
+export function Banner({ repoRoot, worktrees, here, repos, columns, rows }: Props) {
+  const folder = describeFolder(worktrees, here, repos);
   const release = ` v${version}`;
 
   if (!roomy(columns, rows)) {
@@ -228,7 +241,7 @@ export function Banner({ repoRoot, worktrees, here, columns, rows }: Props) {
             <Text bold color={theme.accent} wrap="truncate">
               Tips for getting started
             </Text>
-            <Text wrap="truncate">{tipFor(worktrees)}</Text>
+            <Text wrap="truncate">{tipFor(worktrees, repos)}</Text>
             {news !== undefined && (
               <>
                 <Text color={theme.muted} wrap="truncate">

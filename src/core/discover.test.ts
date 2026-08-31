@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { findRepoRoot } from "./discover.ts";
+import { findRepo, findRepoRoot } from "./discover.ts";
 import { type GroveError, isGroveError } from "./errors.ts";
 import { GIT_FILE_CONTENTS, type RepoPaths } from "./layout.ts";
 import { seedGit, type TempRepo, withTempRepo } from "./test-utils.ts";
@@ -89,6 +89,52 @@ describe("a managed repository", () => {
       expect(error.message).toContain("2 repositories here");
       expect(error.hint).toContain("-C");
       expect([...error.details].sort()).toEqual(["one", "two"]);
+    });
+  });
+});
+
+/**
+ * The same rules, read as an answer rather than as a throw.
+ *
+ * `findRepoRoot` is this plus the two errors, so most of it is already covered
+ * above. What is not is the part only the screen uses: an ambiguous folder
+ * comes back with every candidate in it, which is what `Pick` draws.
+ */
+describe("findRepo", () => {
+  test("hands back the candidates when more than one sits side by side", async () => {
+    await withTempRepo(async (repo) => {
+      const one = await managedRepo(repo, "one");
+      const two = await managedRepo(repo, "two");
+
+      const found = await findRepo(repo.work);
+      if (found.kind !== "ambiguous") throw new Error(`expected ambiguous, got ${found.kind}`);
+
+      expect([...found.roots].sort()).toEqual([one, two].sort());
+      // Resolved, and reported: `Pick` names the folder it is picking inside.
+      expect(found.from).toBe(await realpath(repo.work));
+    });
+  });
+
+  test("a folder with nothing under it is `none`, with where it looked", async () => {
+    await withTempRepo(async (repo) => {
+      const nowhere = join(repo.root, "nowhere");
+      await mkdir(nowhere, { recursive: true });
+
+      const found = await findRepo(nowhere);
+
+      expect(found.kind).toBe("none");
+      expect(found.kind === "none" ? found.from : undefined).toBe(await realpath(nowhere));
+    });
+  });
+
+  test("one repository below is found rather than reported as a choice", async () => {
+    await withTempRepo(async (repo) => {
+      const root = await managedRepo(repo);
+
+      const found = await findRepo(repo.work);
+
+      expect(found.kind).toBe("found");
+      expect(found.kind === "found" ? found.paths.root : undefined).toBe(root);
     });
   });
 });

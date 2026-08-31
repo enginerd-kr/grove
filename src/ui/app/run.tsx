@@ -3,15 +3,15 @@ import { render } from "ink";
 import { useMemo, useState } from "react";
 import { version } from "../../../package.json";
 import { hasSeenShellSetup, markShellSetupSeen } from "../../cli/install.ts";
-import { findRepoRoot } from "../../core/discover.ts";
-import { isGroveError } from "../../core/errors.ts";
+import { type Discovery, findRepo } from "../../core/discover.ts";
 import { isEmptyOrMissing } from "../../core/fs.ts";
 import { killRunningGit } from "../../core/git.ts";
-import type { RepoPaths } from "../../core/layout.ts";
+import { type RepoPaths, repoPaths } from "../../core/layout.ts";
 import { checkForUpdate } from "../../core/update-check.ts";
 import { createStoreReporter, LineStore } from "../../report/lines.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import { App } from "./App.tsx";
+import { Pick } from "./Pick.tsx";
 import { Setup } from "./Setup.tsx";
 import { ShellSetup } from "./ShellSetup.tsx";
 import { createSetupService, createWorktreeService } from "./service.ts";
@@ -19,12 +19,11 @@ import { createSetupService, createWorktreeService } from "./service.ts";
 /**
  * Starting the interactive screen, and everything about it that is not React.
  *
- * Discovery still happens *before* the render, but a repository not being there
- * is no longer a reason to refuse: it is the one failure the app can do
- * something about, so it opens on `Setup` and asks for a URL. Every other way
- * discovery can fail — an ambiguous folder with two repositories under it — is a
- * question the screen cannot answer either, and still ends the process the way
- * `grove list` would.
+ * Discovery still happens *before* the render, but neither of the ways it comes
+ * up empty is a reason to refuse any more. Both are questions this screen can
+ * ask: no repository opens on `Setup` and asks for a URL, and more than one
+ * opens on `Pick` and asks which. Anything else discovery can throw — git
+ * failing outright — still ends the process the way `grove list` would.
  */
 
 export type AppOptions = {
@@ -68,18 +67,9 @@ function shellSetupEnabled(): boolean {
   return process.env.GROVE_RELEASE === "true";
 }
 
-async function discover(cwd: string, repo?: string): Promise<RepoPaths | undefined> {
-  try {
-    return await findRepoRoot(cwd, repo);
-  } catch (error) {
-    if (isGroveError(error) && error.code === "not-a-repo") return undefined;
-
-    throw error;
-  }
-}
-
 type GroveProps = {
-  readonly found: RepoPaths | undefined;
+  /** What discovery concluded — `Grove` renders the screen that answers it. */
+  readonly found: Discovery;
   /** Ctrl-C, in whichever screen is up. Both mean the same thing to `runApp`. */
   readonly onCancel: () => void;
   readonly folder: string;
@@ -90,14 +80,21 @@ type GroveProps = {
 };
 
 /**
- * Which of the two screens is up, and the one transition between them.
+ * Which of the three screens is up, and the transitions between them.
  *
  * The services are built here rather than passed in because neither can exist
  * before its screen is due: `createWorktreeService` needs the repository that
- * `Setup` is in the middle of making.
+ * `Setup` is in the middle of making, or that `Pick` is about to name.
+ *
+ * One `paths` for both ways in, rather than a state per screen: what `Setup`
+ * produces and what `Pick` chooses are the same thing — the repository the app
+ * is about to run against — and the app has no reason to remember which door
+ * it came through.
  */
 function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: GroveProps) {
-  const [paths, setPaths] = useState(found);
+  const [paths, setPaths] = useState<RepoPaths | undefined>(
+    found.kind === "found" ? found.paths : undefined,
+  );
 
   // Memoised, and not as a micro-optimisation: `App` starts a fetch when its
   // service changes, so a new object on every render would be a `git fetch` on
@@ -118,6 +115,19 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: Grove
   );
 
   if (paths === undefined || worktrees === undefined) {
+    // Every candidate carries the `.bare` marker rule 4 matched on, so what is
+    // being picked is always a managed repository.
+    if (found.kind === "ambiguous") {
+      return (
+        <Pick
+          roots={found.roots}
+          folder={folder}
+          onPick={(root) => setPaths(repoPaths(root))}
+          onCancel={onCancel}
+        />
+      );
+    }
+
     return (
       <Setup
         service={setup}
@@ -172,11 +182,11 @@ function Root({
 export type AppOutcome = "quit" | "interrupted";
 
 export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<AppOutcome> {
-  const found = await discover(cwd, repo);
+  const found = await findRepo(cwd, repo);
   // Where discovery looked from, which is where a clone should land. With `-C`
   // that is the directory the user named, not the one they happen to be in.
   const folder = resolve(cwd, repo ?? ".");
-  const inPlace = found === undefined && (await isEmptyOrMissing(folder));
+  const inPlace = found.kind === "none" && (await isEmptyOrMissing(folder));
 
   const store = new LineStore();
 

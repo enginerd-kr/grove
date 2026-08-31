@@ -14,6 +14,7 @@ components/       Spinner, ProgressBar, StatusBar, StepRow
 hooks/            useInterval
 app/App.tsx       the screen: rows, keys, and one mode at a time
 app/Setup.tsx     the screen when there is no repository yet: ask, clone, hand over
+app/Pick.tsx      the screen when there is more than one: which of these did you mean?
 app/Banner.tsx    the welcome: name, version, folder — and how many rows it took
 app/Log.tsx       the commits under the list, for the row the cursor is on
 app/Files.tsx     the uncommitted files beside the list, as the tree they sit in
@@ -37,13 +38,15 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   *sliced* to the rows left over after the header, activity, and key bar — a layout that only
   works because something computes how many rows fit rather than leaving it to the renderer to
   overflow.
-- **Two screens, not another `mode`.** `Setup` is what a bare `grove` opens where discovery
-  found nothing, and `run.tsx`'s `Grove` swaps it for `App` the moment it produces a repository.
-  They are separate components because they share nothing but the banner: there is no list to
-  move a cursor through in `Setup`, and no repository for `App`'s keys to act on until `Setup`
-  has made one — which is also why `createWorktreeService` cannot be built until then. Only
-  `not-a-repo` opens it; an ambiguous folder still ends the process, since the screen cannot
-  answer that question either.
+- **Three screens, not another `mode`.** `Setup` is what a bare `grove` opens where discovery
+  found nothing, `Pick` is what it opens where discovery found several, and `run.tsx`'s `Grove`
+  swaps either for `App` the moment there is a repository. They are separate components because
+  they share nothing but the banner: there is no list to move a cursor through in `Setup`, no
+  repository for `App`'s keys to act on until one of them has supplied it — which is also why
+  `createWorktreeService` cannot be built until then — and nothing on `Pick` but the list.
+  `findRepo` returns both empty answers as values rather than throwing, so the screen can tell
+  them apart; `findRepoRoot` is the same walk with the throws put back, for the commands, which
+  have no one to ask.
 - **A folder row carries the worktrees it holds** (`leaves`), rather than them being read back
   off the rows that follow it. `leavesUnder` did the latter, and a folded folder has no rows
   following it — so `r` there would have found nothing to remove and folding would have quietly
