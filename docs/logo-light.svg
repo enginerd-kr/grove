@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 16 8" width="128" height="64" shape-rendering="crispEdges" role="img" aria-label="grove logo: a sprout">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -2 16 16" width="128" height="128" shape-rendering="crispEdges" role="img" aria-label="grove logo: a sprout">
   <!-- The banner's sprout (src/ui/app/Banner.tsx), one rect per pixel run -->
-  <g fill="#3f8e46">
+  <g transform="scale(1 2)" fill="#3f8e46">
     <rect x="1" y="1" width="4" height="1"/>
     <rect x="9" y="1" width="4" height="1"/>
     <rect x="1" y="2" width="5" height="1"/>
