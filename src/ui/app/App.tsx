@@ -1,41 +1,27 @@
-import { join } from "node:path";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { version } from "../../../package.json";
-import type { Drift } from "../../core/branches.ts";
-import {
-  describeRemote,
-  describeTouched,
-  describeTrunk,
-  noteParts,
-  type WorktreeSummary,
-} from "../../core/commands/list.ts";
+import type { WorktreeSummary } from "../../core/commands/list.ts";
 import type { PullRequest } from "../../core/commands/pr.ts";
-import { describeDiscard } from "../../core/commands/reset.ts";
 import type { Commit } from "../../core/history.ts";
+import { plural } from "../../hooks/command.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner } from "./Banner.tsx";
-import { clip, Files } from "./Files.tsx";
+import { Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
-import { columnWidths, GAP, hintsFor, LOG_ROWS, regionsFor, type Widths } from "./layout.ts";
+import { columnWidths, GAP, hintsFor, LOG_ROWS, regionsFor } from "./layout.ts";
 import { type CommandName, commandsFor, Menu, matching } from "./Menu.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
 import { PullRequests } from "./PullRequests.tsx";
+import { describePending, type Pending, wouldForcePush } from "./pending.ts";
+import { padTo, Row } from "./Row.tsx";
 import type { PendingOpen, WorktreeService } from "./service.ts";
-import { buildTree, firstChildOf, parentOf, type TreeRow } from "./tree.ts";
+import { buildTree, firstChildOf, parentOf, pathOf } from "./tree.ts";
 
 /**
  * `grove` with nothing to do: the worktrees, and making, syncing and removing
@@ -52,49 +38,6 @@ import { buildTree, firstChildOf, parentOf, type TreeRow } from "./tree.ts";
  * list, activity, keys — with the list taking whatever is left, so the keys are
  * always on the last row and nothing reflows as work scrolls past.
  */
-
-/**
- * What a key is about to do that nobody should be able to do by accident, held
- * until it is confirmed.
- *
- * One worktree, a folder's worth of them, or one worktree's changes, asked the
- * same `y`/`n` every way: the question is the same one — is this the row you
- * meant — and the answer should not depend on how many rows are behind it or on
- * remembering which key you pressed.
- *
- * `trust-open` is the one that is not destructive at all, and it belongs here
- * anyway: what it asks about is a command somebody else wrote arriving on this
- * machine, which is a thing to agree to on purpose even though every part of it
- * can be undone.
- */
-type Pending =
-  | { readonly kind: "one"; readonly summary: WorktreeSummary }
-  | {
-      readonly kind: "many";
-      readonly label: string;
-      readonly paths: readonly string[];
-      /** How many of `paths` are dirty — what makes this question a red one. */
-      readonly dirty: number;
-    }
-  /** `x`: the directory stays, everything uncommitted in it does not. */
-  | { readonly kind: "reset"; readonly summary: WorktreeSummary }
-  /** `s`, where the sync it starts would rewrite commits the remote already has. */
-  | { readonly kind: "sync"; readonly summary: WorktreeSummary }
-  /** `/sync-all`, where `count` of the worktrees would. */
-  | { readonly kind: "sync-all"; readonly count: number }
-  /**
-   * `/open`, where the line that would open it is one nobody here has read.
-   *
-   * The one question here that grants something instead of taking it away, and
-   * the only one whose *text* is the point rather than the count: trust is
-   * somebody having read the exact line, so the line is what the prompt says,
-   * and pressing `y` is the reading.
-   */
-  | {
-      readonly kind: "trust-open";
-      readonly summary: WorktreeSummary;
-      readonly waiting: PendingOpen;
-    };
 
 type Mode =
   | { readonly kind: "list" }
@@ -251,369 +194,12 @@ const GENERAL_TIPS: readonly Message[] = [
   },
 ];
 
-/**
- * The directory a row stands for, as an absolute path.
- *
- * A folder is a real directory on disk, so it answers too. Group keys carry
- * their trailing slash (it is how they are drawn); a path handed around as a
- * location should not.
- */
-export function pathOf(row: TreeRow, repoRoot: string): string {
-  return row.kind === "group" ? join(repoRoot, row.key.replace(/\/+$/, "")) : row.summary.path;
-}
-
 /** A new set with `key` flipped in or out — `Set` is mutable and state is not. */
 function toggled(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
   const next = new Set(set);
   if (!next.delete(key)) next.add(key);
 
   return next;
-}
-
-/** `1 command`, `2 commands` — the label a confirmed action is given. */
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
-/** Pads or truncates to exactly `width`, so columns stay columns. */
-function padTo(text: string, width: number): string {
-  return clip(text, width).padEnd(width);
-}
-
-/**
- * One drift column, with the two directions coloured apart.
- *
- * They are not the same news. `↑` is work that exists only here — yours to push
- * or to merge, and yours to lose with the laptop, which is why it reads as
- * something you have rather than something wrong. `↓` is work you have not got,
- * and it is the half that bites: against the remote it is what makes "it worked
- * on my machine" true and useless, and against the trunk it is what `sync`
- * exists to close. Colouring them the same would make the row a number to
- * decode rather than a thing to glance at.
- *
- * A zero is dimmed whichever side it is on and whichever column it is in. Green
- * `↑0` down a whole column would be decoration competing with the rows that have
- * actually moved.
- *
- * Both columns are drawn by this, deliberately: `↑2 ↓1` means the same shape of
- * thing under `origin` and under `main`, so it is one convention to learn rather
- * than two.
- */
-function DriftCell({
-  drift,
-  text,
-  width,
-  selected,
-}: {
-  readonly drift: Drift | undefined;
-  /** What to draw; `drift` is what to colour it by. */
-  readonly text: string;
-  readonly width: number;
-  readonly selected: boolean;
-}) {
-  // Nothing to point at, and nothing the arrows could honestly say about it —
-  // `no upstream`, or the trunk's own blank row.
-  if (drift === undefined || text.length > width) {
-    return <Text dimColor={!selected}>{padTo(text, width)}</Text>;
-  }
-
-  return (
-    <>
-      <Text color={drift.ahead > 0 ? theme.ok : undefined} dimColor={drift.ahead === 0}>
-        {`↑${drift.ahead}`}
-      </Text>{" "}
-      <Text color={drift.behind > 0 ? theme.warn : undefined} dimColor={drift.behind === 0}>
-        {`↓${drift.behind}`}
-      </Text>
-      {" ".repeat(width - text.length)}
-    </>
-  );
-}
-
-/**
- * The working tree as one glyph, and only the unusual states as words.
- *
- * `clean` was a word the eye had to read on every row to learn nothing — it is
- * true of almost every worktree almost all the time, and the one row that is
- * dirty was the same shape and length as the rest. A filled dot has weight and a
- * hollow one does not, so the row that has changes is now the row that looks
- * different from across the terminal.
- *
- * Shape as well as colour, deliberately. Green-versus-yellow is invisible to a
- * good number of people and to anyone whose terminal theme has opinions, and a
- * status column nobody can read is worse than the word it replaced.
- */
-function StateCell({
-  summary,
-  width,
-  selected,
-}: {
-  readonly summary: WorktreeSummary;
-  readonly width: number;
-  readonly selected: boolean;
-}) {
-  const parts = noteParts(summary);
-  const notes = parts.length === 0 ? "" : ` ${parts.join(", ")}`;
-  const room = Math.max(0, width - 1);
-
-  const dot = (
-    <Text color={summary.dirty ? theme.warn : undefined} dimColor={!summary.dirty}>
-      {summary.dirty ? "●" : "○"}
-    </Text>
-  );
-
-  // One padded run when it does not fit, so the ellipsis lands where `padTo`
-  // would have put it. A cell being truncated has bigger problems than colour.
-  if (notes.length > room) {
-    return (
-      <>
-        {dot}
-        <Text dimColor={!selected}>{padTo(notes, room)}</Text>
-      </>
-    );
-  }
-
-  return (
-    <>
-      {dot}
-      {parts.map((part, at) => (
-        <Fragment key={part}>
-          <Text dimColor={!selected}>{at === 0 ? " " : ", "}</Text>
-          {/* The one word in this column that is an invitation rather than a
-              warning: `merged` and `gone` both mean the work landed and the
-              directory is free to go, which is news of the same kind as a green
-              `↑`. Everything beside it stays the colour of an aside. */}
-          <Text
-            color={part === summary.finished ? theme.ok : undefined}
-            dimColor={part !== summary.finished && !selected}
-          >
-            {part}
-          </Text>
-        </Fragment>
-      ))}
-      <Text>{" ".repeat(room - notes.length)}</Text>
-    </>
-  );
-}
-
-/**
- * Whether syncing this worktree would rewrite commits the remote already has.
- *
- * The question `s` has to answer before it acts, and it is answered from the
- * numbers already on the screen rather than by asking git a second time — the
- * caller has just refetched, so these are as fresh as the push itself will be.
- *
- * It mirrors what `syncOne` does, in the same order, and every `false` here is
- * a case that command handles without a force-push. Getting one of them wrong
- * costs a prompt in front of something harmless, or — the direction that
- * matters — no prompt in front of something that is not.
- */
-export function wouldForcePush(summary: WorktreeSummary): boolean {
-  // The trunk is the one branch `sync` pushes plainly: after its rebase it is
-  // strictly ahead, so there is nothing on the remote to overwrite. A detached
-  // HEAD has no branch to move at all.
-  if (summary.isDefault || summary.branch === undefined) return false;
-
-  // Both of these `sync` skips before it touches anything, so a prompt here
-  // would stand in front of a command that is about to decline — which is the
-  // prompt that teaches people to answer `y` without reading it.
-  if (summary.dirty || summary.rebasing) return false;
-
-  // Nothing published is nothing to overwrite. `publish` returns early on
-  // exactly this, which is its own problem and not one a prompt can fix.
-  if (summary.upstream === undefined) return false;
-
-  // Absent means git could not answer — 2.41 for `%(ahead-behind:)` — and an
-  // unanswered question about a force-push is asked rather than assumed away.
-  const trunk = summary.trunk;
-  if (trunk === undefined) return true;
-
-  // Nothing of its own is nothing to rewrite; and level with both the trunk
-  // and its own remote is a rebase that moves no commit anywhere.
-  if (trunk.ahead === 0) return false;
-
-  return trunk.behind > 0 || summary.behind > 0;
-}
-
-/**
- * The question a destructive key asks, and what it costs to answer `y`.
- *
- * Each one says what survives, since that is what the person is actually
- * weighing: for `r` the directory goes, the branch stays, and any uncommitted
- * changes go with the directory — and for `x` the honest answer is nothing, so
- * it says that rather than something softer.
- *
- * How loudly to ask comes back with the words, because it is the same question
- * asked once: which of the five wordings this is decides the colour too.
- */
-export function describePending(target: Pending): {
-  readonly text: string;
-  readonly colour: string;
-} {
-  // A dirty worktree is not refused any more — it is asked about instead, and
-  // the question has to carry what `y` now costs: the uncommitted changes go
-  // with the directory, counted the same way the reset counts them. A removal
-  // that discards them is a risk of a different kind from one that only takes a
-  // directory back, which is what the danger colour is for.
-  if (target.kind === "one") {
-    const { dir, dirty, changed, untracked } = target.summary;
-    if (dirty) {
-      return {
-        text: `remove ${dir} and discard ${describeDiscard(changed - untracked, untracked)}? the branch stays`,
-        colour: theme.danger,
-      };
-    }
-
-    return { text: `remove ${dir}? the directory goes, the branch stays`, colour: theme.warn };
-  }
-
-  // Both kinds, counted apart. `x` deletes untracked files too, and one of
-  // those may be work git has never seen a copy of — folding it into "3
-  // changes" would be the sentence someone regrets having skimmed. Always red:
-  // discarding changes for good is a risk of a different kind from a removal,
-  // which leaves the branch and its commits where they were.
-  if (target.kind === "reset") {
-    const { dir, changed, untracked } = target.summary;
-
-    return {
-      text: `discard ${describeDiscard(changed - untracked, untracked)} in ${dir}? there is no undo`,
-      colour: theme.danger,
-    };
-  }
-
-  // Both spellings of the same question, and the number is the point of it:
-  // "3 commits rewritten" is something to weigh, "this force-pushes" is
-  // something to wave through. `warn` rather than `danger` because a
-  // force-push is recoverable from the reflog and `x` is recoverable from
-  // nothing — keeping the two colours apart is what makes either mean
-  // anything.
-  if (target.kind === "sync") {
-    const { dir, trunk, upstream } = target.summary;
-    // No count where git is too old to have given one; see `wouldForcePush`.
-    const rewritten = trunk === undefined ? "commits" : plural(trunk.ahead, "commit");
-
-    return {
-      text: `sync ${dir}? ${rewritten} rewritten and force-pushed to ${upstream}`,
-      colour: theme.warn,
-    };
-  }
-
-  if (target.kind === "sync-all") {
-    const branches = `${target.count} ${target.count === 1 ? "branch is" : "branches are"}`;
-
-    return {
-      text: `sync every worktree? ${branches} force-pushed`,
-      colour: theme.warn,
-    };
-  }
-
-  // The one question here that takes nothing away, and the only one that has to
-  // quote something: what `y` agrees to is this exact text, so the text is the
-  // prompt. Amber and not red, which is the distinction the two colours are
-  // carrying — a line that opens an editor is a thing to look at before it runs,
-  // not a thing there is no coming back from.
-  if (target.kind === "trust-open") {
-    const { command, files } = target.waiting;
-
-    return {
-      text: `open ${target.summary.dir} with \`${command}\`? nobody here has read ${files.join(" or ")}`,
-      colour: theme.warn,
-    };
-  }
-
-  const all = `remove all ${target.paths.length} under ${target.label}?`;
-  if (target.dirty > 0) {
-    return {
-      text: `${all} ${target.dirty} ${target.dirty === 1 ? "has" : "have"} uncommitted changes, which go too — the branches stay`,
-      colour: theme.danger,
-    };
-  }
-
-  return { text: `${all} the directories go, the branches stay`, colour: theme.warn };
-}
-
-function Row({
-  row,
-  selected,
-  widths,
-  now,
-}: {
-  readonly row: TreeRow;
-  readonly selected: boolean;
-  readonly widths: Widths;
-  /**
-   * The moment the ages are measured from — the same one `columnWidths` sized
-   * the column with, handed down rather than read again here. A second
-   * `Date.now()` is how the label and the column it sits in came to disagree.
-   */
-  readonly now: number;
-}) {
-  const indent = "  ".repeat(row.depth);
-
-  // A folder has no state of its own, and never the `*`: you cannot be standing
-  // in a folder, only in one of the worktrees under it.
-  if (row.kind === "group") {
-    return (
-      <Text color={selected ? theme.accent : undefined} dimColor={!selected} wrap="truncate">
-        {`${selected ? "▸" : " "}   `}
-        {indent}
-        {row.label}
-        {/* The whole fold indicator, and only when shut. A chevron beside it
-            would be saying the same thing twice: a folder with its worktrees
-            indented underneath is visibly open, and one with a count and
-            nothing under it is visibly not. The count is also what the folded
-            rows were telling you, which a chevron is not. */}
-        {row.collapsed ? `  ${row.leaves.length}` : ""}
-      </Text>
-    );
-  }
-
-  return (
-    <Text color={selected ? theme.accent : undefined} wrap="truncate">
-      {`${selected ? "▸" : " "} ${row.summary.current ? "*" : " "} `}
-      {padTo(`${indent}${row.label}`, widths.tree)}
-      {GAP}
-      {widths.remote > 0 ? (
-        <>
-          <DriftCell
-            drift={
-              row.summary.upstream === undefined
-                ? undefined
-                : { ahead: row.summary.ahead, behind: row.summary.behind }
-            }
-            text={describeRemote(row.summary)}
-            width={widths.remote}
-            selected={selected}
-          />
-          {GAP}
-        </>
-      ) : null}
-      {widths.trunk > 0 ? (
-        <>
-          <DriftCell
-            drift={row.summary.trunk}
-            text={describeTrunk(row.summary)}
-            width={widths.trunk}
-            selected={selected}
-          />
-          {GAP}
-        </>
-      ) : null}
-      <StateCell summary={row.summary} width={widths.state} selected={selected} />
-      {/* Right beside the state, without a heading of its own: "when was I
-          last here" is an aside about the row, not a column the eye scans
-          down — and the state column is content-sized so this sits next to
-          the dot rather than at the far edge of the screen. */}
-      {widths.touched > 0 ? (
-        <>
-          {GAP}
-          <Text dimColor={!selected}>
-            {padTo(describeTouched(row.summary, now), widths.touched)}
-          </Text>
-        </>
-      ) : null}
-    </Text>
-  );
 }
 
 export function App({

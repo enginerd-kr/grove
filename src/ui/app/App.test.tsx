@@ -7,10 +7,11 @@ import type { Commit } from "../../core/history.ts";
 import { LineStore } from "../../report/lines.ts";
 import { keys, nextFrame, plain, waitFor } from "../test-utils.ts";
 import { theme } from "../theme.ts";
-import { App, describePending, pathOf, wouldForcePush } from "./App.tsx";
+import { App } from "./App.tsx";
 import { commandsFor } from "./Menu.tsx";
+import { describePending, wouldForcePush } from "./pending.ts";
 import type { WorktreeService } from "./service.ts";
-import { buildTree, type TreeRow } from "./tree.ts";
+import { buildTree, pathOf, type TreeRow } from "./tree.ts";
 
 /**
  * The screen, driven by keystrokes against a stubbed service.

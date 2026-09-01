@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 
 /**
@@ -196,6 +197,17 @@ export function parentOf(rows: readonly TreeRow[], row: TreeRow): TreeRow | unde
   }
 
   return undefined;
+}
+
+/**
+ * The directory a row stands for, as an absolute path.
+ *
+ * A folder is a real directory on disk, so it answers too. Group keys carry
+ * their trailing slash (it is how they are drawn); a path handed around as a
+ * location should not.
+ */
+export function pathOf(row: TreeRow, repoRoot: string): string {
+  return row.kind === "group" ? join(repoRoot, row.key.replace(/\/+$/, "")) : row.summary.path;
 }
 
 /**
