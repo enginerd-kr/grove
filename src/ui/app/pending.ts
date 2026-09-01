@@ -1,8 +1,8 @@
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
-import { plural } from "../../hooks/command.ts";
+import { plural } from "../../core/text.ts";
 import { theme } from "../theme.ts";
-import type { PendingOpen } from "./service.ts";
+import type { PendingOpen, WorktreeService } from "./service.ts";
 
 /**
  * What a key is about to do that nobody should be able to do by accident, held
@@ -181,4 +181,63 @@ export function describePending(target: Pending): {
   }
 
   return { text: `${all} the directories go, the branches stay`, colour: theme.warn };
+}
+
+/**
+ * What `y` does, beside the words it was asked in.
+ *
+ * The question and its consequence are decided in the same file so a kind
+ * cannot say one thing and do another: `describePending` writes the prompt,
+ * and this hands back the label and the call the prompt was about. Adding a
+ * kind to `Pending` breaks both, which is the maintenance the screen wants.
+ */
+export function commitPending(
+  target: Pending,
+  service: WorktreeService,
+): { readonly label: string; readonly run: () => Promise<string> } {
+  if (target.kind === "reset") {
+    return {
+      label: `discarding changes in ${target.summary.dir}`,
+      run: () => service.reset(target.summary.path),
+    };
+  }
+
+  // Both sync answers run the command unchanged: the question was about
+  // whether to start it, and `syncWorktrees` decides the rest exactly as it
+  // does from the command line.
+  if (target.kind === "sync") {
+    return {
+      label: `syncing ${target.summary.dir}`,
+      run: () => service.sync(target.summary.path),
+    };
+  }
+  if (target.kind === "sync-all") {
+    return { label: "syncing every worktree", run: () => service.sync() };
+  }
+
+  // `y` here records having read the line that was on the row, which is what
+  // the trust record is — and it is one record for the whole file, so the same
+  // `.grove.toml`'s setup commands run from `a` afterwards without asking
+  // again. That is the same thing `grove open --trust` does, reached from the
+  // one surface that can show the line first.
+  if (target.kind === "trust-open") {
+    return {
+      label: `opening ${target.summary.dir}`,
+      run: () => service.open(target.summary.path, true),
+    };
+  }
+
+  // `dirty` carries the answer just given: the question counted the
+  // uncommitted changes, so the removal may now discard them.
+  if (target.kind === "one") {
+    return {
+      label: `removing ${target.summary.dir}`,
+      run: () => service.remove(target.summary.path, target.summary.dirty),
+    };
+  }
+
+  return {
+    label: `removing ${target.paths.length} under ${target.label}`,
+    run: () => service.removeMany(target.paths, target.dirty > 0),
+  };
 }

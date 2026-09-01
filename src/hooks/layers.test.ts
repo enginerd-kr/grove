@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { entryExists } from "../core/fs.ts";
 import { pendingCommands } from "./command.ts";
-import { HOOKS_FILE, LOCAL_HOOKS_FILE, openTargetFor, repoHooks } from "./config.ts";
+import { HOOKS_FILE, LOCAL_HOOKS_FILE, openTargetFor } from "./config.ts";
 import { runSetup } from "./setup.ts";
+import { repoHooks } from "./source.ts";
 import { refusalFromRun, setUp, withRepo } from "./test-utils.ts";
 import { fingerprintOf, trust } from "./trust.ts";
 

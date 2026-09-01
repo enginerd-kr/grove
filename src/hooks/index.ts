@@ -29,30 +29,9 @@
  * themselves reach for the module they mean.
  */
 
-export {
-  commandEnvFor,
-  failureFor,
-  type HookFailure,
-  type HookTarget,
-  pendingCommands,
-  setupGate,
-} from "./command.ts";
-export {
-  configuredFiles,
-  globalHooksPath,
-  HOOKS_FILE,
-  type Hooks,
-  LOCAL_HOOKS_FILE,
-  openHere,
-  repoHooks,
-  wantsOpen,
-} from "./config.ts";
-export { openWhatItAsksFor, type PendingOpen, pendingOpen } from "./open.ts";
-export {
-  describeSetup,
-  runSetup,
-  type SetupOptions,
-  type SetupResult,
-  trustAndRun,
-} from "./setup.ts";
+export { commandEnvFor, failureFor, pendingCommands } from "./command.ts";
+export { HOOKS_FILE, type Hooks } from "./config.ts";
+export { type PendingOpen, pendingOpen } from "./open.ts";
+export { describeSetup, runSetup, type SetupResult, trustAndRun } from "./setup.ts";
+export { repoHooks } from "./source.ts";
 export { runTeardown, type TeardownResult } from "./teardown.ts";

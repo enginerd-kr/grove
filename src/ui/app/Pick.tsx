@@ -4,6 +4,7 @@ import { useState } from "react";
 import { StatusBar } from "../components/StatusBar.tsx";
 import { theme } from "../theme.ts";
 import { Banner } from "./Banner.tsx";
+import { windowOf } from "./window.ts";
 
 /**
  * `grove` in a folder that holds more than one repository.
@@ -33,18 +34,6 @@ const ROOMY_ROWS = 16;
  */
 function listRows(rows: number): number {
   return Math.max(1, rows - 8);
-}
-
-/**
- * The window of rows to draw, holding the cursor inside it.
- *
- * The same centring the worktree list and the pull-request popup use: the
- * cursor stays put while the rows move under it.
- */
-function windowOf(count: number, index: number, rows: number): number {
-  if (count <= rows) return 0;
-
-  return Math.max(0, Math.min(count - rows, index - Math.floor(rows / 2)));
 }
 
 type Props = {

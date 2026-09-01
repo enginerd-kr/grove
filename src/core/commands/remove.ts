@@ -119,13 +119,24 @@ export async function removeWorktree(
   );
 
   if (options.deleteBranch && target.branch !== undefined) {
-    // Before the deletion and not after it: `git branch -d` takes the whole
-    // `branch.<name>` config section with it, and the stack record is in there.
-    // Anything standing on this branch is handed to whatever it was standing on.
-    for (const { child, parent } of await forgetBranch(repo.gitDir, target.branch)) {
-      reporter.info(`${child} now sits on ${parent ?? "the default branch"}`);
+    const outcome = await deleteBranch(
+      repo.gitDir,
+      target.branch,
+      { force: options.force, announce: true },
+      reporter,
+    );
+    if (!outcome.deleted) {
+      // `-d` refusing is the safety net; here the worktree is already gone, so
+      // the refusal has to say what half-happened and hand over the decision.
+      throw new GroveError(
+        "refused",
+        `the worktree is gone, but ${target.branch} has unmerged commits`,
+        {
+          hint: "pass --force to delete the branch too, or push it first",
+          details: [`the branch itself is still there: ${outcome.kept}`],
+        },
+      );
     }
-    await deleteBranch(repo.gitDir, target.branch, options.force, reporter);
 
     return { path: target.path, dir, branch: target.branch, branchDeleted: true, teardown };
   }
@@ -239,26 +250,42 @@ export async function pruneEmptyParents(root: string, removed: string): Promise<
   }
 }
 
-async function deleteBranch(
+/**
+ * Deletes a branch, with everything that hangs off the deletion — the one
+ * spelling of it, shared with `prune`.
+ *
+ * The stack repair runs *before* the deletion and not after: `git branch -d`
+ * takes the whole `branch.<name>` config section with it, and the stack record
+ * is in there. Anything standing on this branch is handed to whatever it was
+ * standing on.
+ *
+ * `-d` refuses a branch whose commits are not merged anywhere; that refusal is
+ * the safety net, so it is only downgraded to `-D` when `force` says so. What
+ * it refuses comes back as `kept` — the one command that would do it anyway —
+ * so the decision stays with the caller who knows whether to raise it or to
+ * put it in a table.
+ *
+ * `announce` is that same split said once: removing one worktree, a deleted
+ * branch is news and belongs on the line under it; reaping twenty, it is a
+ * column in the table `prune` prints and a line each would be noise.
+ */
+export async function deleteBranch(
   bare: string,
   branch: string,
-  force: boolean,
+  options: { readonly force: boolean; readonly announce: boolean },
   reporter: Reporter,
-): Promise<void> {
-  // `-d` refuses a branch whose commits are not merged anywhere; that refusal is
-  // the safety net, so it is only downgraded to `-D` when --force was asked for.
-  const result = await runGit(["branch", force ? "-D" : "-d", branch], { cwd: bare });
-
-  if (result.code !== 0) {
-    throw new GroveError("refused", `the worktree is gone, but ${branch} has unmerged commits`, {
-      hint: "pass --force to delete the branch too, or push it first",
-      details: [`the branch itself is still there: git -C ${bare} branch -D ${branch}`],
-    });
+): Promise<{ readonly deleted: boolean; readonly kept?: string }> {
+  for (const { child, parent } of await forgetBranch(bare, branch)) {
+    reporter.info(`${child} now sits on ${parent ?? "the default branch"}`);
   }
 
-  reporter.info(`deleted branch ${branch}`);
+  const result = await runGit(["branch", options.force ? "-D" : "-d", branch], { cwd: bare });
+  if (result.code !== 0) return { deleted: false, kept: `git -C ${bare} branch -D ${branch}` };
 
+  if (options.announce) reporter.info(`deleted branch ${branch}`);
   await dropPrRemote(bare, branch, reporter);
+
+  return { deleted: true };
 }
 
 /**
@@ -270,16 +297,11 @@ async function deleteBranch(
  * alongside the branch, never alongside the worktree: a worktree can be removed
  * and the branch kept, and the branch is what the remote is for.
  *
- * Exported for `prune`, which deletes branches itself rather than through the
- * removal above — and a merged pull request whose fork branch is gone is
- * exactly what `prune --delete-branch` reaps, so it is the command that would
- * leak the most of these.
+ * A merged pull request whose fork branch is gone is exactly what
+ * `prune --delete-branch` reaps, so `deleteBranch` above is what keeps the two
+ * commands from leaking these differently.
  */
-export async function dropPrRemote(
-  bare: string,
-  branch: string,
-  reporter: Reporter,
-): Promise<void> {
+async function dropPrRemote(bare: string, branch: string, reporter: Reporter): Promise<void> {
   const number = prNumberOf(branch);
   if (number === undefined) return;
 

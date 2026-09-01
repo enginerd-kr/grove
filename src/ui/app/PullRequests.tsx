@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 import { describeAge } from "../../core/commands/list.ts";
 import type { PullRequest } from "../../core/commands/pr.ts";
 import { theme } from "../theme.ts";
+import { windowOf } from "./window.ts";
 
 /**
  * The open pull requests, as a list to pick one out of.
@@ -39,19 +40,6 @@ const GAP = "  ";
  */
 export function pullRequestRows(count: number, rows: number): number {
   return 2 + 1 + Math.min(Math.max(0, rows), count);
-}
-
-/**
- * The window of rows to draw, holding the cursor inside it.
- *
- * The same centring the list uses: the cursor stays put while the rows move
- * under it, rather than the rows staying put and the cursor running off the
- * end of what is drawn.
- */
-function windowOf(count: number, index: number, rows: number): number {
-  if (count <= rows) return 0;
-
-  return Math.max(0, Math.min(count - rows, index - Math.floor(rows / 2)));
 }
 
 export function PullRequests({ prs, index, rows }: Props) {

@@ -2,7 +2,6 @@ import { parseArgs } from "node:util";
 import { version } from "../../package.json";
 import type { FlagSpec, SubcommandSpec } from "./help.ts";
 import {
-  BIN_NAME,
   findSubcommand,
   formatGlobalHelp,
   formatSubcommandHelp,
@@ -130,8 +129,6 @@ export type CliCommand =
   /** Write to stderr and exit 2. `usage` is the relevant help, when there is one. */
   | { readonly kind: "error"; readonly message: string; readonly usage?: string };
 
-export { BIN_NAME };
-
 type ParsedValues = Record<string, string | boolean | undefined>;
 
 function optionsFor(flags: readonly FlagSpec[]) {
@@ -190,14 +187,16 @@ function buildCommand(
   // same arity so a typo lands as "wrong number of arguments" rather than as a
   // branch named after a flag the user misspelled.
   const [first, second] = positionals;
+  /** Every missing-argument refusal, named for the argument rather than the flag. */
+  const needs = (what: string): CliCommand => usageError(spec, `${spec.name} needs ${what}`);
 
   switch (spec.name) {
     case "clone": {
-      if (first === undefined) return usageError(spec, `${spec.name} needs a repository URL`);
+      if (first === undefined) return needs("a repository URL");
       return { name: "clone", url: first, dir: second, branch: str(values, "branch") };
     }
     case "add": {
-      if (first === undefined) return usageError(spec, `${spec.name} needs a branch name`);
+      if (first === undefined) return needs("a branch name");
 
       const from = str(values, "from");
       const on = str(values, "on");
@@ -222,7 +221,7 @@ function buildCommand(
       };
     }
     case "pr": {
-      if (first === undefined) return usageError(spec, `${spec.name} needs a pull request`);
+      if (first === undefined) return needs("a pull request");
       return {
         name: "pr",
         pr: first,
@@ -244,9 +243,7 @@ function buildCommand(
     case "exec": {
       // Every positional, not just the first: the usage line ends in `...`, so
       // `maxPositionals` let them all through and they are the command.
-      if (positionals.length === 0) {
-        return usageError(spec, `${spec.name} needs a command to run`);
-      }
+      if (positionals.length === 0) return needs("a command to run");
 
       return { name: "exec", argv: positionals, failFast: bool(values, "fail-fast") };
     }
@@ -266,8 +263,8 @@ function buildCommand(
       };
     }
     case "rename": {
-      if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to rename`);
-      if (second === undefined) return usageError(spec, `${spec.name} needs a new branch name`);
+      if (first === undefined) return needs("a worktree to rename");
+      if (second === undefined) return needs("a new branch name");
 
       return {
         name: "rename",
@@ -282,7 +279,7 @@ function buildCommand(
     case "open":
       return { name: "open", target: first, trust: bool(values, "trust") };
     case "reset": {
-      if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to reset`);
+      if (first === undefined) return needs("a worktree to reset");
       return {
         name: "reset",
         target: first,
@@ -291,7 +288,7 @@ function buildCommand(
       };
     }
     case "remove": {
-      if (first === undefined) return usageError(spec, `${spec.name} needs a worktree to remove`);
+      if (first === undefined) return needs("a worktree to remove");
       return {
         name: "remove",
         target: first,

@@ -4,11 +4,13 @@ import { GroveError, isGroveError } from "../core/errors.ts";
 import { entryExists, isDirectoryEntry } from "../core/fs.ts";
 import { runGit } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
+import { plural } from "../core/text.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
-import { type HookFailure, type HookTarget, plural, runCommands, setupGate } from "./command.ts";
-import { HOOKS_FILE, type Hooks, plannedCount, repoHooks, sourceWorktree } from "./config.ts";
+import { type HookFailure, type HookTarget, runCommands, setupGate } from "./command.ts";
+import { HOOKS_FILE, type Hooks, plannedCount } from "./config.ts";
 import { openWhatItAsksFor } from "./open.ts";
+import { repoHooks, sourceWorktree } from "./source.ts";
 import { trust } from "./trust.ts";
 
 /**

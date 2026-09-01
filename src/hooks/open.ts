@@ -10,9 +10,9 @@ import {
   openGatedHere,
   openHere,
   openTargetFor,
-  repoHooks,
   wantsOpen,
 } from "./config.ts";
+import { repoHooks } from "./source.ts";
 import { awaitingTrust, trust } from "./trust.ts";
 
 /**

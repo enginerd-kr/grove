@@ -5,6 +5,7 @@ import type { Reporter } from "../../report/reporter.ts";
 import {
   defaultBranch,
   enableReflogs,
+  FETCH_REFSPEC,
   localBranchExists,
   localBranches,
   REMOTE,
@@ -48,17 +49,6 @@ export type CloneResult = {
   readonly branch: string;
   readonly worktree: string;
 };
-
-/**
- * The refspec `git clone --bare` declines to write.
- *
- * Without it `git fetch` exits 0 having updated nothing: a bare clone copies the
- * remote's heads straight into `refs/heads/*` and configures no mapping into
- * `refs/remotes/*`. Every later command then fails in a way that points
- * somewhere else — `add` cannot find `origin/feat-x`, `sync` has no upstream to
- * rebase onto, `--prune` prunes nothing — so it is set before the first fetch.
- */
-const FETCH_REFSPEC = `+refs/heads/*:refs/remotes/${REMOTE}/*`;
 
 export async function cloneRepo(
   cwd: string,

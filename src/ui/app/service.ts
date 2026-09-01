@@ -15,7 +15,8 @@ import {
 } from "../../core/commands/sync.ts";
 import { GroveError } from "../../core/errors.ts";
 import { type Commit, recentCommits } from "../../core/history.ts";
-import { type RepoPaths, repoPaths } from "../../core/layout.ts";
+import { deepestFirst, type RepoPaths, repoPaths } from "../../core/layout.ts";
+import { plural } from "../../core/text.ts";
 import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
 import {
   describeSetup,
@@ -254,12 +255,9 @@ export function createSetupService(
 
 /** How a finished sync reads: counts by outcome, worst first. */
 function describeSync(outcomes: readonly SyncOutcome[]): string {
-  if (outcomes.length === 0) return "nothing to sync";
-  if (outcomes.length === 1) {
-    const only = outcomes[0];
-
-    return only === undefined ? "nothing to sync" : `${only.dir} ${only.kind}`;
-  }
+  const [only] = outcomes;
+  if (only === undefined) return "nothing to sync";
+  if (outcomes.length === 1) return `${only.dir} ${only.kind}`;
 
   const counts = new Map<string, number>();
   for (const outcome of outcomes) counts.set(outcome.kind, (counts.get(outcome.kind) ?? 0) + 1);
@@ -359,11 +357,7 @@ export function createWorktreeService(
     },
 
     removeMany: async (targets, discardDirty = false) => {
-      // Deepest first, so `remove` can prune the folder it empties instead of
-      // tripping over a worktree still sitting inside it.
-      const ordered = targets.toSorted(
-        (a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b),
-      );
+      const ordered = targets.toSorted(deepestFirst);
 
       let removed = 0;
       const refusals: unknown[] = [];
@@ -387,10 +381,9 @@ export function createWorktreeService(
       const first = refusals[0];
       if (removed === 0 && first !== undefined) throw first;
 
-      const plural = removed === 1 ? "" : "s";
-      if (refusals.length === 0) return `removed ${removed} worktree${plural}`;
+      const took = `removed ${plural(removed, "worktree")}`;
 
-      return `removed ${removed} worktree${plural}, ${refusals.length} refused`;
+      return refusals.length === 0 ? took : `${took}, ${refusals.length} refused`;
     },
 
     reset: async (target) => {

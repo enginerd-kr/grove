@@ -5,8 +5,9 @@ import { ExitCode, errorToExitCode } from "../cli/exit-codes.ts";
 import { entryExists } from "../core/fs.ts";
 import { seedGit } from "../core/test-utils.ts";
 import { failureFor, pendingCommands } from "./command.ts";
-import { HOOKS_FILE, NO_HOOKS, repoHooks } from "./config.ts";
+import { HOOKS_FILE, NO_HOOKS } from "./config.ts";
 import { describeSetup, runSetup, type SetupResult, trustAndRun } from "./setup.ts";
+import { repoHooks } from "./source.ts";
 import { recorder, refusalFromRun, setUp, withRepo } from "./test-utils.ts";
 import { trust } from "./trust.ts";
 

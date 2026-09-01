@@ -1,6 +1,7 @@
 import { type Reporter, withStep } from "../../report/reporter.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
+import { plural } from "../text.ts";
 import {
   LISTED,
   listWorktrees,
@@ -64,10 +65,8 @@ export type ResetResult = {
 export function describeDiscard(tracked: number, untracked: number): string {
   const parts: string[] = [];
 
-  if (tracked > 0) parts.push(`${tracked} change${tracked === 1 ? "" : "s"}`);
-  if (untracked > 0) {
-    parts.push(`${untracked} untracked file${untracked === 1 ? "" : "s"}`);
-  }
+  if (tracked > 0) parts.push(plural(tracked, "change"));
+  if (untracked > 0) parts.push(plural(untracked, "untracked file"));
   if (parts.length === 0) return "nothing";
 
   return parts.join(" and ");

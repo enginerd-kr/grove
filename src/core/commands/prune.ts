@@ -1,11 +1,9 @@
 import type { Reporter } from "../../report/reporter.ts";
 import { fetchRemotes } from "../branches.ts";
 import { isGroveError } from "../errors.ts";
-import { runGit } from "../git.ts";
-import type { RepoPaths } from "../layout.ts";
-import { forgetBranch } from "../stack.ts";
+import { deepestFirst, type RepoPaths } from "../layout.ts";
 import { type Finished, listWorktreeSummaries, type WorktreeSummary } from "./list.ts";
-import { dropPrRemote, removeWorktree } from "./remove.ts";
+import { deleteBranch, removeWorktree } from "./remove.ts";
 import { describeDiscard } from "./reset.ts";
 
 /**
@@ -94,34 +92,6 @@ function skipReason(summary: WorktreeSummary): string | undefined {
   return undefined;
 }
 
-/**
- * Deletes the branch, and treats git's refusal as news rather than a failure.
- *
- * Always `-d`, never `-D`. git refuses to delete a branch holding commits that
- * are on nothing else, and that refusal is the entire safety of deleting
- * branches in bulk — a `gone` branch whose pull request was squashed genuinely
- * does hold commits no other ref has, and forcing past that would throw away
- * the only copy. What it refuses is reported with the one command that would
- * do it anyway, so the decision stays with the person who can make it.
- *
- * A `pr/<n>` branch takes its `pr-<n>` remote with it, the same way `remove
- * --delete-branch` does — the remote serves that branch and nothing else, and
- * `fetchRemotes` is `fetch --all`, so one left behind is paid for on every
- * sync, prune and refresh tick from here on.
- */
-async function deleteBranch(
-  bare: string,
-  branch: string,
-  reporter: Reporter,
-): Promise<{ deleted: boolean; kept?: string }> {
-  const result = await runGit(["branch", "-d", branch], { cwd: bare });
-  if (result.code !== 0) return { deleted: false, kept: `git -C ${bare} branch -D ${branch}` };
-
-  await dropPrRemote(bare, branch, reporter);
-
-  return { deleted: true };
-}
-
 export async function pruneWorktrees(
   repo: RepoPaths,
   cwd: string,
@@ -148,12 +118,7 @@ export async function pruneWorktrees(
       (options.only === undefined || summary.finished === options.only),
   );
 
-  // Deepest first, so removing the last worktree under `feat/` lets the same
-  // call clear the empty `feat/` behind it instead of tripping over a sibling
-  // that has not gone yet.
-  const ordered = finished.toSorted(
-    (a, b) => b.dir.split("/").length - a.dir.split("/").length || a.dir.localeCompare(b.dir),
-  );
+  const ordered = finished.toSorted((a, b) => deepestFirst(a.dir, b.dir));
 
   const entries: PruneEntry[] = [];
 
@@ -201,14 +166,18 @@ export async function pruneWorktrees(
       continue;
     }
 
-    // Before the deletion, for the reason `remove` gives: the record lives in
-    // the section git is about to take away, and a stack whose bottom branch
-    // was just cleared is still a stack of the ones above it.
-    for (const { child, parent } of await forgetBranch(repo.gitDir, base.branch)) {
-      reporter.info(`${child} now sits on ${parent ?? "the default branch"}`);
-    }
-
-    const outcome = await deleteBranch(repo.gitDir, base.branch, reporter);
+    // Never `force` here, so this stays `-d` and never `-D`: git refusing to
+    // delete a branch holding commits that are on nothing else is the entire
+    // safety of deleting branches in bulk — a `gone` branch whose pull request
+    // was squashed genuinely does hold commits no other ref has, and forcing
+    // past that would throw away the only copy. The refusal lands in the table
+    // as `branchKept`, so the decision stays with the person who can make it.
+    const outcome = await deleteBranch(
+      repo.gitDir,
+      base.branch,
+      { force: false, announce: false },
+      reporter,
+    );
     entries.push({ ...base, branchDeleted: outcome.deleted, branchKept: outcome.kept });
   }
 

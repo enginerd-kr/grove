@@ -2,7 +2,7 @@ import type { RepoPaths } from "../core/layout.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
 import { type HookFailure, type HookTarget, runCommands, teardownGate } from "./command.ts";
-import { repoHooks } from "./config.ts";
+import { repoHooks } from "./source.ts";
 
 /**
  * `[teardown]` — what to run in a worktree just before it is removed.

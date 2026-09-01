@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { repoHooks } from "../../hooks/config.ts";
+import { repoHooks } from "../../hooks/source.ts";
 import { waitForEntry } from "../../hooks/test-utils.ts";
 import { trust } from "../../hooks/trust.ts";
 import {

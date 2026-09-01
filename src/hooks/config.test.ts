@@ -10,11 +10,9 @@ import {
   parseHooks,
   plannedCount,
   readHooks,
-  readHooksFile,
-  repoHooks,
 } from "./config.ts";
+import { repoHooks } from "./source.ts";
 import { refusalFrom, withRepo } from "./test-utils.ts";
-import { fingerprintOf } from "./trust.ts";
 
 /**
  * `.grove.toml` is the one file a repository writes for grove to read, so what
@@ -346,39 +344,6 @@ run = ["docker compose down"]
 `);
 
     expect(plannedCount(hooks)).toBe(0);
-  });
-});
-
-describe("readHooksFile", () => {
-  test("a worktree without one is not an error", async () => {
-    await withTempRepo(async (repo) => {
-      const hooks = await readHooksFile(repo.work);
-
-      expect(hooks).toEqual(NO_HOOKS);
-      expect(hooks.layers).toEqual([]);
-      expect(hooks.fingerprint).toBeUndefined();
-    });
-  });
-
-  test("carries the file it read and the fingerprint of it", async () => {
-    await withTempRepo(async (repo) => {
-      const text = '[setup]\ncopy = [".env"]\nrun = ["bun install"]\n';
-      await Bun.write(join(repo.work, HOOKS_FILE), text);
-
-      const hooks = await readHooksFile(repo.work);
-
-      expect(hooks.copy).toEqual([".env"]);
-      expect(hooks.layers).toEqual([{ path: join(repo.work, HOOKS_FILE), gated: true, text }]);
-      expect(hooks.fingerprint).toBe(fingerprintOf(text));
-    });
-  });
-
-  test("a file it cannot parse is raised, not skipped", async () => {
-    await withTempRepo(async (repo) => {
-      await Bun.write(join(repo.work, HOOKS_FILE), '[setup]\ncpoy = [".env"]\n');
-
-      await expect(readHooksFile(repo.work)).rejects.toThrow("has no key named");
-    });
   });
 });
 

@@ -11,6 +11,7 @@ import { GroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { ancestry, clearParent, readStack, type Stack, setParent, stackOrder } from "../stack.ts";
+import { toLines } from "../text.ts";
 import {
   LISTED,
   listWorktrees,
@@ -265,21 +266,23 @@ async function syncOne(
   // carry the key at all: `reparented: undefined` and no `reparented` read the
   // same to a person and differently to `--json` and to a test.
   const repaired = base.reparented === undefined ? {} : { reparented: base.reparented };
-  const skip = (reason: string, conflicts?: readonly string[]): SyncOutcome => ({
+  // Every outcome this worktree can end in, built once: the identity of the
+  // worktree, plus whatever the kind carries. `repaired` rides on all of them —
+  // a repaired record is a change to the repository, and it happened whether or
+  // not the worktree holding the branch turned out to be in a state to be moved.
+  const outcome = (kind: SyncOutcome["kind"], extra: Partial<SyncOutcome> = {}): SyncOutcome => ({
     path: record.path,
     dir: name,
     branch: record.branch,
-    kind: "skipped",
-    reason,
-    conflicts,
-    // Carried onto a skip as much as onto a rebase: a repaired record is a
-    // change to the repository, and it happened whether or not the worktree
-    // holding the branch turned out to be in a state to be moved.
+    kind,
     ...repaired,
+    ...extra,
   });
+  const skip = (reason: string, conflicts?: readonly string[]): SyncOutcome =>
+    outcome("skipped", { reason, conflicts });
   /** The two facts about the base, put on an outcome `settle` built without them. */
-  const stamp = (outcome: SyncOutcome): SyncOutcome => ({
-    ...outcome,
+  const stamp = (settled: SyncOutcome): SyncOutcome => ({
+    ...settled,
     onto: base.onto,
     ...repaired,
   });
@@ -334,18 +337,13 @@ async function syncOne(
     }
     step.fail(`${name} conflicts with ${ref}`);
 
-    return {
-      path: record.path,
-      dir: name,
-      branch: record.branch,
-      kind: "conflicted",
+    return outcome("conflicted", {
       reason: options.abortOnConflict
         ? `rebase onto ${ref} conflicted and was rolled back`
         : `rebase onto ${ref} conflicted and was left in place to resolve`,
       conflicts,
       onto,
-      ...repaired,
-    };
+    });
   };
 
   /**
@@ -481,8 +479,7 @@ async function publish(
  * a person can act on.
  */
 function stderrTail(stderr: string): string {
-  const lines = stderr
-    .split("\n")
+  const lines = toLines(stderr)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("To "));
 

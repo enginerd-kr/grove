@@ -1,6 +1,7 @@
 import { Box, Text } from "ink";
 import { version } from "../../../package.json";
 import { BIN_NAME } from "../../cli/help.ts";
+import { plural } from "../../core/text.ts";
 import { theme } from "../theme.ts";
 import { latestChange } from "./changelog.ts";
 
@@ -99,7 +100,7 @@ function describeFolder(worktrees?: number, here?: string, repos?: number): stri
   }
   if (worktrees === 0) return "no worktrees yet";
 
-  const counted = `${worktrees} worktree${worktrees === 1 ? "" : "s"}`;
+  const counted = plural(worktrees, "worktree");
 
   return here === undefined ? counted : `${counted} · in ${here}`;
 }

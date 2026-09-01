@@ -4,7 +4,7 @@ import { version } from "../../../package.json";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 import type { PullRequest } from "../../core/commands/pr.ts";
 import type { Commit } from "../../core/history.ts";
-import { plural } from "../../hooks/command.ts";
+import { plural } from "../../core/text.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar } from "../components/StatusBar.tsx";
 import { StepRow } from "../components/StepRow.tsx";
@@ -18,10 +18,11 @@ import { type CommandName, commandsFor, Menu, matching } from "./Menu.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
 import { PullRequests } from "./PullRequests.tsx";
-import { describePending, type Pending, wouldForcePush } from "./pending.ts";
+import { commitPending, describePending, type Pending, wouldForcePush } from "./pending.ts";
 import { padTo, Row } from "./Row.tsx";
-import type { PendingOpen, WorktreeService } from "./service.ts";
+import type { WorktreeService } from "./service.ts";
 import { buildTree, firstChildOf, parentOf, pathOf } from "./tree.ts";
+import { editPrompt, type Prompt, typed } from "./typing.ts";
 
 /**
  * `grove` with nothing to do: the worktrees, and making, syncing and removing
@@ -48,19 +49,7 @@ type Mode =
    * were still typing the name would be a different branch than the one the
    * prompt said.
    */
-  /**
-   * `caret` is where the next character lands, counted in characters before
-   * it: 0 is the start of `value` and `value.length` is the end. Kept beside
-   * the text rather than left at the end of it, because a name typed with a
-   * typo three characters back is fixed by walking `←` to it, not by deleting
-   * everything after it.
-   */
-  | {
-      readonly kind: "add";
-      readonly value: string;
-      readonly caret: number;
-      readonly from?: string;
-    }
+  | ({ readonly kind: "add"; readonly from?: string } & Prompt)
   | { readonly kind: "confirm"; readonly target: Pending }
   /**
    * The open pull requests, and which one the cursor is on.
@@ -307,14 +296,25 @@ export function App({
   }, [service]);
 
   /**
+   * The keys blocked and the last answer gone — how every action starts,
+   * whether it ends in a message or in a question.
+   */
+  const busy = useCallback(
+    (label: string) => {
+      store.clear();
+      setMessage(undefined);
+      setMode({ kind: "busy", label });
+    },
+    [store],
+  );
+
+  /**
    * Every action, in one shape: clear the last run's lines, block the keys,
    * then say what happened whether it worked or not.
    */
   const perform = useCallback(
     async (label: string, action: () => Promise<string>) => {
-      store.clear();
-      setMessage(undefined);
-      setMode({ kind: "busy", label });
+      busy(label);
 
       try {
         setMessage({ kind: "info", text: await action() });
@@ -331,7 +331,7 @@ export function App({
       }
       setMode({ kind: "list" });
     },
-    [refresh, store],
+    [busy, refresh],
   );
 
   /**
@@ -354,6 +354,29 @@ export function App({
   }, [service]);
 
   /**
+   * Ask first, act second — the shape `s`, `/sync-all` and `/open` share.
+   *
+   * The probe finds the question worth putting up, or `undefined` where there
+   * is none. A probe that *fails* falls through to the action too: it is about
+   * to do the same work, and will say what went wrong in its own words.
+   */
+  const askThen = useCallback(
+    async (checking: string, probe: () => Promise<Pending | undefined>, act: () => void) => {
+      busy(checking);
+
+      let target: Pending | undefined;
+      try {
+        target = await probe();
+      } catch {
+        return act();
+      }
+
+      return target === undefined ? act() : setMode({ kind: "confirm", target });
+    },
+    [busy],
+  );
+
+  /**
    * `s`: fetch, then decide whether this is a question or just a command.
    *
    * The fetch has to come first and it has to come *before* anything is
@@ -371,52 +394,38 @@ export function App({
    * nothing new is the cheap half of this screen's existing timer anyway.
    */
   const beginSync = useCallback(
-    async (summary: WorktreeSummary) => {
-      store.clear();
-      setMessage(undefined);
-      setMode({ kind: "busy", label: `checking ${summary.dir}` });
+    (summary: WorktreeSummary) =>
+      askThen(
+        `checking ${summary.dir}`,
+        async () => {
+          // Gone from under the cursor between the keystroke and the fetch is
+          // not a question: `sync` resolves the target itself and says so
+          // properly.
+          const now = (await reread()).find((row) => row.path === summary.path);
 
-      const run = () => void perform(`syncing ${summary.dir}`, () => service.sync(summary.path));
-
-      let fresh: readonly WorktreeSummary[];
-      try {
-        fresh = await reread();
-      } catch {
-        // The read failed, so there is nothing to decide on. `sync` is about to
-        // do the same reads and will say what went wrong in its own words.
-        return run();
-      }
-
-      // Gone from under the cursor between the keystroke and the fetch. Run it
-      // anyway: `sync` resolves the target itself and says so properly.
-      const now = fresh.find((row) => row.path === summary.path);
-      if (now === undefined || !wouldForcePush(now)) return run();
-
-      return setMode({ kind: "confirm", target: { kind: "sync", summary: now } });
-    },
-    [perform, reread, service, store],
+          return now !== undefined && wouldForcePush(now)
+            ? { kind: "sync", summary: now }
+            : undefined;
+        },
+        () => void perform(`syncing ${summary.dir}`, () => service.sync(summary.path)),
+      ),
+    [askThen, perform, reread, service],
   );
 
   /** The same question for `/sync-all`, asked once for however many it covers. */
-  const beginSyncAll = useCallback(async () => {
-    store.clear();
-    setMessage(undefined);
-    setMode({ kind: "busy", label: "checking every worktree" });
+  const beginSyncAll = useCallback(
+    () =>
+      askThen(
+        "checking every worktree",
+        async () => {
+          const count = (await reread()).filter(wouldForcePush).length;
 
-    const run = () => void perform("syncing every worktree", () => service.sync());
-
-    let fresh: readonly WorktreeSummary[];
-    try {
-      fresh = await reread();
-    } catch {
-      return run();
-    }
-
-    const count = fresh.filter(wouldForcePush).length;
-    if (count === 0) return run();
-
-    return setMode({ kind: "confirm", target: { kind: "sync-all", count } });
-  }, [perform, reread, service, store]);
+          return count > 0 ? { kind: "sync-all", count } : undefined;
+        },
+        () => void perform("syncing every worktree", () => service.sync()),
+      ),
+    [askThen, perform, reread, service],
+  );
 
   /**
    * `/open`: find out whether the line has been read here, then run it or show
@@ -435,27 +444,17 @@ export function App({
    * every repository whose file is already trusted goes straight to opening.
    */
   const beginOpen = useCallback(
-    async (summary: WorktreeSummary) => {
-      store.clear();
-      setMessage(undefined);
-      setMode({ kind: "busy", label: `opening ${summary.dir}` });
+    (summary: WorktreeSummary) =>
+      askThen(
+        `opening ${summary.dir}`,
+        async () => {
+          const waiting = await service.pendingOpen(summary.path);
 
-      const run = () => void perform(`opening ${summary.dir}`, () => service.open(summary.path));
-
-      let waiting: PendingOpen | undefined;
-      try {
-        waiting = await service.pendingOpen(summary.path);
-      } catch {
-        // Nothing to decide on. `open` reads the same file a moment from now
-        // and says what went wrong in its own words.
-        return run();
-      }
-
-      if (waiting === undefined) return run();
-
-      return setMode({ kind: "confirm", target: { kind: "trust-open", summary, waiting } });
-    },
-    [perform, service, store],
+          return waiting === undefined ? undefined : { kind: "trust-open", summary, waiting };
+        },
+        () => void perform(`opening ${summary.dir}`, () => service.open(summary.path)),
+      ),
+    [askThen, perform, service],
   );
 
   /**
@@ -496,9 +495,7 @@ export function App({
    * tick is paused, and Ctrl-C still reaches the child.
    */
   const openPrs = useCallback(async () => {
-    store.clear();
-    setMessage(undefined);
-    setMode({ kind: "busy", label: "reading pull requests" });
+    busy("reading pull requests");
 
     try {
       const prs = await service.pullRequests();
@@ -517,7 +514,7 @@ export function App({
     }
 
     setMode({ kind: "list" });
-  }, [service, store]);
+  }, [busy, service]);
 
   // The first read is not an action: it reports no outcome, and going through
   // `perform` would open the screen with an empty message line.
@@ -846,9 +843,7 @@ export function App({
           return { ...now, query: now.query.slice(0, -1), index: 0 };
         });
       }
-      // The same printable test the branch prompt uses, so an arrow key cannot
-      // type itself into the query.
-      if (input.length > 0 && !key.ctrl && !key.meta && /^[\x20-\x7e]+$/.test(input)) {
+      if (typed(input, key)) {
         // A second `/` is a slip rather than a filter — no command name holds
         // one — and dropping it is what makes `/` idempotent: pressing it again
         // on an open menu leaves the menu exactly as it was, which is what the
@@ -866,32 +861,6 @@ export function App({
 
     if (mode.kind === "add") {
       if (key.escape) return setMode({ kind: "list" });
-      /*
-       * A paste arrives as one string, and a branch name copied off a terminal
-       * line brings the newline that ended it. Ink reads that newline as Enter,
-       * so the whole paste used to land on the branch below as a submit of an
-       * empty prompt: the name typed nowhere, the popup gone, nothing added.
-       *
-       * The text goes in and the newline is dropped rather than submitting,
-       * because acting on a name that was never on screen is not what pasting
-       * asked for — one more keypress is cheap next to creating the wrong
-       * branch. An escape sequence has no trailing newline to lose, so it
-       * still fails the printable test below rather than typing itself in.
-       */
-      const pasted = input.replace(/[\r\n]+$/, "");
-      if (pasted.length > 0 && pasted !== input && !key.ctrl && !key.meta) {
-        if (!/^[\x20-\x7e]+$/.test(pasted)) return;
-
-        return setMode((now) =>
-          now.kind !== "add"
-            ? now
-            : {
-                ...now,
-                value: now.value.slice(0, now.caret) + pasted + now.value.slice(now.caret),
-                caret: now.caret + pasted.length,
-              },
-        );
-      }
       if (key.return) {
         const value = mode.value.trim();
         // Enter on nothing is a cancel, not an error: the empty popup is what
@@ -904,106 +873,24 @@ export function App({
           runPendingCommands(value),
         );
       }
-      /*
-       * Every edit below reads the mode it is changing out of the updater, not
-       * out of the render this handler was built in — the same guard `move`
-       * puts on the cursor, for the same reason. A frame can carry several
-       * keys, and `{ ...mode }` would have each of them start from the value
-       * as it was before any of them landed, so only the last would survive:
-       * typing `ab` quickly gave `b`, and two `←` in one frame moved the caret
-       * once. Typing fast is not an edge case, and neither is holding a key.
-       *
-       * The caret itself moves through the name and stops at either end rather
-       * than wrapping: a key that jumps from the start to the end is one you
-       * have to look at the screen to use.
-       */
-      if (key.leftArrow) {
-        return setMode((now) =>
-          now.kind === "add" ? { ...now, caret: Math.max(0, now.caret - 1) } : now,
-        );
-      }
-      if (key.rightArrow) {
-        return setMode((now) =>
-          now.kind === "add" ? { ...now, caret: Math.min(now.value.length, now.caret + 1) } : now,
-        );
-      }
-      // Backspace takes the character the caret sits after, wherever that is,
-      // and the caret follows it back so the next one takes its neighbour.
-      // Both keys mean backspace here: the key labelled Backspace arrives as
-      // `delete` on a mac, and a forward delete is not worth losing that to.
-      if (key.backspace || key.delete) {
-        return setMode((now) => {
-          if (now.kind !== "add" || now.caret === 0) return now;
 
-          return {
-            ...now,
-            value: now.value.slice(0, now.caret - 1) + now.value.slice(now.caret),
-            caret: now.caret - 1,
-          };
-        });
-      }
-      // Control sequences arrive here as multi-character strings; taking only
-      // printable input keeps an arrow key from typing itself into the name.
-      if (input.length > 0 && !key.ctrl && !key.meta && /^[\x20-\x7e]+$/.test(input)) {
-        return setMode((now) =>
-          now.kind !== "add"
-            ? now
-            : {
-                ...now,
-                value: now.value.slice(0, now.caret) + input + now.value.slice(now.caret),
-                caret: now.caret + input.length,
-              },
-        );
-      }
-
-      return;
+      // Applied to the mode inside the updater and not to the one this handler
+      // was built with — the same guard `move` puts on the cursor, and for the
+      // same reason: a frame can carry several keys, and each has to start from
+      // what the one before it left. A key `editPrompt` does not take comes
+      // back as the mode itself, which React draws nothing for.
+      return setMode((now) => (now.kind === "add" ? (editPrompt(now, input, key) ?? now) : now));
     }
 
     if (mode.kind === "confirm") {
-      const target = mode.target;
-      if (input === "y" || input === "Y") {
-        if (target.kind === "reset") {
-          return void perform(`discarding changes in ${target.summary.dir}`, () =>
-            service.reset(target.summary.path),
-          );
-        }
+      // `y` is the only key that commits; everything else is the `no` it reads
+      // as. What `y` runs is decided in `pending.ts` beside the words it was
+      // asked in, so the question and its consequence cannot drift apart.
+      if (input !== "y" && input !== "Y") return setMode({ kind: "list" });
 
-        // Both sync answers run the command unchanged: the question was about
-        // whether to start it, and `syncWorktrees` decides the rest exactly as
-        // it does from the command line.
-        if (target.kind === "sync") {
-          return void perform(`syncing ${target.summary.dir}`, () =>
-            service.sync(target.summary.path),
-          );
-        }
+      const { label, run } = commitPending(mode.target, service);
 
-        if (target.kind === "sync-all") {
-          return void perform("syncing every worktree", () => service.sync());
-        }
-
-        // `y` here records having read the line that was on the row, which is
-        // what the trust record is — and it is one record for the whole file,
-        // so the same `.grove.toml`'s setup commands run from `a` afterwards
-        // without asking again. That is the same thing `grove open --trust`
-        // does, reached from the one surface that can show the line first.
-        if (target.kind === "trust-open") {
-          return void perform(`opening ${target.summary.dir}`, () =>
-            service.open(target.summary.path, true),
-          );
-        }
-
-        // `discardDirty` carries the answer just given: the question counted
-        // the uncommitted changes, so the removal may now discard them.
-        return void (target.kind === "one"
-          ? perform(`removing ${target.summary.dir}`, () =>
-              service.remove(target.summary.path, target.summary.dirty),
-            )
-          : perform(`removing ${target.paths.length} under ${target.label}`, () =>
-              service.removeMany(target.paths, target.dirty > 0),
-            ));
-      }
-
-      return setMode({ kind: "list" });
+      return void perform(label, run);
     }
 
     if (key.upArrow || input === "k") return move(-1);
@@ -1281,10 +1168,7 @@ export function App({
           <Text dimColor>{rule}</Text>
           <Box flexDirection="column">
             {clipped > 0 ? (
-              <Text
-                dimColor
-                wrap="truncate"
-              >{`… ${clipped} earlier line${clipped === 1 ? "" : "s"}`}</Text>
+              <Text dimColor wrap="truncate">{`… ${plural(clipped, "earlier line")}`}</Text>
             ) : null}
             {activity.map((line) => (
               <StepRow key={line.id} line={line} truncate />

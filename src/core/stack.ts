@@ -41,8 +41,6 @@ const KEY = "groveparent";
 /** Every recorded parent: the branch, and the branch it was cut from. */
 export type Stack = ReadonlyMap<string, string>;
 
-export const NO_STACK: Stack = new Map();
-
 function keyFor(branch: string): string {
   return `branch.${branch}.${KEY}`;
 }

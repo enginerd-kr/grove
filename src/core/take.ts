@@ -4,6 +4,7 @@ import type { Reporter } from "../report/reporter.ts";
 import { GroveError } from "./errors.ts";
 import { entryExists } from "./fs.ts";
 import { runGit, runGitOrThrow } from "./git.ts";
+import { plural } from "./text.ts";
 import { statusOf } from "./worktrees.ts";
 
 /**
@@ -48,12 +49,8 @@ export const EMPTY_TAKE: TakeResult = { tracked: 0, untracked: [], empty: true }
 export function describeTake(result: TakeResult): string {
   if (result.empty) return "nothing to take";
 
-  const parts = [`${result.tracked} change${result.tracked === 1 ? "" : "s"}`];
-  if (result.untracked.length > 0) {
-    parts.push(
-      `${result.untracked.length} untracked file${result.untracked.length === 1 ? "" : "s"}`,
-    );
-  }
+  const parts = [plural(result.tracked, "change")];
+  if (result.untracked.length > 0) parts.push(plural(result.untracked.length, "untracked file"));
 
   return `took ${parts.join(" and ")}`;
 }

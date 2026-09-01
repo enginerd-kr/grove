@@ -1,10 +1,8 @@
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
-import { defaultBranch } from "../core/branches.ts";
 import { GroveError } from "../core/errors.ts";
 import { runGit } from "../core/git.ts";
-import { BARE_DIR, type RepoPaths } from "../core/layout.ts";
-import { listWorktrees } from "../core/worktrees.ts";
+import { BARE_DIR } from "../core/layout.ts";
 import { fingerprintOf } from "./trust.ts";
 
 /**
@@ -147,7 +145,8 @@ export type TeardownHook = {
 };
 
 /** The platforms `[setup.open]` can name, which is every one grove runs on. */
-export type OpenTarget = "macos" | "linux" | "windows";
+export const OPEN_TARGETS = ["macos", "linux", "windows"] as const;
+export type OpenTarget = (typeof OPEN_TARGETS)[number];
 
 /** One command line per platform, run in the worktree. `""` means "not here". */
 export type OpenHook = Readonly<Record<OpenTarget, string>>;
@@ -169,11 +168,11 @@ export function openTargetFor(platform: NodeJS.Platform): OpenTarget {
   return "linux";
 }
 
-export const NO_OPEN: OpenHook = { macos: "", linux: "", windows: "" };
+export const NO_OPEN: OpenHook = mapTargets(() => "");
 
 /** Whether the file asked to open anything at all, on any platform. */
 export function wantsOpen(open: OpenHook): boolean {
-  return open.macos !== "" || open.linux !== "" || open.windows !== "";
+  return OPEN_TARGETS.some((target) => open[target] !== "");
 }
 
 /**
@@ -272,7 +271,7 @@ export type GatedCounts = {
 export const NOTHING_GATED: GatedCounts = {
   commands: 0,
   teardown: 0,
-  open: { macos: false, linux: false, windows: false },
+  open: mapTargets(() => false),
 };
 
 /** Whether the `open` line that would actually run came from a gated layer. */
@@ -345,6 +344,8 @@ export function plannedCount(hooks: Hooks): number {
 
 /** What each key's error says to write instead, so the advice is about that key. */
 const EXAMPLES: Readonly<Record<string, string>> = {
+  copy: ".env",
+  link: "node_modules",
   run: "bun install",
   open: "code .",
   macos: 'open -a "Visual Studio Code" .',
@@ -399,18 +400,14 @@ function openAt(file: string, setup: Record<string, unknown>): OpenHook {
   if (value === undefined) return NO_OPEN;
 
   if (isTable(value)) {
-    refuseUnknownKeys(file, "setup.open", value, OPEN_TARGETS);
+    refuseUnknownKeys(file, "setup.open", value, new Set(OPEN_TARGETS));
 
-    return {
-      macos: commandAt(file, "setup.open", value, "macos"),
-      linux: commandAt(file, "setup.open", value, "linux"),
-      windows: commandAt(file, "setup.open", value, "windows"),
-    };
+    return mapTargets((target) => commandAt(file, "setup.open", value, target));
   }
 
   const line = commandAt(file, "setup", setup, "open");
 
-  return { macos: line, linux: line, windows: line };
+  return mapTargets(() => line);
 }
 
 /**
@@ -450,8 +447,6 @@ function commandAt(
 
   return value;
 }
-
-const OPEN_TARGETS: ReadonlySet<string> = new Set<OpenTarget>(["macos", "linux", "windows"]);
 
 /** A plain TOML table: an object that is not an array, which TOML also parses to objects. */
 function isTable(value: unknown): value is Record<string, unknown> {
@@ -637,19 +632,6 @@ function tableAt(
 }
 
 /**
- * Reads the file out of one worktree.
- *
- * A worktree without one is not an error and not a warning: most repositories
- * need none of this, and the ones that do should be the ones that say so.
- */
-export async function readHooksFile(worktree: string): Promise<Hooks> {
-  const hooks = await readLayer(join(worktree, HOOKS_FILE), true);
-  if (hooks === undefined) return NO_HOOKS;
-
-  return { ...hooks, fingerprint: fingerprintOfLayers(hooks.layers) };
-}
-
-/**
  * One file, parsed, and told what trust has to say about it.
  *
  * A file that is not there is `undefined` and not `NO_HOOKS`: the difference
@@ -678,7 +660,10 @@ async function readLayer(path: string, gated: boolean): Promise<Hooks | undefine
 
 /** The same answer for each platform, which is what half the merging here is. */
 function mapTargets<T>(of: (target: OpenTarget) => T): Readonly<Record<OpenTarget, T>> {
-  return { macos: of("macos"), linux: of("linux"), windows: of("windows") };
+  return Object.fromEntries(OPEN_TARGETS.map((target) => [target, of(target)])) as Record<
+    OpenTarget,
+    T
+  >;
 }
 
 /**
@@ -845,73 +830,13 @@ export async function readHooks(worktree: string, options: HooksOptions = {}): P
 }
 
 /**
- * Where copies and links come from: the default branch's worktree.
- *
- * One rule, and a predictable one. "Whichever worktree you happen to be
- * standing in" would mean the `.env` you get depends on where your shell was,
- * and the trunk is the checkout that always exists and that nobody is
- * experimenting in.
- *
- * `self` is the trunk setting itself up, which is not a failure and not worth a
- * word — there is no third worktree to prefer, and the commands still run.
+ * The machine's own layer alone, for the repository that has no worktree to
+ * read a project's file out of. It is about you and not about any repository,
+ * so it applies to the one that has lost its trunk exactly as it does to every
+ * other.
  */
-export type Source =
-  | { readonly kind: "at"; readonly path: string }
-  | { readonly kind: "self" }
-  | { readonly kind: "none"; readonly trunk?: string };
+export async function globalHooks(options: HooksOptions = {}): Promise<Hooks> {
+  const global = await readLayer(globalHooksPath(options.env, options.home), false);
 
-/** The default branch's worktree, which is what everything here reads from. */
-async function trunkWorktree(repo: RepoPaths): Promise<string | undefined> {
-  const source = await sourceWorktree(repo, "");
-
-  return source.kind === "at" ? source.path : undefined;
-}
-
-/**
- * The repository's hooks: the trunk's file, or the worktree's own as a fallback.
- *
- * The fallback is for the one repository that has no trunk worktree — somebody
- * removed it — where reading nothing at all would be a worse answer than
- * reading what is in front of us.
- */
-export async function repoHooks(
-  repo: RepoPaths,
-  fallback?: string,
-  options: HooksOptions = {},
-): Promise<Hooks> {
-  const trunk = (await trunkWorktree(repo)) ?? fallback;
-  // No worktree to read a project's file out of still leaves the machine's own,
-  // which is about you and not about this repository — so it applies to the
-  // repository that has lost its trunk exactly as it does to every other one.
-  if (trunk === undefined) {
-    const global = await readLayer(globalHooksPath(options.env, options.home), false);
-
-    return global ?? NO_HOOKS;
-  }
-
-  return readHooks(trunk, options);
-}
-
-export async function sourceWorktree(
-  repo: RepoPaths,
-  /** The worktree being filled, so the trunk can recognise itself in it. */
-  worktree: string,
-): Promise<Source> {
-  let trunk: string;
-  try {
-    trunk = await defaultBranch(repo.gitDir);
-  } catch {
-    // A repository whose remote advertises no HEAD. Everything else here still
-    // works, and failing the `add` this is running inside of would be a poor
-    // trade for a `.env` we could not find a source for anyway.
-    return { kind: "none" };
-  }
-
-  const worktrees = await listWorktrees(repo.gitDir);
-  const record = worktrees.find((entry) => entry.branch === trunk);
-
-  if (!record) return { kind: "none", trunk };
-  if (record.path === worktree) return { kind: "self" };
-
-  return { kind: "at", path: record.path };
+  return global ?? NO_HOOKS;
 }

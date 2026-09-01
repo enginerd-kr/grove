@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { failureFor, pendingCommands } from "./command.ts";
-import { HOOKS_FILE, openTargetFor, repoHooks } from "./config.ts";
+import { HOOKS_FILE, openTargetFor } from "./config.ts";
 import { pendingOpen } from "./open.ts";
 import { describeSetup, runSetup, trustAndRun } from "./setup.ts";
+import { repoHooks } from "./source.ts";
 import { NOT_OPENED, setUp, waitForEntry, withRepo } from "./test-utils.ts";
 import { trust } from "./trust.ts";
 

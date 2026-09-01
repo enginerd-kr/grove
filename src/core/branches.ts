@@ -7,6 +7,18 @@ import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
 export const REMOTE = "origin";
 
 /**
+ * The refspec `git clone --bare` declines to write.
+ *
+ * Without it `git fetch` exits 0 having updated nothing: a bare clone copies the
+ * remote's heads straight into `refs/heads/*` and configures no mapping into
+ * `refs/remotes/*`. Every later command then fails in a way that points
+ * somewhere else — `add` cannot find `origin/feat-x`, `sync` has no upstream to
+ * rebase onto, `--prune` prunes nothing — so `clone` sets it before the first
+ * fetch, and `doctor`'s advice prints the exact line `clone` would have run.
+ */
+export const FETCH_REFSPEC = `+refs/heads/*:refs/remotes/${REMOTE}/*`;
+
+/**
  * Makes the bare repository keep reflogs, which `git clone --bare` does not.
  *
  * `core.logallrefupdates` defaults to off in a bare repository, on the

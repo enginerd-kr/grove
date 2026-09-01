@@ -2,11 +2,12 @@ import { lstat, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { version } from "../../../package.json";
 import { HOOKS_FILE, type Hooks, repoHooks } from "../../hooks/index.ts";
-import { REMOTE } from "../branches.ts";
+import { FETCH_REFSPEC, REMOTE } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { childDirectories, pathExists } from "../fs.ts";
 import { gitSucceeds, runGit } from "../git.ts";
 import { BARE_DIR, type RepoKind, type RepoPaths } from "../layout.ts";
+import { plural } from "../text.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
 /**
@@ -24,15 +25,6 @@ import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts
  * of these has a cause worth knowing about before it goes away, and because the
  * two that touch directories are not ours to delete.
  */
-
-/**
- * The refspec `git clone --bare` declines to write, and `grove clone` does.
- *
- * Spelled out again rather than imported from `clone.ts` because the *check*
- * below is structural — any refspec landing in `refs/remotes/origin/*` will do —
- * and this string is only ever the advice.
- */
-const FETCH_REFSPEC = `+refs/heads/*:refs/remotes/${REMOTE}/*`;
 
 /** How far below the root a worktree directory can hide. `feat/a/b/c` and then some. */
 const MAX_DEPTH = 5;
@@ -97,10 +89,6 @@ type Context = {
 };
 
 type Check = (context: Context) => Promise<Finding | undefined>;
-
-function count(n: number, one: string, many = `${one}s`): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
 
 /**
  * The famous one.
@@ -253,7 +241,7 @@ async function checkPrunable({ repo, worktrees }: Context): Promise<Finding | un
   return {
     check: "prunable-worktree",
     severity: "warning",
-    summary: `${count(prunable.length, "worktree")} git still lists, gone from disk`,
+    summary: `${plural(prunable.length, "worktree")} git still lists, gone from disk`,
     details: prunable.map((record) => {
       const why =
         record.prunable === undefined || record.prunable.length === 0
@@ -337,7 +325,7 @@ async function checkOrphans({ repo, worktrees }: Context): Promise<Finding | und
   return {
     check: "orphan-worktree",
     severity: "warning",
-    summary: `${count(found.length, "directory", "directories")} left behind by a pruned worktree`,
+    summary: `${plural(found.length, "directory", "directories")} left behind by a pruned worktree`,
     details: found.map((path) => worktreeDir(repo.root, path)),
     fix: [
       "git has no record of these, so nothing here will remove them: look inside for",
@@ -394,7 +382,7 @@ async function checkLinks({ repo, worktrees }: Context): Promise<Finding | undef
     check: "broken-link",
     severity: "warning",
     summary:
-      `${count(broken.length, "link")} from ${HOOKS_FILE}` +
+      `${plural(broken.length, "link")} from ${HOOKS_FILE}` +
       ` ${broken.length === 1 ? "points" : "point"} at nothing`,
     details: broken,
     fix: [
@@ -489,10 +477,10 @@ function tally(diagnosis: Diagnosis): string {
   const warnings = diagnosis.findings.length - errors;
 
   const parts: string[] = [];
-  if (errors > 0) parts.push(count(errors, "problem"));
-  if (warnings > 0) parts.push(count(warnings, "warning"));
+  if (errors > 0) parts.push(plural(errors, "problem"));
+  if (warnings > 0) parts.push(plural(warnings, "warning"));
 
-  return `${parts.join(" and ")}, out of ${count(diagnosis.checked, "check")}`;
+  return `${parts.join(" and ")}, out of ${plural(diagnosis.checked, "check")}`;
 }
 
 /**
@@ -513,7 +501,7 @@ export function formatDiagnosis(diagnosis: Diagnosis): string {
     return [
       ...header,
       "",
-      `nothing to report — ${count(diagnosis.checked, "check")}, all clean`,
+      `nothing to report — ${plural(diagnosis.checked, "check")}, all clean`,
     ].join("\n");
   }
 
@@ -542,7 +530,7 @@ export function failureFor(diagnosis: Diagnosis): GroveError | undefined {
 
   return new GroveError(
     "state-conflict",
-    `the repository has ${count(problems.length, "problem")}`,
+    `the repository has ${plural(problems.length, "problem")}`,
     {
       hint: "each is listed above, with the command that clears it",
     },

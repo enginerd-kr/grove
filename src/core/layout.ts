@@ -181,6 +181,17 @@ export function worktreeBase(repo: RepoPaths): string {
 }
 
 /**
+ * Deepest worktree first, ties by name.
+ *
+ * The order removals run in: taking the last worktree under `feat/` first lets
+ * the same pass clear the empty `feat/` behind it, instead of tripping over a
+ * sibling that has not gone yet.
+ */
+export function deepestFirst(a: string, b: string): number {
+  return b.split("/").length - a.split("/").length || a.localeCompare(b);
+}
+
+/**
  * True when `cwd` is inside `path` — the worktree you are standing in.
  *
  * A string prefix would call `/a/bc` a child of `/a/b`, which is how a command

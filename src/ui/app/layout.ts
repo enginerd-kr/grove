@@ -10,7 +10,9 @@ import { bannerRows } from "./Banner.tsx";
 import { menuRows } from "./Menu.tsx";
 import { type Message, messageRows } from "./message.ts";
 import { pullRequestRows } from "./PullRequests.tsx";
+import type { Pending } from "./pending.ts";
 import { leavesOf, type TreeRow } from "./tree.ts";
+import { windowOf } from "./window.ts";
 
 /**
  * The arithmetic the screen is laid out by, with nothing on screen in it.
@@ -124,10 +126,12 @@ export type ModeKind = LayoutMode["kind"];
 /**
  * Which destructive key a confirmation is standing in front of.
  *
- * The same shape as the screen's own `Pending["kind"]`, spelled again here so
- * the arithmetic does not have to import the component it lays out.
+ * The screen's own `Pending["kind"]`, not a re-spelling: `pending.ts` is as
+ * pure as this file is, so naming its kinds does not pull a component into the
+ * arithmetic — and `CONFIRM_WORDS` below now breaks the moment a kind is added
+ * without deciding what its two keys say.
  */
-export type ConfirmKind = "one" | "many" | "reset" | "sync" | "sync-all" | "trust-open";
+export type ConfirmKind = Pending["kind"];
 
 // The keys each popup answers to. A mode that takes the keyboard says so here
 // rather than in `hintsFor` below, where only the list's own hints are decided.
@@ -387,13 +391,9 @@ export function regionsFor({
     terminalRows - headerRows - activityRows - logHeight - detailRows - footerRows,
   );
 
-  // A window onto the tree that keeps the cursor roughly centred, and stops
-  // scrolling once the end is on screen. Measured in drawn rows, which include
-  // the folder headings the cursor itself skips over.
-  const start = Math.min(
-    Math.max(0, index - Math.floor(listHeight / 2)),
-    Math.max(0, tree.length - listHeight),
-  );
+  // A window onto the tree, measured in drawn rows — which include the folder
+  // headings the cursor itself skips over.
+  const start = windowOf(tree.length, index, listHeight);
   const visible = tree.slice(start, start + listHeight);
 
   return {

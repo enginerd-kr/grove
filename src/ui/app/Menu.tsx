@@ -1,5 +1,6 @@
 import { Box, Text } from "ink";
 import { theme } from "../theme.ts";
+import { windowOf } from "./window.ts";
 
 /**
  * The commands that have no key of their own, as a list to type at.
@@ -95,18 +96,6 @@ export function matching(commands: readonly MenuCommand[], query: string): reado
  */
 export function menuRows(count: number, rows: number): number {
   return 2 + 1 + Math.max(1, Math.min(Math.max(0, rows), count));
-}
-
-/**
- * The window of rows to draw, holding the cursor inside it.
- *
- * The same centring the list and the pull-request popup use, and here for the
- * same reason: the cursor stays put while the rows move under it.
- */
-function windowOf(count: number, index: number, rows: number): number {
-  if (count <= rows) return 0;
-
-  return Math.max(0, Math.min(count - rows, index - Math.floor(rows / 2)));
 }
 
 /** Between the name and what it does — the breath the other popup gives its columns. */

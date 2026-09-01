@@ -5,6 +5,8 @@
  * `cli/exit-codes.ts` as a total switch — so adding a code without deciding how
  * a script should react to it is a type error rather than a silent `1`.
  */
+
+import { toLines } from "./text.ts";
 export type GroveErrorCode =
   /** Bad flags, wrong argument count, a branch name that cannot be a directory. */
   | "usage"
@@ -127,8 +129,7 @@ export function classifyGitError(stderr: string): GroveErrorCode {
  * since the phase that resolves them counts deltas and every clone emits it.
  */
 export function stderrDetails(stderr: string, max = 5): readonly string[] {
-  const lines = stderr
-    .split(/\r?\n|\r/)
+  const lines = toLines(stderr)
     .map((line) => line.trim())
     .filter(
       (line) => line.length > 0 && !/^(?:remote: )?\w+ (?:objects|deltas):\s+\d+%/.test(line),

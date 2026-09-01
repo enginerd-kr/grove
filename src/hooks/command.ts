@@ -1,15 +1,10 @@
 import { GroveError } from "../core/errors.ts";
 import { runShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
+import { plural, toLines } from "../core/text.ts";
 import type { Reporter } from "../report/reporter.ts";
-import {
-  governingFiles,
-  type HookEnv,
-  type Hooks,
-  openGatedHere,
-  openHere,
-  repoHooks,
-} from "./config.ts";
+import { governingFiles, type HookEnv, type Hooks, openGatedHere, openHere } from "./config.ts";
+import { repoHooks } from "./source.ts";
 import { awaitingTrust } from "./trust.ts";
 
 /**
@@ -230,16 +225,9 @@ export async function runCommands(
   return { ran, failed, untrusted };
 }
 
-/** `1 command`, `2 commands` — the shared half of every warning here. */
-export function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
 /** The last few lines a failed command said, on whichever stream it said them. */
 function tail(stderr: string, stdout: string, max = 5): readonly string[] {
-  return [stderr, stdout]
-    .join("\n")
-    .split(/\r?\n|\r/)
+  return toLines([stderr, stdout].join("\n"))
     .map((line) => line.trimEnd())
     .filter((line) => line.trim().length > 0)
     .slice(-max);

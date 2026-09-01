@@ -146,6 +146,11 @@ export function remoteFor(number: number): string {
   return `pr-${number}`;
 }
 
+/** `gh pr view` — the first two words of the call, which is how the errors name it. */
+function ghLabel(argv: readonly string[]): string {
+  return ["gh", ...argv.slice(0, 2)].join(" ");
+}
+
 /**
  * The one place a `gh` failure becomes a `GroveError`.
  *
@@ -155,7 +160,6 @@ export function remoteFor(number: number): string {
  * half — "no pull requests found", "not a GitHub repository".
  */
 async function runGh(argv: readonly string[], cwd: string): Promise<string> {
-  const [head = "", second = ""] = argv;
   const result = await runTool(["gh", ...argv] as [string, ...string[]], { cwd });
 
   if (result === null) {
@@ -165,7 +169,7 @@ async function runGh(argv: readonly string[], cwd: string): Promise<string> {
   }
 
   if (result.code !== 0) {
-    throw new GroveError("gh", `gh ${head} ${second} failed (exit ${result.code})`.trim(), {
+    throw new GroveError("gh", `${ghLabel(argv)} failed (exit ${result.code})`, {
       details: stderrDetails(result.stderr),
       hint: /GitHub host|default remote|not a git repository/i.test(result.stderr)
         ? "gh could not tell which GitHub repository this is; try `gh repo set-default`"
@@ -185,13 +189,12 @@ async function runGh(argv: readonly string[], cwd: string): Promise<string> {
  * and it exits 10 with gh's own words instead of 1 with a `SyntaxError`.
  */
 async function ghJson(argv: readonly string[], cwd: string): Promise<unknown> {
-  const [head = "", second = ""] = argv;
   const output = await runGh(argv, cwd);
 
   try {
     return JSON.parse(output);
   } catch {
-    throw new GroveError("gh", `gh ${head} ${second} answered with something that is not JSON`, {
+    throw new GroveError("gh", `${ghLabel(argv)} answered with something that is not JSON`, {
       details: stderrDetails(output),
     });
   }
@@ -260,14 +263,12 @@ async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
   // refspec git will not parse, after which every `git remote` and `git fetch`
   // in the repository exits 128 and the sweep that would clean it up dies on
   // the same read. An answer we cannot use is gh's to explain, like any other.
-  const missing = (
-    [
-      ["number", detail.number > 0],
-      ["headRefName", detail.headRefName !== ""],
-      ["headRepositoryOwner", detail.headOwner !== ""],
-      ["headRepository", detail.headRepo !== ""],
-    ] as const
-  )
+  const missing = Object.entries({
+    number: detail.number > 0,
+    headRefName: detail.headRefName !== "",
+    headRepositoryOwner: detail.headOwner !== "",
+    headRepository: detail.headRepo !== "",
+  })
     .filter(([, present]) => !present)
     .map(([field]) => field);
 

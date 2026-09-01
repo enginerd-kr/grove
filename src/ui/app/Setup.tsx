@@ -9,6 +9,7 @@ import { Banner } from "./Banner.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
 import type { SetupService } from "./service.ts";
+import { typed } from "./typing.ts";
 
 /**
  * `grove` in a folder with no repository in it.
@@ -100,10 +101,8 @@ export function Setup({ service, folder, inPlace, store, onReady, onCancel }: Pr
     if (key.backspace || key.delete) {
       return setMode({ kind: "ask", value: mode.value.slice(0, -1) });
     }
-    // Printable input only, and taken whole: a pasted URL arrives as one chunk,
-    // while an arrow key arrives as a control sequence that would otherwise type
-    // itself into the middle of it.
-    if (input.length > 0 && !key.ctrl && !key.meta && /^[\x20-\x7e]+$/.test(input)) {
+    // Taken whole: a pasted URL arrives as one chunk.
+    if (typed(input, key)) {
       return setMode({ kind: "ask", value: mode.value + input });
     }
   });
