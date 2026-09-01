@@ -1,10 +1,18 @@
 import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, enableReflogs, fetchRemotes, localBranchExists } from "../branches.ts";
+import {
+  defaultBranch,
+  enableReflogs,
+  fetchRemotes,
+  localBranchExists,
+  REMOTE,
+  remoteRef,
+} from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { ancestry, clearParent, readStack, type Stack, setParent, stackOrder } from "../stack.ts";
 import {
+  LISTED,
   listWorktrees,
   resolveTarget,
   statusOf,
@@ -75,8 +83,6 @@ export type SyncOutcome = {
   /** Why the push did not happen, when it was meant to. */
   readonly pushRefusal?: string;
 };
-
-const REMOTE = "origin";
 
 export async function syncWorktrees(
   repo: RepoPaths,
@@ -149,7 +155,7 @@ async function baseFor(
   stack: Stack,
   reporter: Reporter,
 ): Promise<Base> {
-  const onto = `${REMOTE}/${trunk}`;
+  const onto = remoteRef(trunk);
   if (branch === undefined) return { onto };
 
   const chain = ancestry(stack, branch);
@@ -293,7 +299,7 @@ async function syncOne(
   if (status.dirty) {
     // Checked before anything is run, not after: this is the difference between
     // declining and leaving the worktree half-updated.
-    return skip("uncommitted changes", status.changed.slice(0, 5));
+    return skip("uncommitted changes", status.changed.slice(0, LISTED));
   }
 
   const before = await gitOutput(["rev-parse", "HEAD"], { cwd: record.path });

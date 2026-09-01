@@ -29,6 +29,41 @@ export type Reporter = {
   readonly close: () => Promise<void>;
 };
 
+/**
+ * One step wrapped around one piece of work, settled exactly once.
+ *
+ * Most steps are this exact envelope: open, try, `succeed`, and on a throw
+ * `fail` and let the error keep travelling — the command above knows what the
+ * failure means; the step only says it happened. Written out by hand at every
+ * site, "settled once, never twice" was a discipline; here it is the shape.
+ *
+ * `done` may be written against the result, for the step whose success line is
+ * the news the work came back with. A step that does more — progress off a
+ * stderr stream, a rollback before the `fail` — still writes the envelope out
+ * itself: a wrapper wide enough for those would be the try/catch again, with
+ * more punctuation.
+ */
+export async function withStep<T>(
+  reporter: Reporter,
+  labels: {
+    readonly start: string;
+    readonly done: string | ((result: T) => string);
+    readonly failed: string;
+  },
+  work: () => Promise<T>,
+): Promise<T> {
+  const step = reporter.step(labels.start);
+  try {
+    const result = await work();
+    step.succeed(typeof labels.done === "function" ? labels.done(result) : labels.done);
+
+    return result;
+  } catch (error) {
+    step.fail(labels.failed);
+    throw error;
+  }
+}
+
 export type Writers = {
   readonly out: (text: string) => void;
   readonly err: (text: string) => void;

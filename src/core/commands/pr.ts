@@ -1,5 +1,6 @@
 import type { SetupResult } from "../../hooks/index.ts";
-import type { Reporter } from "../../report/reporter.ts";
+import { type Reporter, withStep } from "../../report/reporter.ts";
+import { localBranchExists, REMOTE } from "../branches.ts";
 import { GroveError, stderrDetails } from "../errors.ts";
 import { gitOutput, runGit, runGitOrThrow, runTool } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
@@ -24,8 +25,6 @@ import { addWorktree } from "./add.ts";
  * there, which is what buys the path rules, the collision and nesting
  * refusals, the setup run and the warn-rather-than-fail on a setup that broke.
  */
-
-const REMOTE = "origin";
 
 /** Everything `checkoutPullRequest` needs off the forge, in one round trip. */
 const PR_FIELDS = [
@@ -114,9 +113,23 @@ export type PrResult = {
   readonly setup?: SetupResult;
 };
 
-/** The local branch a pull request gets, which is also its directory. */
-function branchFor(number: number): string {
+/**
+ * The local branch a pull request gets, which is also its directory.
+ *
+ * Exported with `remoteFor` and `prNumberOf` because they are one convention,
+ * not three: `remove` walks it backwards to take a pull request's remote with
+ * its branch, and a second spelling of `pr/<n>` anywhere is the one that
+ * drifts.
+ */
+export function branchFor(number: number): string {
   return `pr/${number}`;
+}
+
+/** `branchFor`, backwards: the number in `pr/<n>`, or nothing for any other branch. */
+export function prNumberOf(branch: string): number | undefined {
+  const match = /^pr\/(\d+)$/.exec(branch);
+
+  return match?.[1] === undefined ? undefined : Number(match[1]);
 }
 
 /**
@@ -129,7 +142,7 @@ function branchFor(number: number): string {
  * slash in it produces `refs/remotes/pr/42/<head>`, which conflicts with any
  * remote called `pr` and reads as a typo in `git remote -v`.
  */
-function remoteFor(number: number): string {
+export function remoteFor(number: number): string {
   return `pr-${number}`;
 }
 
@@ -341,13 +354,9 @@ async function pruneOrphanRemotes(repo: RepoPaths): Promise<void> {
 
   for (const remote of listed.stdout.split("\n").map((line) => line.trim())) {
     const match = /^pr-(\d+)$/.exec(remote);
-    if (match === null) continue;
+    if (match?.[1] === undefined) continue;
 
-    const branch = `pr/${match[1]}`;
-    const exists = await runGit(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], {
-      cwd: repo.gitDir,
-    });
-    if (exists.code === 0) continue;
+    if (await localBranchExists(repo.gitDir, branchFor(Number(match[1])))) continue;
 
     await runGit(["remote", "remove", remote], { cwd: repo.gitDir });
   }
@@ -495,15 +504,15 @@ export async function checkoutPullRequest(
 ): Promise<PrResult> {
   await pruneOrphanRemotes(repo);
 
-  const asking = reporter.step("asking the forge");
-  let detail: PrDetail;
-  try {
-    detail = await detailOf(repo, options.pr);
-  } catch (error) {
-    asking.fail("the forge had no answer");
-    throw error;
-  }
-  asking.succeed(`pull request ${detail.number} — ${detail.title}`);
+  const detail = await withStep(
+    reporter,
+    {
+      start: "asking the forge",
+      done: (found: PrDetail) => `pull request ${found.number} — ${found.title}`,
+      failed: "the forge had no answer",
+    },
+    () => detailOf(repo, options.pr),
+  );
 
   // Said rather than refused. "What did this actually change, in a directory I
   // can build in" is as good a question about a merged pull request as an open

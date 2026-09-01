@@ -1,20 +1,23 @@
 import { rmdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { failureFor, runTeardown, type TeardownResult } from "../../hooks/index.ts";
-import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch } from "../branches.ts";
+import { type Reporter, withStep } from "../../report/reporter.ts";
+import { refuseTrunk } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase } from "../layout.ts";
 import { forgetBranch } from "../stack.ts";
 import {
+  LISTED,
   listWorktrees,
+  refuseMidRebase,
   resolveTarget,
   statusOf,
   type WorktreeRecord,
   worktreeDir,
 } from "../worktrees.ts";
+import { prNumberOf, remoteFor } from "./pr.ts";
 
 /**
  * `grove remove` — delete a worktree, after establishing that you meant it.
@@ -96,25 +99,24 @@ export async function removeWorktree(
     for (const detail of failure.details) reporter.info(`  ${detail}`);
   }
 
-  const step = reporter.step(`removing ${dir}`);
-  try {
-    // `--force` is what lets git delete a dirty tree, so `discardDirty` needs
-    // it too — the refusals grove itself makes were already decided above.
-    const forced = options.force || options.discardDirty === true;
-    await runGitOrThrow(["worktree", "remove", ...(forced ? ["--force"] : []), target.path], {
-      cwd: repo.gitDir,
-    });
-    // Clears the administrative files git leaves behind, so a later `add` of the
-    // same directory name is not refused by a record of the one just deleted.
-    await runGitOrThrow(["worktree", "prune"], { cwd: repo.gitDir });
-    // The base a nested directory climbs back towards without passing it —
-    // `worktreeBase`, so this is the same answer `add` placed the worktree by.
-    await pruneEmptyParents(worktreeBase(repo), target.path);
-    step.succeed(`removed ${dir}`);
-  } catch (error) {
-    step.fail(`could not remove ${dir}`);
-    throw error;
-  }
+  await withStep(
+    reporter,
+    { start: `removing ${dir}`, done: `removed ${dir}`, failed: `could not remove ${dir}` },
+    async () => {
+      // `--force` is what lets git delete a dirty tree, so `discardDirty` needs
+      // it too — the refusals grove itself makes were already decided above.
+      const forced = options.force || options.discardDirty === true;
+      await runGitOrThrow(["worktree", "remove", ...(forced ? ["--force"] : []), target.path], {
+        cwd: repo.gitDir,
+      });
+      // Clears the administrative files git leaves behind, so a later `add` of the
+      // same directory name is not refused by a record of the one just deleted.
+      await runGitOrThrow(["worktree", "prune"], { cwd: repo.gitDir });
+      // The base a nested directory climbs back towards without passing it —
+      // `worktreeBase`, so this is the same answer `add` placed the worktree by.
+      await pruneEmptyParents(worktreeBase(repo), target.path);
+    },
+  );
 
   if (options.deleteBranch && target.branch !== undefined) {
     // Before the deletion and not after it: `git branch -d` takes the whole
@@ -183,11 +185,7 @@ async function refuseUnsafe(
   // a perfectly clean tree, and `git worktree remove` would take it with exit
   // 0. What --force answers is "discard my changes"; nobody has been asked
   // about abandoning a rebase, so nobody is taken to have said yes.
-  if (target.rebasing === true) {
-    throw new GroveError("refused", `${dir} is in the middle of a rebase`, {
-      hint: `finish or abandon it first: git -C ${target.path} rebase --abort`,
-    });
-  }
+  refuseMidRebase(target, dir);
 
   if (!options.force) {
     if (worktrees.length === 1) {
@@ -196,18 +194,14 @@ async function refuseUnsafe(
       });
     }
 
-    if (target.branch !== undefined && target.branch === (await defaultBranch(repo.gitDir))) {
-      throw new GroveError("refused", `${target.branch} is the branch everything else syncs onto`, {
-        hint: "pass --force if you are sure",
-      });
-    }
+    await refuseTrunk(repo.gitDir, target.branch, "pass --force if you are sure");
 
     if (options.discardDirty !== true) {
       const status = await statusOf(target.path);
       if (status.dirty) {
         throw new GroveError("refused", `${dir} has uncommitted changes`, {
           hint: "commit or stash them, or pass --force to discard them",
-          details: status.changed.slice(0, 5),
+          details: status.changed.slice(0, LISTED),
         });
       }
     }
@@ -286,10 +280,10 @@ export async function dropPrRemote(
   branch: string,
   reporter: Reporter,
 ): Promise<void> {
-  const match = /^pr\/(\d+)$/.exec(branch);
-  if (match === null) return;
+  const number = prNumberOf(branch);
+  if (number === undefined) return;
 
-  const remote = `pr-${match[1]}`;
+  const remote = remoteFor(number);
   const result = await runGit(["remote", "remove", remote], { cwd: bare });
   // Absent is the ordinary case for a `pr/<n>` branch nobody made with
   // `grove pr`, and it is not something to report either way.

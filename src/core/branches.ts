@@ -1,10 +1,10 @@
-import type { Reporter } from "../report/reporter.ts";
+import { type Reporter, withStep } from "../report/reporter.ts";
 import { GroveError } from "./errors.ts";
 import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
 
 /** Questions about refs, asked of the bare repository — and the calls that maintain them. */
 
-const REMOTE = "origin";
+export const REMOTE = "origin";
 
 /**
  * Makes the bare repository keep reflogs, which `git clone --bare` does not.
@@ -306,6 +306,24 @@ export async function defaultBranch(bare: string): Promise<string> {
 }
 
 /**
+ * Refuses to act on the default branch — the one everything else syncs onto.
+ *
+ * `remove` and `rename` both gate it behind `--force`, and both say the same
+ * sentence about why; the hint is each command's own, since what `--force`
+ * would let happen differs. One spelling of the sentence, so a test pinning it
+ * pins them both.
+ */
+export async function refuseTrunk(
+  bare: string,
+  branch: string | undefined,
+  hint: string,
+): Promise<void> {
+  if (branch === undefined || branch !== (await defaultBranch(bare))) return;
+
+  throw new GroveError("refused", `${branch} is the branch everything else syncs onto`, { hint });
+}
+
+/**
  * Points `refs/remotes/origin/HEAD` at whatever the remote currently advertises.
  *
  * Tolerant of failure: a remote with no HEAD is unusual but not fatal, and the
@@ -330,14 +348,11 @@ export async function pushUpstream(
   reporter: Reporter,
   failure: string,
 ): Promise<void> {
-  const step = reporter.step(`pushing ${branch}`);
-  try {
-    await runGitOrThrow(["push", "-u", REMOTE, "HEAD"], { cwd: path });
-    step.succeed(`pushed ${branch}`);
-  } catch (error) {
-    step.fail(failure);
-    throw error;
-  }
+  await withStep(
+    reporter,
+    { start: `pushing ${branch}`, done: `pushed ${branch}`, failed: failure },
+    () => runGitOrThrow(["push", "-u", REMOTE, "HEAD"], { cwd: path }),
+  );
 }
 
 /** The remote-tracking ref for a branch — what `branchStates` measures against. */

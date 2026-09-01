@@ -1,8 +1,14 @@
-import type { Reporter } from "../../report/reporter.ts";
-import { GroveError } from "../errors.ts";
+import { type Reporter, withStep } from "../../report/reporter.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
-import { listWorktrees, resolveTarget, statusOf, worktreeDir } from "../worktrees.ts";
+import {
+  LISTED,
+  listWorktrees,
+  refuseMidRebase,
+  resolveTarget,
+  statusOf,
+  worktreeDir,
+} from "../worktrees.ts";
 
 /**
  * `grove reset` — throw away what a worktree has changed.
@@ -67,9 +73,6 @@ export function describeDiscard(tracked: number, untracked: number): string {
   return parts.join(" and ");
 }
 
-/** Enough to recognise what went, without printing someone's whole tree back. */
-const LISTED = 5;
-
 export async function resetWorktree(
   repo: RepoPaths,
   cwd: string,
@@ -92,28 +95,23 @@ export async function resetWorktree(
   // `--force` this command does not have, to guard a ref the user spelled out
   // by hand — so `grove reset main --to origin/main~5` rewinds the trunk, and
   // is meant to.
-  if (target.rebasing === true) {
-    throw new GroveError("refused", `${dir} is in the middle of a rebase`, {
-      hint: `finish or abandon it first: git -C ${target.path} rebase --abort`,
-    });
-  }
+  refuseMidRebase(target, dir);
 
   // Read before, because after the reset there is nothing left to report and
   // "discarded 3 files" is the part worth saying.
   const before = await statusOf(target.path);
   const to = options.to ?? "HEAD";
 
-  const step = reporter.step(`resetting ${dir}`);
-  try {
-    await runGitOrThrow(["reset", "--hard", to], { cwd: target.path });
-    // `-d` for directories as well: a build output tree is the usual reason a
-    // reset leaves a worktree still dirty, and it is never one file.
-    if (options.clean) await runGitOrThrow(["clean", "-fd"], { cwd: target.path });
-    step.succeed(`reset ${dir}`);
-  } catch (error) {
-    step.fail(`could not reset ${dir}`);
-    throw error;
-  }
+  await withStep(
+    reporter,
+    { start: `resetting ${dir}`, done: `reset ${dir}`, failed: `could not reset ${dir}` },
+    async () => {
+      await runGitOrThrow(["reset", "--hard", to], { cwd: target.path });
+      // `-d` for directories as well: a build output tree is the usual reason a
+      // reset leaves a worktree still dirty, and it is never one file.
+      if (options.clean) await runGitOrThrow(["clean", "-fd"], { cwd: target.path });
+    },
+  );
 
   // Only worth saying when they survived: `--clean` is opt-in on the command
   // line, and a worktree that is still dirty after a reset is a surprise.

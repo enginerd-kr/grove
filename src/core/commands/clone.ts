@@ -7,7 +7,9 @@ import {
   enableReflogs,
   localBranchExists,
   localBranches,
+  REMOTE,
   remoteBranchExists,
+  remoteRef,
   updateRemoteHead,
 } from "../branches.ts";
 import { GroveError } from "../errors.ts";
@@ -46,8 +48,6 @@ export type CloneResult = {
   readonly branch: string;
   readonly worktree: string;
 };
-
-const REMOTE = "origin";
 
 /**
  * The refspec `git clone --bare` declines to write.
@@ -198,7 +198,9 @@ async function createFirstWorktree(bare: string, branch: string, path: string): 
   // this branch would have no upstream: `git status` would not say "up to date
   // with origin/main", and a bare `git push` would have nothing to aim at.
   if (await remoteBranchExists(bare, branch)) {
-    await runGitOrThrow(["branch", `--set-upstream-to=${REMOTE}/${branch}`, branch], { cwd: bare });
+    await runGitOrThrow(["branch", `--set-upstream-to=${remoteRef(branch)}`, branch], {
+      cwd: bare,
+    });
   }
 
   // HEAD follows the branch that has a worktree, not the remote's default. It

@@ -2,6 +2,7 @@ import { lstat, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { version } from "../../../package.json";
 import { HOOKS_FILE, type Hooks, repoHooks } from "../../hooks/index.ts";
+import { REMOTE } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { childDirectories, pathExists } from "../fs.ts";
 import { gitSucceeds, runGit } from "../git.ts";
@@ -23,8 +24,6 @@ import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts
  * of these has a cause worth knowing about before it goes away, and because the
  * two that touch directories are not ours to delete.
  */
-
-const REMOTE = "origin";
 
 /**
  * The refspec `git clone --bare` declines to write, and `grove clone` does.

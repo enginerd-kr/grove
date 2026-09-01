@@ -279,3 +279,29 @@ export function resolveTarget(
       .map(({ branch, dir }) => `${branch ?? "(detached)"}  ${dir}`),
   });
 }
+
+/**
+ * Refuses a worktree stopped part-way through a rebase.
+ *
+ * Half-applied commits, resolved conflicts, the rebase's own HEAD — all of it
+ * lives in the worktree's private git dir, and no flag talks past this refusal:
+ * what `--force` answers is "discard my changes", and nobody has been asked
+ * about abandoning a rebase. `remove` and `reset` both stand behind it, and one
+ * spelling is what keeps the two commands refusing the same state in the same
+ * words.
+ */
+export function refuseMidRebase(target: WorktreeRecord, dir: string): void {
+  if (target.rebasing !== true) return;
+
+  throw new GroveError("refused", `${dir} is in the middle of a rebase`, {
+    hint: `finish or abandon it first: git -C ${target.path} rebase --abort`,
+  });
+}
+
+/**
+ * How much of `changed` an answer lists back — enough to recognise what is at
+ * stake, without printing someone's whole tree at them. `reset` reports what
+ * went, `remove` and `sync` say why they declined; one cap keeps the three
+ * reading as one convention.
+ */
+export const LISTED = 5;

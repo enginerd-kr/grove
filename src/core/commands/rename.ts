@@ -1,14 +1,13 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, localBranchExists, pushUpstream } from "../branches.ts";
+import { type Reporter, withStep } from "../../report/reporter.ts";
+import { localBranchExists, pushUpstream, REMOTE, refuseTrunk, remoteRef } from "../branches.ts";
 import { GroveError } from "../errors.ts";
-import { pathExists } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase, worktreePathFor } from "../layout.ts";
 import { renameInStack } from "../stack.ts";
 import { listWorktrees, resolveTarget, worktreeDir } from "../worktrees.ts";
-import { refuseNameCollision } from "./add.ts";
+import { refuseExistingDir, refuseNameCollision, refuseNesting } from "./add.ts";
 import { pruneEmptyParents } from "./remove.ts";
 
 /**
@@ -29,8 +28,6 @@ import { pruneEmptyParents } from "./remove.ts";
  * offering `--push`, is better than quietly repointing a branch at a ref that
  * does not exist yet.
  */
-
-const REMOTE = "origin";
 
 export type RenameOptions = {
   readonly target: string;
@@ -97,14 +94,15 @@ export async function renameWorktree(
 
   await refuseUnsafe(repo, target.path, from, path, options, worktrees);
 
-  const step = reporter.step(`renaming ${from} to ${options.to}`);
-  try {
-    await runGitOrThrow(["branch", "-m", from, options.to], { cwd: repo.gitDir });
-    step.succeed(`renamed ${from} to ${options.to}`);
-  } catch (error) {
-    step.fail(`could not rename ${from}`);
-    throw error;
-  }
+  await withStep(
+    reporter,
+    {
+      start: `renaming ${from} to ${options.to}`,
+      done: `renamed ${from} to ${options.to}`,
+      failed: `could not rename ${from}`,
+    },
+    () => runGitOrThrow(["branch", "-m", from, options.to], { cwd: repo.gitDir }),
+  );
 
   const moved = target.path !== path;
   if (moved) await moveWorktree(repo, target.path, path, from, options.to, reporter);
@@ -195,10 +193,12 @@ async function refuseUnsafe(
     });
   }
 
-  if (!options.force && from === (await defaultBranch(repo.gitDir))) {
-    throw new GroveError("refused", `${from} is the branch everything else syncs onto`, {
-      hint: "renaming it locally does not rename it on the remote; pass --force if you are sure",
-    });
+  if (!options.force) {
+    await refuseTrunk(
+      repo.gitDir,
+      from,
+      "renaming it locally does not rename it on the remote; pass --force if you are sure",
+    );
   }
 
   // Ahead of the branch check, because on a case-folding filesystem that check
@@ -214,29 +214,8 @@ async function refuseUnsafe(
     });
   }
 
-  // Checked apart from the branch, because the two can disagree: a branch name
-  // that slugs onto a directory somebody made by hand would collide on disk
-  // while git saw nothing wrong at all.
-  if (await pathExists(toPath)) {
-    throw new GroveError("state-conflict", `${worktreeDir(repo.root, toPath)} already exists`, {
-      hint: "move or delete that directory first",
-    });
-  }
-
-  const clash = worktrees.find(
-    (record) =>
-      record.path !== fromPath && (contains(record.path, toPath) || contains(toPath, record.path)),
-  );
-
-  if (clash) {
-    throw new GroveError(
-      "state-conflict",
-      `that would nest with the worktree at ${worktreeDir(repo.root, clash.path)}`,
-      {
-        hint: "one worktree inside another makes each report the other's files; pick another name",
-      },
-    );
-  }
+  await refuseExistingDir(repo.root, toPath);
+  refuseNesting(repo.root, toPath, worktrees, fromPath);
 }
 
 /** What the branch goes on tracking, when that is no longer what it is called. */
@@ -250,7 +229,7 @@ async function upstreamNote(bare: string, branch: string): Promise<string | unde
   if (result.code !== 0) return undefined;
 
   const upstream = result.stdout.trim();
-  if (upstream.length === 0 || upstream === `${REMOTE}/${branch}`) return undefined;
+  if (upstream.length === 0 || upstream === remoteRef(branch)) return undefined;
 
   return `still tracking ${upstream}; \`grove rename … --push\` or \`git push -u ${REMOTE} ${branch}\` moves it`;
 }

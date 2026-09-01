@@ -6,8 +6,15 @@ import {
   type SetupResult,
   trustAndRun,
 } from "../../hooks/index.ts";
-import type { Reporter } from "../../report/reporter.ts";
-import { defaultBranch, localBranchExists, pushUpstream, remoteBranchExists } from "../branches.ts";
+import { type Reporter, withStep } from "../../report/reporter.ts";
+import {
+  defaultBranch,
+  localBranchExists,
+  pushUpstream,
+  REMOTE,
+  remoteBranchExists,
+  remoteRef,
+} from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
 import { gitSucceeds, runGitOrThrow } from "../git.ts";
@@ -96,8 +103,6 @@ export type AddResult = {
   readonly took?: TakeResult;
 };
 
-const REMOTE = "origin";
-
 export async function addWorktree(
   repo: RepoPaths,
   cwd: string,
@@ -133,12 +138,7 @@ export async function addWorktree(
 
   refuseNameCollision(repo.root, path, worktrees);
   refuseNesting(repo.root, path, worktrees);
-
-  if (await pathExists(path)) {
-    throw new GroveError("state-conflict", `${dir} already exists`, {
-      hint: "move or delete that directory first",
-    });
-  }
+  await refuseExistingDir(repo.root, path);
 
   // Read here rather than after the worktree exists: a path in `.grove.toml`
   // that nobody can resolve is a mistake in the file, and finding it out
@@ -152,16 +152,17 @@ export async function addWorktree(
   // the only thing something could be the source of.
   const origin = await resolveSource(repo.gitDir, options, reporter);
 
-  const step = reporter.step(`adding ${options.branch}`);
-  try {
+  await withStep(
+    reporter,
+    {
+      start: `adding ${options.branch}`,
+      done: `added ${dir}`,
+      failed: `could not add ${options.branch}`,
+    },
     // `git worktree add` creates intermediate directories itself, so a nested
     // path needs no mkdir of ours.
-    await runGitOrThrow(argsFor(origin, options, path), { cwd: repo.gitDir });
-    step.succeed(`added ${dir}`);
-  } catch (error) {
-    step.fail(`could not add ${options.branch}`);
-    throw error;
-  }
+    () => runGitOrThrow(argsFor(origin, options, path), { cwd: repo.gitDir }),
+  );
 
   // Written before the push rather than after it: a remote that refused the
   // branch says nothing about which branch it was cut from, and a stack whose
@@ -193,7 +194,7 @@ export async function addWorktree(
     dir,
     branch: options.branch,
     source: origin.kind,
-    upstream: origin.kind === "new" && !options.push ? undefined : `${REMOTE}/${options.branch}`,
+    upstream: origin.kind === "new" && !options.push ? undefined : remoteRef(options.branch),
     alreadyPresent: false,
     parent,
     setup,
@@ -421,11 +422,23 @@ export function refuseNameCollision(
  * anywhere. git allows the nesting, and the result is quietly broken: the
  * outer worktree reports the inner one's files as untracked, and `git clean`
  * there deletes someone's work.
+ *
+ * Exported for `rename`, for the reason `refuseNameCollision` above is: a
+ * rename lands a worktree by the same rule `add` places one, and a second
+ * spelling of this predicate would be the one that drifts.
  */
-function refuseNesting(root: string, path: string, worktrees: readonly WorktreeRecord[]): void {
+export function refuseNesting(
+  root: string,
+  path: string,
+  worktrees: readonly { readonly path: string }[],
+  /** The worktree being moved onto `path` — never a clash with itself. */
+  moving?: string,
+): void {
   const clash = worktrees.find(
     (record) =>
-      record.path !== path && (contains(record.path, path) || contains(path, record.path)),
+      record.path !== path &&
+      record.path !== moving &&
+      (contains(record.path, path) || contains(path, record.path)),
   );
 
   if (clash) {
@@ -437,6 +450,22 @@ function refuseNesting(root: string, path: string, worktrees: readonly WorktreeR
       },
     );
   }
+}
+
+/**
+ * Refuses a directory already sitting where the worktree would go.
+ *
+ * Checked apart from the branch and the worktree list, because they can all
+ * disagree: a branch name that slugs onto a directory somebody made by hand
+ * collides on disk while git sees nothing wrong at all. Exported for `rename`,
+ * whose destination is derived by the same rule and lands in the same place.
+ */
+export async function refuseExistingDir(root: string, path: string): Promise<void> {
+  if (!(await pathExists(path))) return;
+
+  throw new GroveError("state-conflict", `${worktreeDir(root, path)} already exists`, {
+    hint: "move or delete that directory first",
+  });
 }
 
 type Source =
@@ -470,7 +499,7 @@ async function resolveSource(
   // `--on` is a base as well as a record — a branch stacked on another one
   // starts at that one's tip, which is the whole of what "on top of" means. It
   // is checked before this point, so by here it is a branch that exists.
-  const base = options.on ?? options.from ?? `${REMOTE}/${await defaultBranch(bare)}`;
+  const base = options.on ?? options.from ?? remoteRef(await defaultBranch(bare));
   if (
     !(await gitSucceeds(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], { cwd: bare }))
   ) {
@@ -490,15 +519,7 @@ function argsFor(source: Source, options: AddOptions, path: string): readonly st
     // this branch — the check above proved that — so there is nothing to collide
     // with and the upstream is set correctly from the start.
     case "remote":
-      return [
-        "worktree",
-        "add",
-        "--track",
-        "-b",
-        options.branch,
-        path,
-        `${REMOTE}/${options.branch}`,
-      ];
+      return ["worktree", "add", "--track", "-b", options.branch, path, remoteRef(options.branch)];
     // `--no-track` is load-bearing. The default base is `origin/<default>`, and
     // git's `branch.autoSetupMerge` — on unless someone turned it off — sets a
     // branch cut from a remote-tracking ref to track that ref. So a brand new
