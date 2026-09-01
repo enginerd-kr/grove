@@ -4,6 +4,10 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.4.4 — 2026-09-02
+
+- Nothing a user of grove can observe changed in this release. Everything since 0.4.3 is the code behind it: the rules that were written out once per command have one home each now, the six confirmation kinds are decided in one place instead of kept in step across four lists by hand, the parser that reads `.grove.toml` no longer reaches for git to find out which worktree governs, and three exports nothing ever called are gone. The binary does what 0.4.3's did
+
 ## 0.4.3 — 2026-08-31
 
 - The shell integration is gone, and `grove cd`, `grove shell-init`, `grove install` and `grove completion` with it. `cd` existed for the one thing a child process cannot do — move the shell that started it — which is why there was a function to source, a command that printed it, and a command that wrote it into an rc file. Enter in the screen copies the path now rather than landing a shell in the worktree, so `cd "$(grove path feat/login)"` is the whole of what `cd` was for, in one line. With `cd` gone the function has no body worth printing, `install` has nothing left to install, and the completions — the other half of what it wrote — go with the rc file they lived in. grove is one binary again: installing it writes nothing outside the repository, and there is no state in a shell's config that a version of it can be out of step with
