@@ -13,7 +13,7 @@ import {
   repoHooks,
   wantsOpen,
 } from "./config.ts";
-import { isTrusted, trust } from "./trust.ts";
+import { awaitingTrust, trust } from "./trust.ts";
 
 /**
  * `open` — the hook whose subject is a person rather than a worktree.
@@ -190,10 +190,7 @@ export async function openNow(
     await trust(repo.gitDir, hooks.fingerprint);
   }
 
-  const untrusted =
-    openGatedHere(hooks) &&
-    hooks.fingerprint !== undefined &&
-    !(await isTrusted(repo.gitDir, hooks.fingerprint));
+  const untrusted = await awaitingTrust(repo.gitDir, openGatedHere(hooks), hooks.fingerprint);
 
   if (untrusted) {
     reporter.warn(
@@ -244,8 +241,9 @@ export async function pendingOpen(
 
   const command = openHere(hooks);
   if (command === "") return undefined;
-  if (!openGatedHere(hooks) || hooks.fingerprint === undefined) return undefined;
-  if (await isTrusted(repo.gitDir, hooks.fingerprint)) return undefined;
+  if (!(await awaitingTrust(repo.gitDir, openGatedHere(hooks), hooks.fingerprint))) {
+    return undefined;
+  }
 
   return { command, files: governingFiles(hooks, repo.root) };
 }

@@ -398,22 +398,13 @@ function openAt(file: string, setup: Record<string, unknown>): OpenHook {
   const value = setup.open;
   if (value === undefined) return NO_OPEN;
 
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const table = value as Record<string, unknown>;
-    for (const key of Object.keys(table)) {
-      if (OPEN_TARGETS.has(key)) continue;
-
-      throw new GroveError(
-        "usage",
-        `${file}: [setup.open] has no key named ${JSON.stringify(key)}`,
-        { hint: `the keys are ${[...OPEN_TARGETS].join(", ")}` },
-      );
-    }
+  if (isTable(value)) {
+    refuseUnknownKeys(file, "setup.open", value, OPEN_TARGETS);
 
     return {
-      macos: commandAt(file, "setup.open", table, "macos"),
-      linux: commandAt(file, "setup.open", table, "linux"),
-      windows: commandAt(file, "setup.open", table, "windows"),
+      macos: commandAt(file, "setup.open", value, "macos"),
+      linux: commandAt(file, "setup.open", value, "linux"),
+      windows: commandAt(file, "setup.open", value, "windows"),
     };
   }
 
@@ -461,6 +452,33 @@ function commandAt(
 }
 
 const OPEN_TARGETS: ReadonlySet<string> = new Set<OpenTarget>(["macos", "linux", "windows"]);
+
+/** A plain TOML table: an object that is not an array, which TOML also parses to objects. */
+function isTable(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * An unknown key is an error, not something ignored.
+ *
+ * `cpoy = [".env"]` that quietly does nothing is the failure this file exists
+ * to prevent, and every table here refuses the same way — same sentence, same
+ * hint — so the refusal reads the same wherever the typo landed.
+ */
+function refuseUnknownKeys(
+  file: string,
+  label: string,
+  table: Record<string, unknown>,
+  known: ReadonlySet<string>,
+): void {
+  for (const key of Object.keys(table)) {
+    if (known.has(key)) continue;
+
+    throw new GroveError("usage", `${file}: [${label}] has no key named ${JSON.stringify(key)}`, {
+      hint: `the keys are ${[...known].join(", ")}`,
+    });
+  }
+}
 
 const KNOWN = new Set(["copy", "link", "env", "run", "open"]);
 const KNOWN_TEARDOWN = new Set(["env", "run"]);
@@ -531,7 +549,7 @@ function scalar(file: string, section: string, value: unknown, name: string): st
 function envAt(file: string, section: string, table: Record<string, unknown>): readonly HookEnv[] {
   const value = table.env;
 
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+  if (isTable(value)) {
     return Object.entries(value).map(([name, each]) => ({
       name: checkedEnvName(file, section, name, JSON.stringify(name)),
       value: scalar(file, section, each, name),
@@ -609,20 +627,13 @@ function tableAt(
   const section = root[name];
   if (section === undefined) return {};
 
-  if (typeof section !== "object" || section === null || Array.isArray(section)) {
+  if (!isTable(section)) {
     throw new GroveError("usage", `${file}: [${name}] must be a table`);
   }
 
-  const table = section as Record<string, unknown>;
-  for (const key of Object.keys(table)) {
-    if (known.has(key)) continue;
+  refuseUnknownKeys(file, name, section, known);
 
-    throw new GroveError("usage", `${file}: [${name}] has no key named ${JSON.stringify(key)}`, {
-      hint: `the keys are ${[...known].join(", ")}`,
-    });
-  }
-
-  return table;
+  return section;
 }
 
 /**
@@ -775,7 +786,7 @@ export type HooksOptions = {
  * that escaped would let a line in a config file copy `~/.ssh` into a directory
  * somebody is about to commit from.
  */
-export function checkedPath(key: "copy" | "link" | string, value: string): string {
+export function checkedPath(key: "copy" | "link", value: string): string {
   const segments = value.split(/[/\\]/).filter((segment) => segment.length > 0 && segment !== ".");
   const bad =
     value.startsWith("/") ||

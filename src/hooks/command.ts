@@ -10,7 +10,7 @@ import {
   openHere,
   repoHooks,
 } from "./config.ts";
-import { isTrusted } from "./trust.ts";
+import { awaitingTrust } from "./trust.ts";
 
 /**
  * What every hook has in common: a command line, an environment, and a gate.
@@ -57,10 +57,11 @@ export async function pendingCommands(
   // Nothing gated is nothing to ask about, whatever else the file asks for: a
   // `.grove.local.toml` you wrote is not a thing to be shown and asked to agree
   // to. Those commands run, and this returns the empty answer that says so.
-  if (waiting.length === 0 || setupGate(hooks).gated === 0) return [];
-  if (hooks.fingerprint === undefined) return [];
+  if (waiting.length === 0) return [];
 
-  return (await isTrusted(repo.gitDir, hooks.fingerprint)) ? [] : waiting;
+  return (await awaitingTrust(repo.gitDir, setupGate(hooks).gated > 0, hooks.fingerprint))
+    ? waiting
+    : [];
 }
 
 /**
@@ -178,10 +179,7 @@ export async function runCommands(
 ): Promise<{ ran: readonly string[]; failed?: HookFailure; untrusted: boolean }> {
   const { commands, env } = section;
 
-  const untrusted =
-    gate.gated > 0 &&
-    hooks.fingerprint !== undefined &&
-    !(await isTrusted(repo.gitDir, hooks.fingerprint));
+  const untrusted = await awaitingTrust(repo.gitDir, gate.gated > 0, hooks.fingerprint);
 
   if (untrusted) {
     // Named by the files that actually govern, which are the trunk's — pointing

@@ -43,6 +43,23 @@ export async function isTrusted(bare: string, fingerprint: string): Promise<bool
   return result.stdout.split("\0").some((value) => value.trim() === fingerprint);
 }
 
+/**
+ * Whether gated lines here are still waiting on somebody having read them.
+ *
+ * The three-part question every caller used to spell out for itself: is
+ * anything gated at all, is there a tracked layer to have read (a file of your
+ * own has no fingerprint — nothing pulls it), and have these exact contents
+ * been recorded as read. One spelling is what keeps `command.ts`'s promise —
+ * one piece of code decides trust for the whole file — literally true.
+ */
+export async function awaitingTrust(
+  bare: string,
+  gated: boolean,
+  fingerprint: string | undefined,
+): Promise<boolean> {
+  return gated && fingerprint !== undefined && !(await isTrusted(bare, fingerprint));
+}
+
 /** Records these contents as read and agreed to. Replaces any earlier answer. */
 export async function trust(bare: string, fingerprint: string): Promise<void> {
   await runGitOrThrow(["config", "--replace-all", TRUST_KEY, fingerprint], { cwd: bare });
