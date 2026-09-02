@@ -29,6 +29,7 @@ import { renameWorktree } from "../core/commands/rename.ts";
 import { resetWorktree } from "../core/commands/reset.ts";
 import { setUpWorktrees, failureFor as setupFailure } from "../core/commands/setup.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
+import { followUpstream } from "../core/commands/upstream.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import { GroveError } from "../core/errors.ts";
 import type { RepoPaths } from "../core/layout.ts";
@@ -223,6 +224,15 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       const result = await cloneRepo(cwd, options, reporter);
 
       report(result, () => reporter.out(`${display(cwd, result.worktree)}\t${result.branch}`));
+      return;
+    }
+
+    case "upstream": {
+      const { name, ...options } = command;
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await followUpstream(repo, options, reporter);
+
+      report(result, () => reporter.out(`${result.trunk}\t${result.ref}`));
       return;
     }
 

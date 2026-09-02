@@ -5,9 +5,9 @@ import {
   branchStates,
   commitTimes,
   type Drift,
-  defaultBranch,
   driftFrom,
-  remoteRef,
+  publishRemotes,
+  trunkOf,
 } from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { readStack } from "../stack.ts";
@@ -104,6 +104,15 @@ export type WorktreeSummary = {
   readonly behind: number;
   readonly upstream?: string;
   /**
+   * Where a push of this branch would go — `publishRemote`'s answer.
+   *
+   * On the row because the one question the screen asks about a push is the
+   * one before a first one, and "this pushes it to origin/feat/x" is a
+   * sentence that has to name the right remote to be worth answering. Absent
+   * for a detached worktree, which has no branch to push.
+   */
+  readonly publishRemote?: string;
+  /**
    * How far this branch has drifted from the default branch.
    *
    * A second question entirely from `ahead`/`behind`, which are about the branch
@@ -182,17 +191,18 @@ export async function listWorktreeSummaries(
   repo: RepoPaths,
   cwd: string,
 ): Promise<readonly WorktreeSummary[]> {
-  const [records, trunk, stack] = await Promise.all([
+  const [records, trunk, stack, publishedTo] = await Promise.all([
     listWorktrees(repo.gitDir),
-    defaultBranch(repo.gitDir),
+    trunkOf(repo.gitDir),
     readStack(repo.gitDir),
+    publishRemotes(repo.gitDir),
   ]);
   // After `trunk` is known, and once for every branch rather than per worktree.
   const [drift, states, committed] = await Promise.all([
-    driftFrom(repo.gitDir, trunk),
+    driftFrom(repo.gitDir, trunk.branch),
     // Against the remote's trunk rather than the local one, so a branch that
     // landed upstream reads as landed before anybody has pulled it down here.
-    branchStates(repo.gitDir, remoteRef(trunk)),
+    branchStates(repo.gitDir, trunk),
     commitTimes(
       repo.gitDir,
       records.map((record) => record.head).filter((head): head is string => head !== undefined),
@@ -217,7 +227,7 @@ export async function listWorktreeSummaries(
         upstream: status.upstream,
         // Nothing to say about the trunk's distance from itself.
         trunk:
-          record.branch === undefined || record.branch === trunk
+          record.branch === undefined || record.branch === trunk.branch
             ? undefined
             : drift.get(record.branch),
         touched: await latestTouch(
@@ -229,11 +239,12 @@ export async function listWorktreeSummaries(
         rebasing: record.rebasing === true,
         finished: finishedWith(
           record.branch,
-          trunk,
+          trunk.branch,
           record.branch === undefined ? undefined : states.get(record.branch),
         ),
         parent: record.branch === undefined ? undefined : stack.get(record.branch),
-        isDefault: record.branch === trunk,
+        publishRemote: record.branch === undefined ? undefined : publishedTo(record.branch),
+        isDefault: record.branch === trunk.branch,
         current: contains(record.path, cwd),
       };
     }),

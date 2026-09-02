@@ -10,10 +10,10 @@ import { type Reporter, withStep } from "../../report/reporter.ts";
 import {
   defaultBranch,
   localBranchExists,
+  publishRemote,
   pushUpstream,
-  REMOTE,
   remoteBranchExists,
-  remoteRef,
+  trunkOf,
 } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
@@ -170,7 +170,9 @@ export async function addWorktree(
   if (parent !== undefined) await setParent(repo.gitDir, options.branch, parent);
 
   const pushFailure = `created the worktree, but pushing ${options.branch} failed`;
-  if (options.push) await pushUpstream(path, options.branch, reporter, pushFailure);
+  const pushedTo = options.push
+    ? await pushUpstream(path, options.branch, reporter, pushFailure)
+    : undefined;
 
   // Before setup, not after. Setup copies files in and runs commands over what
   // it finds, and `git stash apply` wants a tree it has not already been
@@ -194,7 +196,7 @@ export async function addWorktree(
     dir,
     branch: options.branch,
     source: origin.kind,
-    upstream: origin.kind === "new" && !options.push ? undefined : remoteRef(options.branch),
+    upstream: upstreamOf(origin, options.branch, pushedTo),
     alreadyPresent: false,
     parent,
     setup,
@@ -480,9 +482,29 @@ export async function refuseExistingDir(root: string, path: string): Promise<voi
 }
 
 type Source =
-  | { readonly kind: "existing" }
-  | { readonly kind: "remote" }
-  | { readonly kind: "new"; readonly base: string };
+  | { readonly kind: "existing"; readonly remote: string }
+  /** `remote` is the one the branch was found on, which the worktree will track. */
+  | { readonly kind: "remote"; readonly remote: string }
+  | { readonly kind: "new"; readonly base: string; readonly remote: string };
+
+/**
+ * What the result reports the branch as tracking, or nothing.
+ *
+ * A branch found on a remote tracks it from the start; a new one tracks
+ * nothing until it is pushed, and then tracks where the push went — which is
+ * `pushUpstream`'s answer, not a name guessed here. An existing branch is
+ * reported the same way it was found, against the remote its branches go to.
+ */
+function upstreamOf(
+  source: Source,
+  branch: string,
+  pushedTo: string | undefined,
+): string | undefined {
+  if (pushedTo !== undefined) return `${pushedTo}/${branch}`;
+  if (source.kind === "new") return undefined;
+
+  return `${source.remote}/${branch}`;
+}
 
 /**
  * Decides where the branch comes from: already local, on the remote, or new.
@@ -496,21 +518,31 @@ async function resolveSource(
   options: AddOptions,
   reporter: Reporter,
 ): Promise<Source> {
-  if (await localBranchExists(bare, options.branch)) return { kind: "existing" };
-  if (await remoteBranchExists(bare, options.branch)) return { kind: "remote" };
+  // The remote a branch of this name would be pushed to is the one it is
+  // looked for on: `feat/x` on the fork is yours to continue, and `feat/x`
+  // on the repository you pull from is somebody else's, even by the same name.
+  const remote = await publishRemote(bare, options.branch);
+  if (await localBranchExists(bare, options.branch)) return { kind: "existing", remote };
+  if (await remoteBranchExists(bare, options.branch, remote)) return { kind: "remote", remote };
+
+  const trunk = await trunkOf(bare);
 
   if (options.fetch) {
     const step = reporter.step("fetching");
-    await runGitOrThrow(["fetch", REMOTE, "--prune"], { cwd: bare });
+    // Both remotes when they differ: the branch is looked for on one, and the
+    // trunk a new branch is cut from lives on the other. One fetch, so a fork
+    // that pulls from `upstream` and pushes to `origin` is one round trip.
+    const remotes = [...new Set([remote, trunk.remote])];
+    await runGitOrThrow(["fetch", "--multiple", "--prune", ...remotes], { cwd: bare });
     step.succeed("fetched");
 
-    if (await remoteBranchExists(bare, options.branch)) return { kind: "remote" };
+    if (await remoteBranchExists(bare, options.branch, remote)) return { kind: "remote", remote };
   }
 
   // `--on` is a base as well as a record — a branch stacked on another one
   // starts at that one's tip, which is the whole of what "on top of" means. It
   // is checked before this point, so by here it is a branch that exists.
-  const base = options.on ?? options.from ?? remoteRef(await defaultBranch(bare));
+  const base = options.on ?? options.from ?? trunk.ref;
   if (
     !(await gitSucceeds(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], { cwd: bare }))
   ) {
@@ -519,7 +551,7 @@ async function resolveSource(
     });
   }
 
-  return { kind: "new", base };
+  return { kind: "new", base, remote };
 }
 
 function argsFor(source: Source, options: AddOptions, path: string): readonly string[] {
@@ -530,7 +562,15 @@ function argsFor(source: Source, options: AddOptions, path: string): readonly st
     // this branch — the check above proved that — so there is nothing to collide
     // with and the upstream is set correctly from the start.
     case "remote":
-      return ["worktree", "add", "--track", "-b", options.branch, path, remoteRef(options.branch)];
+      return [
+        "worktree",
+        "add",
+        "--track",
+        "-b",
+        options.branch,
+        path,
+        `${source.remote}/${options.branch}`,
+      ];
     // `--no-track` is load-bearing. The default base is `origin/<default>`, and
     // git's `branch.autoSetupMerge` — on unless someone turned it off — sets a
     // branch cut from a remote-tracking ref to track that ref. So a brand new

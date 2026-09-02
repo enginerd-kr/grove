@@ -67,6 +67,7 @@ function summary(overrides: Partial<WorktreeSummary> & { readonly dir: string })
     locked: false,
     rebasing: false,
     isDefault: false,
+    publishRemote: "origin",
     current: false,
     ...overrides,
   };
@@ -114,6 +115,7 @@ type Calls = {
   readonly opened: { target: string; trust: boolean }[];
   readonly filledIn: string[];
   readonly trusted: string[];
+  readonly followed: { url: string; force: boolean }[];
 };
 
 function stub(overrides: Partial<WorktreeService> = {}): {
@@ -136,6 +138,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     opened: [],
     filledIn: [],
     trusted: [],
+    followed: [],
   };
 
   return {
@@ -224,6 +227,12 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       prune: async () => {
         calls.pruned += 1;
         return "nothing is finished with";
+      },
+      // No `upstream` remote by default, so `/upstream` runs without a question.
+      pendingUpstream: async () => undefined,
+      upstream: async (url, force = false) => {
+        calls.followed.push({ url, force });
+        return `main now follows upstream/main; branches are pushed to origin`;
       },
       ...overrides,
     },
@@ -1091,6 +1100,72 @@ describe("the add prompt", () => {
   });
 });
 
+describe("the upstream prompt", () => {
+  test("`/upstream` asks for a URL, says what enter does, and follows it without a question", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await run(ui, "upstream");
+    const prompt = await settled(ui, (frame) => frame.includes("upstream "));
+    // The consent is the two lines above the box: what changes, and what does not.
+    expect(prompt).toContain("main will be measured against this repository's trunk");
+    expect(prompt).toContain("Your branches still go to origin");
+    expect(prompt).toContain("enter follow");
+
+    await press(ui, "https://example.test/them/repo.git");
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("main now follows upstream/main"));
+
+    expect(calls.followed).toEqual([{ url: "https://example.test/them/repo.git", force: false }]);
+  });
+
+  test("enter on nothing, and esc, both close it having followed nothing", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await run(ui, "upstream");
+    await settled(ui, (frame) => frame.includes("upstream "));
+    await press(ui, keys.enter);
+    await settled(ui, IN_LIST);
+
+    await run(ui, "upstream");
+    await settled(ui, (frame) => frame.includes("upstream "));
+    await press(ui, "u://x");
+    await press(ui, keys.esc);
+    await settled(ui, IN_LIST);
+
+    expect(calls.followed).toEqual([]);
+  });
+
+  test("replacing a remote that is already there is the one part it asks about", async () => {
+    const { service, calls } = stub({
+      pendingUpstream: async (url) => (url === "u://old" ? undefined : "u://old"),
+    });
+    const ui = await opened_with(service);
+
+    await run(ui, "upstream");
+    await settled(ui, (frame) => frame.includes("upstream "));
+    await press(ui, "u://new");
+    await press(ui, keys.enter);
+    const question = await settled(ui, (frame) => frame.includes("replace upstream?"));
+    expect(question).toContain("it points at u://old, and would point at u://new");
+    expect(question).toContain("y replace");
+
+    await press(ui, "n");
+    await settled(ui, IN_LIST);
+    expect(calls.followed).toEqual([]);
+
+    await run(ui, "upstream");
+    await settled(ui, (frame) => frame.includes("upstream "));
+    await press(ui, "u://new");
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("replace upstream?"));
+    await press(ui, "y");
+    await settled(ui, (frame) => frame.includes("main now follows"));
+    expect(calls.followed).toEqual([{ url: "u://new", force: true }]);
+  });
+});
+
 describe("the keys", () => {
   /**
    * Keys arrive faster than React commits, which is exactly what holding an
@@ -1652,12 +1727,13 @@ describe("the keys", () => {
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
 
-    // `re` is in three of the names, which is what makes this a filter rather
+    // `re` is in four of the names, which is what makes this a filter rather
     // than a lookup.
     await press(ui, "re");
-    let frame = await settled(ui, (each) => each.includes(`3 of ${MENU_TOTAL}`));
+    let frame = await settled(ui, (each) => each.includes(`4 of ${MENU_TOTAL}`));
     expect(frame).toContain("/rebase");
     expect(frame).toContain("/review");
+    expect(frame).toContain("/upstream");
     expect(frame).toContain("/refresh");
     expect(frame).not.toContain("/sync-all");
 
@@ -1667,7 +1743,7 @@ describe("the keys", () => {
     expect(frame).not.toContain("/refresh");
 
     ui.stdin.write(keys.backspace);
-    frame = await settled(ui, (each) => each.includes(`3 of ${MENU_TOTAL}`));
+    frame = await settled(ui, (each) => each.includes(`4 of ${MENU_TOTAL}`));
     expect(frame).toContain("/refresh");
   });
 
@@ -1698,10 +1774,10 @@ describe("the keys", () => {
 
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
-    // `s` is in `setup`, `rebase`, `sync-all` and `refresh`, which is the whole
-    // of what a filter over a handful of short names can narrow to.
+    // `s` is in `setup`, `rebase`, `sync-all`, `upstream` and `refresh`, which
+    // is the whole of what a filter over a handful of short names can narrow to.
     await press(ui, "s");
-    await settled(ui, (frame) => frame.includes(`4 of ${MENU_TOTAL}`));
+    await settled(ui, (frame) => frame.includes(`5 of ${MENU_TOTAL}`));
 
     await press(ui, keys.backspace);
     ui.stdin.write(keys.backspace);

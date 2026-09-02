@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { type Reporter, withStep } from "../../report/reporter.ts";
-import { localBranchExists, pushUpstream, REMOTE, refuseTrunk, remoteRef } from "../branches.ts";
+import { localBranchExists, publishRemote, pushUpstream, refuseTrunk } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase, worktreePathFor } from "../layout.ts";
@@ -229,7 +229,8 @@ async function upstreamNote(bare: string, branch: string): Promise<string | unde
   if (result.code !== 0) return undefined;
 
   const upstream = result.stdout.trim();
-  if (upstream.length === 0 || upstream === remoteRef(branch)) return undefined;
+  const remote = await publishRemote(bare, branch);
+  if (upstream.length === 0 || upstream === `${remote}/${branch}`) return undefined;
 
-  return `still tracking ${upstream}; \`grove rename … --push\` or \`git push -u ${REMOTE} ${branch}\` moves it`;
+  return `still tracking ${upstream}; \`grove rename … --push\` or \`git push -u ${remote} ${branch}\` moves it`;
 }

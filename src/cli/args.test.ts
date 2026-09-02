@@ -256,6 +256,22 @@ describe("flags land where the command expects them", () => {
     });
   });
 
+  test("clone takes --upstream, and upstream takes a URL and --force", () => {
+    expect(run(["clone", "u://x", "--upstream", "u://y"]).command).toMatchObject({
+      name: "clone",
+      url: "u://x",
+      upstream: "u://y",
+    });
+    expect(run(["clone", "u://x"]).command).toMatchObject({ upstream: undefined });
+    expect(run(["upstream", "u://y"]).command).toEqual({
+      name: "upstream",
+      url: "u://y",
+      force: false,
+    });
+    expect(run(["upstream", "u://y", "--force"]).command).toMatchObject({ force: true });
+    expect(error(["upstream"]).message).toContain("forked from");
+  });
+
   test("prune folds --gone and --merged into the one question they halve", () => {
     expect(run(["prune"]).command).toMatchObject({ only: undefined });
     expect(run(["prune", "--gone"]).command).toMatchObject({ only: "gone" });
@@ -263,6 +279,14 @@ describe("flags land where the command expects them", () => {
     // Both halves is the whole question, which is the default.
     expect(run(["prune", "--gone", "--merged"]).command).toMatchObject({ only: undefined });
     expect(run(["prune", "-n"]).command).toMatchObject({ dryRun: true });
+    // `--closed` widens rather than narrows: it is asked of gh on top of
+    // whichever of the two free answers were asked for.
+    expect(run(["prune"]).command).toMatchObject({ closed: false });
+    expect(run(["prune", "--closed"]).command).toMatchObject({ only: undefined, closed: true });
+    expect(run(["prune", "--gone", "--closed"]).command).toMatchObject({
+      only: "gone",
+      closed: true,
+    });
   });
 
   test("the rest of the mutating commands", () => {

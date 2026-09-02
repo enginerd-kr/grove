@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { chmod, mkdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { pathExists } from "../fs.ts";
 import type { RepoPaths } from "../layout.ts";
@@ -8,6 +8,7 @@ import {
   attempt,
   managedRepo,
   probeGit,
+  refused,
   seedGit,
   seedWorktree,
   succeeded,
@@ -119,6 +120,7 @@ async function localBranches(repo: RepoPaths): Promise<readonly string[]> {
 /** The flags `cli/args.ts` hands `pruneWorktrees`, with its own defaults. */
 type PruneCall = {
   readonly only?: Finished;
+  readonly closed?: boolean;
   readonly dryRun?: boolean;
   readonly deleteBranch?: boolean;
   readonly fetch?: boolean;
@@ -128,11 +130,101 @@ type PruneCall = {
 
 function attemptPrune(
   repo: RepoPaths,
-  { only, dryRun = false, deleteBranch = false, fetch = true, cwd = repo.root }: PruneCall = {},
+  {
+    only,
+    closed = false,
+    dryRun = false,
+    deleteBranch = false,
+    fetch = true,
+    cwd = repo.root,
+  }: PruneCall = {},
 ): Promise<Attempt<PruneResult>> {
   return attempt((reporter) =>
-    pruneWorktrees(repo, cwd, { only, dryRun, deleteBranch, fetch }, reporter),
+    pruneWorktrees(repo, cwd, { only, closed, dryRun, deleteBranch, fetch }, reporter),
   );
+}
+
+/** POSIX only — the stand-in for `gh` is a shell script, as `pr.test.ts`'s is. */
+const POSIX = process.platform !== "win32";
+
+/**
+ * A `gh` that answers every question with the same file.
+ *
+ * Enough, because what `--closed` matches on is the head sha and not the
+ * question: one answer naming one branch's tip says "closed" for that branch
+ * and "not this one" for every other, which is the whole of the guard under
+ * test. What was asked is written down so the test can say which worktrees
+ * were asked about, and which — the trunk, the ones already finished — were
+ * not.
+ */
+const GH_FAKE = `#!/bin/sh
+PATH=/usr/bin:/bin
+printf '%s\\n' "$*" >> "$GROVE_GH_LOG"
+cat "$GROVE_GH_OUT"
+`;
+
+type Forge = {
+  /** Replaces what every `gh` call answers. */
+  readonly answer: (rows: readonly Record<string, unknown>[]) => Promise<void>;
+  /** Every argv the fake has been handed, in order. */
+  readonly asked: () => Promise<readonly string[]>;
+  /** Runs `body` with a `PATH` holding git and bun and nothing else. */
+  readonly withoutGh: <T>(body: () => Promise<T>) => Promise<T>;
+};
+
+async function withFakeGh(temp: TempRepo, body: (forge: Forge) => Promise<void>): Promise<void> {
+  const bin = join(temp.root, "bin");
+  await mkdir(bin, { recursive: true });
+  await Bun.write(join(bin, "gh"), GH_FAKE);
+  await chmod(join(bin, "gh"), 0o755);
+
+  const barePath = join(temp.root, "no-gh");
+  await mkdir(barePath, { recursive: true });
+  await symlink(Bun.which("git") ?? "/usr/bin/git", join(barePath, "git"));
+  await symlink(process.execPath, join(barePath, "bun"));
+
+  const log = join(temp.root, "gh.log");
+  const out = join(temp.root, "gh.json");
+  await Bun.write(log, "");
+  await Bun.write(out, "[]");
+
+  const env: Readonly<Record<string, string>> = {
+    PATH: `${bin}:${process.env.PATH}`,
+    GROVE_GH_LOG: log,
+    GROVE_GH_OUT: out,
+  };
+  const restore = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    restore.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+
+  try {
+    await body({
+      answer: async (rows) => {
+        await Bun.write(out, JSON.stringify(rows));
+      },
+      asked: async () => (await Bun.file(log).text()).split("\n").filter((line) => line.length > 0),
+      withoutGh: async (inner) => {
+        const path = process.env.PATH;
+        process.env.PATH = barePath;
+        try {
+          return await inner();
+        } finally {
+          process.env.PATH = path;
+        }
+      },
+    });
+  } finally {
+    for (const [key, value] of restore) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+async function tipOf(repo: RepoPaths, branch: string): Promise<string> {
+  return (await probeGit(repo.gitDir, ["rev-parse", `refs/heads/${branch}`])).stdout.trim();
 }
 
 describe("grove prune", () => {
@@ -369,6 +461,116 @@ describe("grove prune", () => {
         },
       ]);
       expect(await pathExists(worktree)).toBe(false);
+    });
+  });
+});
+
+describe.if(POSIX)("grove prune --closed", () => {
+  test("takes the forge's word for a pull request closed without merging, at this exact commit", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+
+      // Neither gone nor merged: both branches are still on the origin and
+      // neither has landed on its trunk. Locally they are indistinguishable
+      // from work in progress, which is the case only the forge can settle.
+      const declinedDir = await proposed(repo, "declined", "declined.txt");
+      const aliveDir = await proposed(repo, "alive", "alive.txt");
+      // A reviewed pull request's worktree, asked about by its number.
+      const reviewed = await seedWorktree(repo, "pr/9");
+
+      await withFakeGh(temp, async (forge) => {
+        await forge.answer([
+          { number: 7, state: "CLOSED", headRefOid: await tipOf(repo, "declined") },
+          // Merged reads as MERGED under `--state closed`, and is not this
+          // command's to claim: `merged` is git's answer, computed locally.
+          { number: 8, state: "MERGED", headRefOid: await tipOf(repo, "alive") },
+        ]);
+
+        const dry = succeeded(await attemptPrune(repo, { closed: true, dryRun: true }));
+
+        expect(dry.entries).toEqual([
+          {
+            path: declinedDir,
+            dir: "declined",
+            branch: "declined",
+            reason: "closed",
+            branchDeleted: false,
+          },
+        ]);
+        expect(await pathExists(declinedDir)).toBe(true);
+
+        // Every branch git could not settle was asked about — by name, or by
+        // number for a `pr/<n>` — and the trunk was not.
+        const asked = await forge.asked();
+        expect(asked).toContain(
+          "pr list --head declined --state closed --json number,state,headRefOid",
+        );
+        expect(asked).toContain(
+          "pr list --head alive --state closed --json number,state,headRefOid",
+        );
+        expect(asked).toContain("pr view 9 --json number,state,headRefOid");
+        expect(asked.join("\n")).not.toContain("--head main");
+
+        const pruned = succeeded(await attemptPrune(repo, { closed: true }));
+
+        expect(pruned.entries.map((entry) => [entry.dir, entry.reason])).toEqual([
+          ["declined", "closed"],
+        ]);
+        expect(describePrune(pruned)).toBe("removed 1");
+        expect(await pathExists(declinedDir)).toBe(false);
+        expect(await pathExists(aliveDir)).toBe(true);
+        expect(await pathExists(reviewed.path)).toBe(true);
+        // The branch stays, as it does for the other two reasons.
+        expect(await localBranches(repo)).toContain("declined");
+      });
+    });
+  });
+
+  test("a reused branch name is not the pull request that was closed under it", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const dir = await proposed(repo, "fix/crash", "crash.txt");
+
+      await withFakeGh(temp, async (forge) => {
+        // The forge remembers a `fix/crash` from March, closed at some other
+        // commit. Same name, different work: not this worktree's.
+        await forge.answer([
+          { number: 3, state: "CLOSED", headRefOid: "0123456789abcdef0123456789abcdef01234567" },
+        ]);
+
+        const result = succeeded(await attemptPrune(repo, { closed: true }));
+
+        expect(result.entries).toEqual([]);
+        expect(await pathExists(dir)).toBe(true);
+      });
+    });
+  });
+
+  test("without gh, --closed is refused before anything is removed; without --closed, gh is never run", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const goneDir = await proposed(repo, "shipped", "shipped.txt");
+      await deleteOnOrigin(temp, "shipped");
+      // A branch git has no answer for, so there is something to ask the
+      // forge about: a `gone` row alone is never asked, and a run with no
+      // question to put would not need gh at all.
+      await proposed(repo, "alive", "alive.txt");
+
+      await withFakeGh(temp, async (forge) => {
+        const failure = await forge.withoutGh(async () =>
+          refused(await attemptPrune(repo, { closed: true })),
+        );
+
+        expect(failure.code).toBe("gh");
+        // Refused whole: the `gone` worktree it had a free answer for is
+        // still there, because a command that removed half and then failed
+        // would be a command whose exit code was worth nothing.
+        expect(await pathExists(goneDir)).toBe(true);
+
+        succeeded(await attemptPrune(repo));
+        expect(await pathExists(goneDir)).toBe(false);
+        expect(await forge.asked()).toEqual([]);
+      });
     });
   });
 });

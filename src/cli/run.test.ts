@@ -249,6 +249,7 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     const log = await run({
       name: "prune",
       only: undefined,
+      closed: false,
       dryRun: true,
       deleteBranch: false,
       fetch: false,
@@ -315,6 +316,19 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     // `rebaseWorktree` says in these words — and as one row, `sync`'s shape.
     expect(log.out).toEqual(["main\tup-to-date\n"]);
     expect(log.err).toContain("· main is already on origin/main\n");
+  },
+
+  upstream: async ({ root, run }) => {
+    // The origin itself, standing in for the repository this was forked
+    // from: the point is which implementation answered, and only
+    // `followUpstream` says this on stdout.
+    const url = (
+      await probeGit(join(root, ".bare"), ["remote", "get-url", "origin"])
+    ).stdout.trim();
+    const log = await run({ name: "upstream", url, force: false });
+
+    expect(log.out).toEqual(["main\tupstream/main\n"]);
+    expect(log.err.join("")).toContain("main now follows upstream/main");
   },
 
   setup: async ({ root, run }) => {

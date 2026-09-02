@@ -88,10 +88,11 @@ const BASE_ROWS = 8;
  * commands there are is ours. It is pinned to exactly how many there are, so
  * the menu is a list you read and never one you scroll — and adding a command
  * means raising this on purpose, having decided the list is still short enough
- * to be read whole. `rebase` made it eight, which is the edge of it; the next
- * one is an argument for fewer commands rather than a taller popup.
+ * to be read whole. `rebase` made it eight and `upstream` nine, and nine is
+ * where it stops: the next one is an argument for fewer commands rather than
+ * a taller popup.
  */
-const MENU_ROWS = 8;
+const MENU_ROWS = 9;
 
 /**
  * The rows the list keeps whatever else wants them.
@@ -128,6 +129,8 @@ export type LayoutMode =
   | { readonly kind: "list" }
   | { readonly kind: "busy" }
   | { readonly kind: "add" }
+  /** `/upstream`'s prompt: two lines saying what it does, and the URL box. */
+  | { readonly kind: "upstream" }
   | { readonly kind: "confirm" }
   | { readonly kind: "pick"; readonly prs: { readonly length: number } }
   /** `/rebase`'s popup: the bases offered for the row under the cursor. */
@@ -156,6 +159,10 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
   busy: [{ keys: "ctrl+c", action: "cancel" }],
   add: [
     { keys: "enter", action: "add" },
+    { keys: "esc", action: "cancel" },
+  ],
+  upstream: [
+    { keys: "enter", action: "follow" },
     { keys: "esc", action: "cancel" },
   ],
   pick: [
@@ -224,6 +231,10 @@ const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
   "trust-open": [
     { keys: "y", action: "trust and open" },
     { keys: "n", action: "leave it" },
+  ],
+  upstream: [
+    { keys: "y", action: "replace" },
+    { keys: "n", action: "keep it" },
   ],
 };
 
@@ -370,6 +381,8 @@ export function regionsFor({
 
   const detailRows =
     (mode.kind === "add" ? 3 : 0) +
+    // The box, and the two lines above it that say what enter will do.
+    (mode.kind === "upstream" ? 5 : 0) +
     (mode.kind === "pick" ? pullRequestRows(mode.prs.length, prBody) : 0) +
     (mode.kind === "onto" ? baseRows(mode.choices.length, baseBody) : 0) +
     (mode.kind === "menu" ? menuRows(mode.matches, menuBody) : 0) +

@@ -1,8 +1,11 @@
-import type { Reporter } from "../../report/reporter.ts";
+import { type Reporter, withStep } from "../../report/reporter.ts";
 import { fetchRemotes } from "../branches.ts";
 import { isGroveError } from "../errors.ts";
 import { deepestFirst, type RepoPaths } from "../layout.ts";
+import { plural } from "../text.ts";
+import { listWorktrees } from "../worktrees.ts";
 import { type Finished, listWorktreeSummaries, type WorktreeSummary } from "./list.ts";
+import { closedOnForge, type ForgeCandidate } from "./pr.ts";
 import { deleteBranch, removeWorktree } from "./remove.ts";
 import { describeDiscard } from "./reset.ts";
 
@@ -20,6 +23,13 @@ import { describeDiscard } from "./reset.ts";
  * things: the remote no longer has the branch, or the trunk already has every
  * commit on it. See `Finished` there for why neither alone is enough.
  *
+ * There is a third that neither git nor the remote can answer: a pull request
+ * closed without being merged, whose branch the forge kept. Nothing is gone
+ * and nothing landed, so locally the worktree looks like work in progress —
+ * and it is the forge's word alone that says it is not. `--closed` asks, and
+ * only on request, because it costs `gh` and a round trip per worktree where
+ * the other two cost nothing.
+ *
  * This removes by default rather than asking first, for the same reason
  * `remove` does: a command line is where you type things on purpose, and there
  * is nothing to prompt on in a pipe. What makes that safe is what it refuses —
@@ -29,9 +39,23 @@ import { describeDiscard } from "./reset.ts";
  * skips are the ones that would cost more than that.
  */
 
+/**
+ * Why a worktree is on prune's list: `list`'s two, and the one only the forge
+ * knows. See `Finished` for the first two, and `closedOnForge` for the third.
+ */
+export type PruneReason = Finished | "closed";
+
 export type PruneOptions = {
   /** Only one kind of finished. Absent means both, which is the usual answer. */
   readonly only?: Finished;
+  /**
+   * Also the worktrees whose pull request was closed without merging.
+   *
+   * Asked of `gh`, and so opt-in: a repository not on GitHub, or a machine
+   * without `gh`, would otherwise fail a command that had two free answers to
+   * give. `--gone` and `--merged` narrow the free half; this widens it.
+   */
+  readonly closed: boolean;
   /** Say what would go, and remove nothing. */
   readonly dryRun: boolean;
   /** Delete the branch too, where git will part with it. */
@@ -58,7 +82,7 @@ export type PruneEntry = {
    * that with the type costs nothing an empty string would not have cost more.
    */
   readonly branch?: string;
-  readonly reason: Finished;
+  readonly reason: PruneReason;
   /** Why it is still there. Absent means it went — or would have, on a dry run. */
   readonly skipped?: string;
   /** True when the branch went with the directory. */
@@ -92,6 +116,61 @@ function skipReason(summary: WorktreeSummary): string | undefined {
   return undefined;
 }
 
+/** A worktree on the list, and which of the three answers put it there. */
+type Candidate = {
+  readonly summary: WorktreeSummary;
+  readonly reason: PruneReason;
+};
+
+/**
+ * The worktrees the forge says are finished with, out of those git did not.
+ *
+ * Only the rows the local answers left alone are asked about — a `gone` row
+ * is already on the list, and asking the forge about it would be a round trip
+ * to learn nothing. The trunk is never asked, for the reason `finishedWith`
+ * gives, and a detached worktree has no branch to ask about.
+ *
+ * The tips come from git's own worktree list rather than another process per
+ * row: `closedOnForge` matches on the commit as well as the name, and this is
+ * the one read that already has both.
+ */
+async function closedByForge(
+  repo: RepoPaths,
+  summaries: readonly WorktreeSummary[],
+  reporter: Reporter,
+): Promise<readonly Candidate[]> {
+  const heads = new Map(
+    (await listWorktrees(repo.gitDir)).map((record) => [record.path, record.head] as const),
+  );
+  const asked = summaries.filter(
+    (summary): summary is WorktreeSummary & { branch: string } =>
+      summary.branch !== undefined && !summary.isDefault && summary.finished === undefined,
+  );
+  const candidates: ForgeCandidate[] = [];
+  for (const summary of asked) {
+    const head = heads.get(summary.path);
+    if (head !== undefined) candidates.push({ branch: summary.branch, head });
+  }
+  if (candidates.length === 0) return [];
+
+  const closed = await withStep(
+    reporter,
+    {
+      start: `asking gh about ${plural(candidates.length, "branch", "branches")}`,
+      done: (found) =>
+        found.size === 0
+          ? "no pull request closed without merging"
+          : `closed without merging: ${[...found.keys()].join(", ")}`,
+      failed: "gh could not say which pull requests were closed",
+    },
+    () => closedOnForge(repo, candidates),
+  );
+
+  return asked
+    .filter((summary) => closed.has(summary.branch))
+    .map((summary) => ({ summary, reason: "closed" as const }));
+}
+
 export async function pruneWorktrees(
   repo: RepoPaths,
   cwd: string,
@@ -114,22 +193,28 @@ export async function pruneWorktrees(
   }
 
   const summaries = await listWorktreeSummaries(repo, cwd);
-  const finished = summaries.filter(
-    (summary): summary is WorktreeSummary & { finished: Finished } =>
-      summary.finished !== undefined &&
-      (options.only === undefined || summary.finished === options.only),
-  );
+  const finished: Candidate[] = summaries
+    .filter(
+      (summary): summary is WorktreeSummary & { finished: Finished } =>
+        summary.finished !== undefined &&
+        (options.only === undefined || summary.finished === options.only),
+    )
+    .map((summary) => ({ summary, reason: summary.finished }));
 
-  const ordered = finished.toSorted((a, b) => deepestFirst(a.dir, b.dir));
+  const closed = options.closed ? await closedByForge(repo, summaries, reporter) : [];
+
+  const ordered = [...finished, ...closed].toSorted((a, b) =>
+    deepestFirst(a.summary.dir, b.summary.dir),
+  );
 
   const entries: PruneEntry[] = [];
 
-  for (const summary of ordered) {
+  for (const { summary, reason } of ordered) {
     const base = {
       path: summary.path,
       dir: summary.dir,
       branch: summary.branch,
-      reason: summary.finished,
+      reason,
       branchDeleted: false,
     };
 
@@ -206,10 +291,11 @@ export function describePrune(result: PruneResult): string {
 /**
  * A line per worktree, saying which of the two answers put it on the list.
  *
- * The reason is on every row on purpose. `gone` and `merged` are not the same
- * claim — one is somebody having deleted the branch, the other is arithmetic
- * about commits — and a list that flattened them into "finished" would be
- * asking to be trusted about a judgement it did not show its working for.
+ * The reason is on every row on purpose. `gone`, `merged` and `closed` are not
+ * the same claim — one is somebody having deleted the branch, one is arithmetic
+ * about commits, and one is the forge's word — and a list that flattened them
+ * into "finished" would be asking to be trusted about a judgement it did not
+ * show its working for.
  */
 export function formatPruneTable(result: PruneResult): string {
   const dirWidth = Math.max(0, ...result.entries.map((entry) => entry.dir.length));

@@ -2,13 +2,14 @@ import { lstat, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { version } from "../../../package.json";
 import { HOOKS_FILE, type Hooks, repoHooks } from "../../hooks/index.ts";
-import { FETCH_REFSPEC, REMOTE } from "../branches.ts";
+import { FETCH_REFSPEC, REMOTE, trunkOf } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { childDirectories, pathExists } from "../fs.ts";
 import { gitSucceeds, runGit } from "../git.ts";
 import { BARE_DIR, type RepoKind, type RepoPaths } from "../layout.ts";
 import { plural } from "../text.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
+import { existingUpstream, UPSTREAM } from "./upstream.ts";
 
 /**
  * `grove doctor` — the questions a maintainer would ask first, asked by the tool.
@@ -184,6 +185,85 @@ async function checkOriginHead({
 }
 
 /**
+ * The copy of the trunk everything is measured against, when it is not origin's.
+ *
+ * `git branch -u upstream/main main` is how somebody says their trunk follows
+ * the repository they forked, and `trunkOf` takes them at their word: from
+ * then on drift, `merged`, the base of every new branch and every rebase are
+ * against `upstream/main`. Which is a ref that exists only once `upstream`
+ * has been fetched — and a remote added by hand and never fetched, or one
+ * whose URL was mistyped, leaves the word given and the ref absent. Every
+ * command then fails against a name that reads like a typo of `origin/main`.
+ */
+async function checkTrunkTracking({
+  repo,
+  hasOrigin,
+  hasFetchRefspec,
+  hasRemoteTracking,
+}: Context): Promise<Finding | undefined> {
+  if (!hasOrigin || !hasFetchRefspec || !hasRemoteTracking) return undefined;
+
+  const trunk = await trunkOf(repo.gitDir).catch(() => undefined);
+  if (trunk === undefined || trunk.remote === REMOTE) return undefined;
+
+  const resolves = await gitSucceeds(
+    ["rev-parse", "--verify", "--quiet", `refs/remotes/${trunk.ref}`],
+    { cwd: repo.gitDir },
+  );
+  if (resolves) return undefined;
+
+  return {
+    check: "trunk-tracking",
+    severity: "error",
+    summary: `${trunk.branch} tracks ${trunk.ref}, and that ref is not there`,
+    details: [
+      `the trunk is measured against ${trunk.remote}'s copy because ${trunk.branch} was told to`,
+      `track it — and nothing has been fetched from ${trunk.remote} into refs/remotes/${trunk.remote}/`,
+    ],
+    fix: [`git -C ${repo.gitDir} fetch ${trunk.remote} --prune --tags`],
+  };
+}
+
+/**
+ * An `upstream` remote that the trunk does not follow.
+ *
+ * The state every forking guide leaves a repository in: `git remote add
+ * upstream …` done, and the line that makes it count — `git branch -u
+ * upstream/main main` — not. grove then measures everything against the
+ * fork's own copy of the trunk, which moves only when its owner pushes to
+ * it, and nothing on the screen says why `merged` never appears.
+ *
+ * The one signal of a fork that needs no forge: the remote is there by the
+ * name everybody uses for it. A second remote by any other name — a deploy
+ * target, a mirror — says nothing about forks and is left alone.
+ */
+async function checkUpstreamUnfollowed({
+  repo,
+  hasOrigin,
+  hasFetchRefspec,
+  hasRemoteTracking,
+}: Context): Promise<Finding | undefined> {
+  if (!hasOrigin || !hasFetchRefspec || !hasRemoteTracking) return undefined;
+
+  const url = await existingUpstream(repo.gitDir);
+  if (url === undefined) return undefined;
+
+  const trunk = await trunkOf(repo.gitDir).catch(() => undefined);
+  if (trunk === undefined || trunk.remote === UPSTREAM) return undefined;
+
+  return {
+    check: "upstream-unfollowed",
+    severity: "warning",
+    summary: `there is an ${UPSTREAM} remote, and ${trunk.branch} still follows ${trunk.ref}`,
+    details: [
+      `${UPSTREAM} is ${url}`,
+      `until the trunk follows it, drift and merged are measured against ${trunk.remote}'s copy`,
+    ],
+    fix: [`grove -C ${repo.root} upstream ${url}`],
+  };
+}
+
+/**
  * `<root>/.git` — the one-line file that makes the repo root a place git works.
  *
  * Only a managed repository has one; in a plain clone `.git` is the repository
@@ -251,6 +331,49 @@ async function checkPrunable({ repo, worktrees }: Context): Promise<Finding | un
       return `${worktreeDir(repo.root, record.path)}${why}`;
     }),
     fix: [`git -C ${repo.gitDir} worktree prune`],
+  };
+}
+
+/**
+ * The worktree the check above cannot see: locked, and gone from disk.
+ *
+ * `git worktree prune` skips a locked entry by design — the lock exists to say
+ * "the directory is on a drive that is not mounted right now, leave it" — and
+ * so `git worktree list` never marks one `prunable` either. Which is the right
+ * behaviour for a portable drive and the wrong one for how this state actually
+ * arises: a coding agent locks the worktree it is working in, its session dies,
+ * and the directory is deleted by whatever cleaned up after it. What is left is
+ * an entry nothing will prune, holding a branch git still considers checked
+ * out — so `grove add` of that branch fails with "already checked out at" a
+ * path that does not exist.
+ *
+ * The fix is two commands rather than one because the unlock has to come
+ * first; `prune` alone is exactly what has already been silently declining.
+ */
+async function checkLockedPhantoms({ repo, worktrees }: Context): Promise<Finding | undefined> {
+  const phantoms: WorktreeRecord[] = [];
+  for (const record of worktrees) {
+    if (record.bare || record.locked === undefined || record.prunable !== undefined) continue;
+    if (!(await pathExists(record.path))) phantoms.push(record);
+  }
+  if (phantoms.length === 0) return undefined;
+
+  return {
+    check: "locked-phantom-worktree",
+    severity: "warning",
+    summary:
+      `${plural(phantoms.length, "worktree")} git still lists, gone from disk, and locked` +
+      " — which `git worktree prune` skips",
+    details: phantoms.map((record) => {
+      const why =
+        record.locked === undefined || record.locked.length === 0 ? "" : ` — ${record.locked}`;
+
+      return `${worktreeDir(repo.root, record.path)}${why}`;
+    }),
+    fix: [
+      ...phantoms.map((record) => `git -C ${repo.gitDir} worktree unlock ${record.path}`),
+      `git -C ${repo.gitDir} worktree prune`,
+    ],
   };
 }
 
@@ -396,8 +519,11 @@ const CHECKS: readonly Check[] = [
   checkFetchRefspec,
   checkRemoteTracking,
   checkOriginHead,
+  checkTrunkTracking,
+  checkUpstreamUnfollowed,
   checkGitFile,
   checkPrunable,
+  checkLockedPhantoms,
   checkOrphans,
   checkLinks,
 ];

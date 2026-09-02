@@ -58,10 +58,13 @@ grove clone creates a managed repository. grove add creates a branch worktree an
 - **Start a branch without losing your current one.** grove add feat/search creates a real worktree in a predictable path.
 - **Branch after you already started typing.** grove add feat/search --take moves your uncommitted changes into the new worktree and leaves the old one clean.
 - **Stack one change on another.** grove add feat/step-2 --on feat/step-1 remembers the base, and sync rebases through it.
-- **Review a pull request in a real checkout.** grove pr 42 takes a number, a URL, or a branch name.
+- **Review a pull request in a real checkout.** grove pr 42 takes a number, a URL, or a branch name. Push from there, or sync, and the pull request updates.
+- **Contribute from a fork.** grove clone --upstream keeps your trunk following the original and sends your branches to your fork. Nothing to configure afterwards.
+- **Rebase onto a base you pick.** grove rebase lists the candidates, carries your uncommitted changes through, and undoes everything if it conflicts.
 - **Give every coding agent its own workspace.** agents/refactor, agents/tests, agents/ui-copy — no second clone.
 - **Stop rebuilding the same local setup.** .grove.toml copies .env, links dependency folders, sets the environment, runs the install, opens your editor.
 - **See the whole repository at once.** grove shows branches, dirty worktrees, sync drift, and recent activity.
+- **Clear away what is finished.** grove prune removes the worktrees whose branch is gone or already merged, and can ask GitHub about pull requests closed without merging.
 
 ## Why Not Just git worktree?
 
@@ -95,8 +98,8 @@ run = ["docker compose down"]
 
 Every new worktree is then filled in from it:
 
-- **copy** brings files or directories from the default branch's worktree. The trunk's copy wins.
-- **link** symlinks shared paths like dependency folders, and leaves what the worktree already has.
+- **copy** brings files or directories from the default branch's worktree. The trunk's copy wins. A pattern like packages/*/.env covers a package added next week.
+- **link** symlinks shared paths like dependency folders, and leaves what the worktree already has. Patterns work here too.
 - **env** reaches the setup commands.
 - **run** runs shell commands in the new worktree, in order.
 - **open** starts your editor.

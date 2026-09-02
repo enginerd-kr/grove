@@ -19,6 +19,7 @@ This guide covers the screen first, then the commands.
 - [Keys](#keys)
 - [Layout on disk](#layout-on-disk)
 - [Worktree setup: .grove.toml](#worktree-setup-grovetoml)
+- [Remotes and forks](#remotes-and-forks)
 - [CLI reference](#cli-reference)
 - [Scripting and agents](#scripting-and-agents)
 - [Troubleshooting](#troubleshooting)
@@ -50,7 +51,7 @@ the worktree you ran `grove` from. `▸` is the cursor.
 
 | column | meaning |
 | --- | --- |
-| origin | commits ahead / behind the branch's remote |
+| remote | commits ahead / behind the branch's upstream |
 | main | commits ahead / behind the trunk |
 | state | `●` has uncommitted changes, `○` clean, then the age of the last commit |
 
@@ -86,7 +87,8 @@ and keeps the branch. On a folder row, `r` removes every worktree in it.
 names them, and the branches stay.
 
 **Review a pull request.** `/review`, pick one, `enter`. It checks out as
-`pr/<number>`. Pushing from there updates the PR. Requires `gh`.
+`pr/<number>`. `git push` from there updates the PR, and so does `s`.
+Requires `gh`.
 
 Every destructive action asks first. `y` confirms. Any other key cancels.
 
@@ -120,6 +122,7 @@ Every destructive action asks first. `y` confirms. Any other key cancels.
 | `/sync-all` | sync every worktree |
 | `/prune` | remove the worktrees badged `merged` or `gone` |
 | `/review` | check out an open pull request |
+| `/upstream` | this is a fork: follow another repository's trunk |
 | `/refresh` | re-read worktrees now |
 | `/log` | toggle the commit panel |
 
@@ -172,6 +175,11 @@ Rules:
 
 - Paths must stay inside the worktree. Absolute paths, `..`, `.git`, and
   `.bare` reject the whole file.
+- A `copy` or `link` path can be a pattern: `packages/*/.env`,
+  `**/.env.local`, `apps/{web,api}/node_modules`. It is matched against the
+  trunk's worktree when setup runs, so a package added later is covered. The
+  report names each match; a pattern that matches nothing is reported as
+  missing under its own spelling.
 - Unknown keys are errors. `cpoy = [".env"]` fails instead of doing nothing.
 - List keys accept a bare string: `copy = ".env"`.
 
@@ -232,12 +240,53 @@ command.
 `run`, `teardown`, and `exec` commands receive `GROVE_ROOT`, `GROVE_WORKTREE`,
 and `GROVE_BRANCH`.
 
+## Remotes and forks
+
+grove never asks which remote to use. It reads what git already knows, so a
+repository that works with `git push` and `git pull` works with grove the
+same way.
+
+**The trunk** is the branch `origin/HEAD` names, usually `main`. Which copy
+of it counts is whatever the local `main` tracks: `origin/main` in a plain
+clone, and `upstream/main` once you have said so. Everything is measured
+against that copy: the `main` column, the `merged` badge, the base `a` cuts
+a branch from, and what `s` rebases onto.
+
+**A branch is pushed** where `git push` would send it: the branch's own
+`pushRemote`, else `remote.pushDefault`, else the remote it tracks, else
+`origin`. `--push`, `--publish`, and every push `s` makes follow this.
+`grove add` looks for an existing branch on that same remote.
+
+So a fork is one line:
+
+```bash
+grove clone git@github.com:you/repo.git --upstream git@github.com:them/repo.git
+```
+
+or, in a repository you already have, `/upstream` on the screen or
+`grove upstream <url>`. Either one writes three git settings and nothing of
+grove's: a remote called `upstream`, `git branch -u upstream/main main`, and
+`remote.pushDefault = origin`. `git pull` and `git push` read the same
+three. The same URL again changes nothing; a different one is refused
+unless `--force` says to replace it, and the screen asks.
+
+Nothing is detected. Which repository a fork came from is a fact only the
+forge holds, so the URL is typed once by somebody who knows it.
+
+From then on `a` cuts from `upstream/main`, `s` rebases onto it and pushes
+to your fork, and `merged` means merged into theirs. `grove pr` fetches the
+pull request from the trunk's remote, and a `pr/<n>` worktree always pushes
+back to the pull request, whatever `pushDefault` says. `doctor` reports an
+`upstream` remote the trunk does not follow yet, and a trunk that tracks a
+remote nothing has been fetched from.
+
 ## CLI reference
 
 Every command has `--help`, generated from the parser's own table.
 
 ```bash
 grove clone <url> [-b <branch>]   # first-run screen; `init` is an alias
+grove upstream <url>              # /upstream
 grove add <branch>                # a
 grove list                        # the rows, as text
 grove path [target]               # enter; no target prints the root
@@ -293,8 +342,9 @@ unless `--no-abort`. `--no-push` keeps the result local.
 
 A branch on no remote yet (`grove add` without `--push`) is rebased and then
 reported with exit code 4: nothing was pushed, and nothing was refused.
-`--publish` pushes it to origin and tracks it. `--no-push` says it is meant
-to stay local, and reports nothing.
+`--publish` pushes it where `git push` would and tracks it. `--no-push` says
+it is meant to stay local, and reports nothing. See
+[Remotes and forks](#remotes-and-forks) for which remote that is.
 
 The screen confirms before a force-push and before a first push. The CLI does
 neither.
@@ -333,6 +383,14 @@ skips `[teardown]`.
 (`--gone`) or merged into the trunk (`--merged`). No flag means both. `-n`
 prints what would go. Dirty, mid-rebase, locked, or current worktrees are
 skipped and reported.
+
+`--closed` adds the one case only the forge can see: a pull request closed
+without being merged, its branch still on the remote and none of its commits
+on the trunk. It asks `gh` about every worktree the other two answers left
+alone, one question each, and counts a pull request only when its head is the
+commit the worktree is at, so a reused branch name does not match an old
+pull request. Needs `gh`; exits `10` without it, before anything is removed.
+`/prune` on the screen never asks the forge.
 
 ### reset
 
@@ -374,13 +432,56 @@ grove exec -- sh -c 'echo $GROVE_BRANCH'
 | 11 | `exec` failed in at least one worktree |
 | 130 | Ctrl-C |
 
-A typical agent loop:
+### What `--json` says
+
+Every command's document is its result object, and only the fields below need
+reading in a script. The exit code is the verdict: non-zero is failure, and
+success is never to be inferred from what was printed on stderr.
+
+| command | fields worth reading |
+| --- | --- |
+| `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `setup` |
+| `add`'s `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
+| `list` | one row per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished` |
+| `sync` | exit `4` with nothing pushed means the branch is on no remote yet |
+| `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when it stays |
+
+`setup.untrusted: true` means `.grove.toml`'s commands were printed and not
+run, because nobody on this machine has approved that version of the file.
+`setup.failed` is set when a command exited non-zero; the worktree exists
+either way, and `add` exits `9`.
+
+### Trust is a person's decision
+
+The gate exists so that a human reads `.grove.toml`'s commands before they
+run. An agent passing `--trust` is exactly what it guards against. Approve
+the file once, as yourself: `y` when the screen asks, or `grove setup --trust`
+in a terminal. The approval is stored in the repository, so every later
+`grove add` on this machine runs the commands without being asked, from an
+agent or not.
+
+A typical agent loop, once the file has been approved:
 
 ```bash
-grove add agents/<task> --trust --json   # create; read the path from stdout
+grove add agents/<task> --json           # create; read `path` from stdout
 # ... work in the worktree ...
 grove sync agents/<task> --publish        # first push too; exit 4 without it
 grove remove agents/<task> --delete-branch
+```
+
+A policy for an `AGENTS.md` or `CLAUDE.md`, ready to paste:
+
+```markdown
+## Worktrees
+
+- Inspect with `grove list --json`. Never guess a path from a branch name.
+- For a task, create a worktree with `grove add agents/<task> --json` and
+  work only in the `path` it returns.
+- A non-zero exit is a failure. Do not read success out of the log.
+- If the result says `setup.untrusted`, report it. Never pass `--trust`;
+  approving the setup file is the user's decision.
+- Do not run `grove remove`, `grove prune`, `--delete-branch`, `--force`, or
+  `grove reset` unless the user asked for that cleanup.
 ```
 
 ## Troubleshooting
@@ -390,9 +491,18 @@ grove doctor
 ```
 
 Reports problems and the command that fixes each. Writes nothing. Checks for:
-a bare clone with no fetch refspec, worktrees git lists that are missing on
-disk, leftover directories, a root `.git` pointing at the wrong place, and
-broken symlinks. Exits `6` on a problem, `0` on warnings only.
+a bare clone with no fetch refspec, a trunk tracking a remote nothing has
+been fetched from, an `upstream` remote the trunk does not follow, worktrees
+git lists that are missing on disk, leftover directories, a root `.git`
+pointing at the wrong place, and broken symlinks. Exits `6` on a problem,
+`0` on warnings only.
+
+One of the missing-on-disk cases hides from git itself: a worktree that was
+locked and then deleted. A coding agent locks the worktree it works in, its
+session dies, the directory is cleaned up, and the entry stays because
+`git worktree prune` skips locked entries by design. The branch then reads as
+checked out at a path that does not exist, and `grove add` of it fails.
+`doctor` names the entry and prints the unlock to run before the prune.
 
 Not bugs:
 

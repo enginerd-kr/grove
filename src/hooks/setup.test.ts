@@ -80,6 +80,51 @@ describe("runSetup", () => {
     });
   });
 
+  test("a pattern takes every path it matches in the trunk, and says which", async () => {
+    await withRepo(async (fixture) => {
+      for (const name of ["api", "web"]) {
+        await mkdir(join(fixture.trunk, "packages", name, "node_modules"), { recursive: true });
+        await Bun.write(join(fixture.trunk, "packages", name, ".env"), `${name}\n`);
+      }
+      await Bun.write(join(fixture.trunk, ".env"), "root\n");
+      await fixture.configure(
+        '[setup]\ncopy = ["**/.env", "packages/*/missing.env"]\nlink = ["packages/*/node_modules"]\n',
+      );
+
+      const result = await setUp(fixture);
+
+      // The matches, not the pattern: the report is about what landed, and
+      // sorted so it reads the same on every filesystem.
+      expect(result.copied).toEqual([".env", "packages/api/.env", "packages/web/.env"]);
+      expect(result.linked).toEqual(["packages/api/node_modules", "packages/web/node_modules"]);
+      // A pattern that matched nothing is missing under its own spelling.
+      expect(result.missing).toEqual(["packages/*/missing.env"]);
+      expect(await Bun.file(join(fixture.worktree, "packages", "web", ".env")).text()).toBe(
+        "web\n",
+      );
+      expect(
+        (await lstat(join(fixture.worktree, "packages", "api", "node_modules"))).isSymbolicLink(),
+      ).toBe(true);
+      expect(describeSetup(result)).toBe("3 copied, 2 linked");
+    });
+  });
+
+  test("a pattern never reaches into the repository itself", async () => {
+    await withRepo(async (fixture) => {
+      // The trunk of a managed repository holds a `.git` file, and `**` with
+      // `dot` on would otherwise match it — and in a plain clone, the whole
+      // repository under it.
+      await Bun.write(join(fixture.trunk, "keep.txt"), "kept\n");
+      await fixture.configure('[setup]\ncopy = ["**/*"]\n');
+
+      const result = await setUp(fixture);
+
+      expect(result.copied).toContain("keep.txt");
+      expect(result.copied.some((path) => path.split("/").includes(".git"))).toBe(false);
+      expect(result.overwritten.some((path) => path.split("/").includes(".git"))).toBe(false);
+    });
+  });
+
   test("links to the trunk's copy rather than duplicating it", async () => {
     await withRepo(async (fixture) => {
       await Bun.write(join(fixture.trunk, "node_modules", "left-pad", "index.js"), "//\n");

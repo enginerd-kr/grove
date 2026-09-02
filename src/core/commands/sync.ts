@@ -1,11 +1,11 @@
 import type { Reporter } from "../../report/reporter.ts";
 import {
-  defaultBranch,
   enableReflogs,
   fetchRemotes,
   localBranchExists,
-  REMOTE,
-  remoteRef,
+  publishRemote,
+  type Trunk,
+  trunkOf,
 } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
@@ -52,7 +52,8 @@ export type SyncOptions = {
    */
   readonly push: boolean;
   /**
-   * Put a branch that is on no remote yet onto `origin`, and track it.
+   * Put a branch that is on no remote yet where `git push` would put it, and
+   * track it.
    *
    * Off by default, and reported rather than done: `grove add` without
    * `--push` makes a branch nobody has published, and the first push is the
@@ -141,7 +142,7 @@ export async function syncWorktrees(
     );
   }
 
-  const trunk = await defaultBranch(repo.gitDir);
+  const trunk = await trunkOf(repo.gitDir);
   const outcomes: SyncOutcome[] = [];
 
   for (const target of targets) {
@@ -182,11 +183,11 @@ type Base = { readonly onto: string; readonly reparented?: string };
 async function baseFor(
   repo: RepoPaths,
   branch: string | undefined,
-  trunk: string,
+  trunk: Trunk,
   stack: Stack,
   reporter: Reporter,
 ): Promise<Base> {
-  const onto = remoteRef(trunk);
+  const onto = trunk.ref;
   if (branch === undefined) return { onto };
 
   const chain = ancestry(stack, branch);
@@ -197,7 +198,11 @@ async function baseFor(
     // the remote — somebody who wrote `--on main` said the ordinary thing in the
     // explicit way, and it must not read as a parent that has gone.
     const reached =
-      parent === trunk ? onto : (await localBranchExists(repo.gitDir, parent)) ? parent : undefined;
+      parent === trunk.branch
+        ? onto
+        : (await localBranchExists(repo.gitDir, parent))
+          ? parent
+          : undefined;
     if (reached === undefined) continue;
 
     // The nearest one is still there, so nothing was repaired and nothing is
@@ -212,9 +217,9 @@ async function baseFor(
   }
 
   await clearParent(repo.gitDir, branch);
-  reporter.info(`${branch} now sits on ${trunk} — ${chain[0]} has gone`);
+  reporter.info(`${branch} now sits on ${trunk.branch} — ${chain[0]} has gone`);
 
-  return { onto, reparented: trunk };
+  return { onto, reparented: trunk.branch };
 }
 
 /**
@@ -286,7 +291,7 @@ function withAncestors(
 async function syncOne(
   record: WorktreeRecord,
   root: string,
-  trunk: string,
+  trunk: Trunk,
   base: Base,
   options: SyncOptions,
   reporter: Reporter,
@@ -390,7 +395,7 @@ async function syncOne(
    * and if the remote is protected the refusal arrives as a warning while the
    * local rebase stands, the same way a contended feature branch is reported.
    */
-  if (record.branch === trunk) {
+  if (record.branch === trunk.branch) {
     const ff = await runGit(["merge", "--ff-only", onto], { cwd: record.path });
     if (ff.code === 0) return stamp(await settle(record, name, before, step, "fast-forwarded"));
 
@@ -474,27 +479,30 @@ async function publish(
    * nothing on the remote to lease against, and the upstream it sets is what
    * lets the next sync take the ordinary path above.
    */
+  const branch = record.branch ?? "HEAD";
+
   if (upstream === undefined) {
     if (!options.publish) return { unpublished: true };
 
+    const remote = await publishRemote(record.path, branch);
     const step = reporter.step(`publishing ${name}`);
-    const result = await runGit(["push", "-u", REMOTE, record.branch ?? "HEAD"], {
-      cwd: record.path,
-    });
+    const result = await runGit(["push", "-u", remote, branch], { cwd: record.path });
     if (result.code !== 0) {
       step.fail(`${name} was not published`);
 
-      return { pushed: false, pushRefusal: `${REMOTE} refused it: ${stderrTail(result.stderr)}` };
+      return { pushed: false, pushRefusal: `${remote} refused it: ${stderrTail(result.stderr)}` };
     }
-    step.succeed(`published ${name} to ${remoteRef(record.branch ?? "HEAD")}`);
+    step.succeed(`published ${name} to ${remote}/${branch}`);
 
     return { pushed: true };
   }
 
+  const target = await pushTarget(record.path, branch, upstream);
+
   // Nothing to say if the remote already has exactly this.
   const [local, remote] = await Promise.all([
     runGit(["rev-parse", "HEAD"], { cwd: record.path }),
-    runGit(["rev-parse", upstream], { cwd: record.path }),
+    runGit(["rev-parse", target.tracking], { cwd: record.path }),
   ]);
   if (local.code === 0 && remote.code === 0 && local.stdout.trim() === remote.stdout.trim()) {
     return {};
@@ -504,9 +512,9 @@ async function publish(
   const result = await runGit(
     [
       "push",
-      ...(force ? ["--force-with-lease", "--force-if-includes"] : []),
-      REMOTE,
-      record.branch ?? "HEAD",
+      ...(force ? forceArgs(target, remote.code === 0 ? remote.stdout.trim() : undefined) : []),
+      target.remote,
+      target.refspec,
     ],
     { cwd: record.path },
   );
@@ -517,12 +525,100 @@ async function publish(
     // Said once, here, and carried on the outcome: `failureFor` prints it under
     // the error, so warning about it as well would put the same refusal on
     // stderr twice.
-    return { pushed: false, pushRefusal: `${upstream} refused it: ${stderrTail(result.stderr)}` };
+    return {
+      pushed: false,
+      pushRefusal: `${target.tracking} refused it: ${stderrTail(result.stderr)}`,
+    };
   }
 
-  step.succeed(`pushed ${name}`);
+  step.succeed(`pushed ${name} to ${target.tracking}`);
 
   return { pushed: true };
+}
+
+/** Where a push goes, spelled out: the remote, the refspec, and the ref that mirrors it here. */
+type PushTarget = {
+  readonly remote: string;
+  /** `<branch>:<ref on the remote>`, always explicit — see `pushTarget`. */
+  readonly refspec: string;
+  /** The remote-tracking ref the push updates, for the lease and for "already there". */
+  readonly tracking: string;
+  /**
+   * The destination's full name on the remote, when it is not the branch's
+   * own — `refs/heads/feat-x` for `pr/42`. Set only then, because it is
+   * only then that the lease has to be spelled out; see `forceArgs`.
+   */
+  readonly renamed?: string;
+};
+
+/**
+ * The force spelling for a rewritten branch, and the one case it has to
+ * change shape.
+ *
+ * `--force-with-lease --force-if-includes` is the pair everywhere the branch
+ * lands on the remote under its own name: the lease refuses if the remote
+ * moved since the last fetch, and if-includes refuses if it moved *before*
+ * that fetch and the rebase never took the new commits in. The second check
+ * is done by walking the reflog of the local branch the destination is named
+ * after — and git finds that branch by the destination's name. So for
+ * `pr/42` going to `fix/crash` it reads the reflog of a `fix/crash` that
+ * does not exist here, and refuses every push with "remote ref updated
+ * since checkout". Confirmed against git 2.54: the same push passes the
+ * moment the local branch is renamed to match.
+ *
+ * What if-includes was standing in for is known here exactly. `syncOne`
+ * rebased onto the upstream a moment ago, so the upstream's tip as it is
+ * now is by construction integrated — and a lease spelled with that sha is
+ * the same promise with no reflog to consult: the remote must still be
+ * where the rebase took it from. Where the tracking ref cannot be read the
+ * lease has nothing to lean on and falls back to the bare form.
+ */
+function forceArgs(target: PushTarget, integrated: string | undefined): readonly string[] {
+  if (target.renamed === undefined) return ["--force-with-lease", "--force-if-includes"];
+  if (integrated === undefined) return ["--force-with-lease"];
+
+  return [`--force-with-lease=${target.renamed}:${integrated}`];
+}
+
+/**
+ * What `git push` would do from this worktree, worked out rather than assumed.
+ *
+ * The remote is `publishRemote`'s answer. The refspec is the part that used to
+ * be wrong: the push was `origin <branch>`, which for `pr/42` — a branch whose
+ * upstream is `pr-42/feat-x`, on the fork the pull request came from — made a
+ * new `pr/42` on origin and left the pull request exactly as it was. The same
+ * `git push` with nothing after it did the right thing all along, because
+ * `remote.pr-42.push` says where `pr/42` goes; an explicit refspec on the
+ * command line is what stops git consulting it.
+ *
+ * So the refspec is explicit *and* right. Pushing to the remote the branch
+ * tracks, the destination is the branch it tracks there, by the name it has
+ * there — `feat-x`, not `pr/42`. Pushing anywhere else — a `pushRemote` or a
+ * `pushDefault` that differs from the upstream's remote, git's triangular
+ * workflow — the destination is the branch's own name, which is what git's
+ * `push.default=simple` does in exactly that arrangement.
+ */
+async function pushTarget(path: string, branch: string, upstream: string): Promise<PushTarget> {
+  const remote = await publishRemote(path, branch);
+  const [tracks, merge] = await Promise.all([
+    runGit(["config", "--get", `branch.${branch}.remote`], { cwd: path }),
+    runGit(["config", "--get", `branch.${branch}.merge`], { cwd: path }),
+  ]);
+  const upstreamRemote = tracks.code === 0 ? tracks.stdout.trim() : "";
+  const mergeRef = merge.code === 0 ? merge.stdout.trim() : "";
+
+  if (remote === upstreamRemote && mergeRef.length > 0) {
+    const sameName = mergeRef === `refs/heads/${branch}`;
+
+    return {
+      remote,
+      refspec: `${branch}:${mergeRef}`,
+      tracking: upstream,
+      ...(sameName ? {} : { renamed: mergeRef }),
+    };
+  }
+
+  return { remote, refspec: `${branch}:refs/heads/${branch}`, tracking: `${remote}/${branch}` };
 }
 
 /**

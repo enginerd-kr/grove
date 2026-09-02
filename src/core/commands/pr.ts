@@ -1,6 +1,6 @@
 import type { SetupResult } from "../../hooks/index.ts";
 import { type Reporter, withStep } from "../../report/reporter.ts";
-import { localBranchExists, REMOTE } from "../branches.ts";
+import { localBranchExists, REMOTE, trunkOf } from "../branches.ts";
 import { GroveError, stderrDetails } from "../errors.ts";
 import { gitOutput, runGit, runGitOrThrow, runTool } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
@@ -155,7 +155,7 @@ function ghLabel(argv: readonly string[]): string {
  * The one place a `gh` failure becomes a `GroveError`.
  *
  * `gh` missing is its own answer rather than a crash: everything else in grove
- * works without it, so this is the one feature that gets to say "install gh"
+ * works without it, so the two features that need it get to say "install gh"
  * and point at where. Anything else is gh's own stderr, which is the useful
  * half — "no pull requests found", "not a GitHub repository".
  */
@@ -163,8 +163,8 @@ async function runGh(argv: readonly string[], cwd: string): Promise<string> {
   const result = await runTool(["gh", ...argv] as [string, ...string[]], { cwd });
 
   if (result === null) {
-    throw new GroveError("gh", "reviewing a pull request needs `gh`, which is not installed", {
-      hint: "https://cli.github.com — nothing else in grove uses it",
+    throw new GroveError("gh", "this needs `gh`, which is not installed", {
+      hint: "https://cli.github.com — only `grove pr` and `grove prune --closed` use it",
     });
   }
 
@@ -240,6 +240,75 @@ export async function listPullRequests(
       updatedAt: Number.isNaN(updatedAt) ? 0 : updatedAt,
     };
   });
+}
+
+/** A branch and the commit it is at — what a closed pull request is matched against. */
+export type ForgeCandidate = {
+  readonly branch: string;
+  /** The branch's tip, in full. */
+  readonly head: string;
+};
+
+/** The fields a closed-or-not question needs, and nothing a list would pay for. */
+const STATE_FIELDS = ["number", "state", "headRefOid"].join(",");
+
+/**
+ * Whether the forge holds a pull request for this branch, closed without being
+ * merged, at exactly this commit.
+ *
+ * Both halves of "closed without merging" are gh's own: `--state closed` lists
+ * the merged ones too, and `MERGED` is what their `state` says, so only a row
+ * still reading `CLOSED` is the case `prune` has no local answer for. The
+ * commit is the guard: branch names get reused, and a `fix/crash` whose pull
+ * request was declined in March is not the same `fix/crash` somebody cut this
+ * morning — the head sha is what says which of the two the forge is talking
+ * about.
+ *
+ * A `pr/<n>` branch is asked about by its number rather than by name, since
+ * the name is ours and the forge has never heard it.
+ */
+async function closedAt(repo: RepoPaths, candidate: ForgeCandidate): Promise<number | undefined> {
+  const number = prNumberOf(candidate.branch);
+  const argv =
+    number === undefined
+      ? ["pr", "list", "--head", candidate.branch, "--state", "closed", "--json", STATE_FIELDS]
+      : ["pr", "view", String(number), "--json", STATE_FIELDS];
+
+  const parsed: unknown = await ghJson(argv, repo.root);
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+
+  for (const entry of rows) {
+    const row = record(entry);
+    if (text(row.state) !== "CLOSED" || text(row.headRefOid) !== candidate.head) continue;
+    if (typeof row.number === "number") return row.number;
+  }
+
+  return undefined;
+}
+
+/**
+ * The branches among `candidates` whose pull request was closed without
+ * merging, each with the pull request's number.
+ *
+ * One question per branch rather than one list for all of them: `gh pr list
+ * --head` is exact, and a repository's closed pull requests are the one list
+ * that only ever grows, so a single page of them would miss precisely the
+ * oldest worktrees — the ones most worth clearing away. The questions are
+ * asked together; they are independent, and each is a process and a round trip.
+ */
+export async function closedOnForge(
+  repo: RepoPaths,
+  candidates: readonly ForgeCandidate[],
+): Promise<ReadonlyMap<string, number>> {
+  const answers = await Promise.all(candidates.map((candidate) => closedAt(repo, candidate)));
+  const closed = new Map<string, number>();
+
+  for (const [index, candidate] of candidates.entries()) {
+    const number = answers[index];
+    if (number !== undefined) closed.set(candidate.branch, number);
+  }
+
+  return closed;
 }
 
 async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
@@ -402,7 +471,11 @@ async function fetchHead(repo: RepoPaths, detail: PrDetail, reporter: Reporter):
   }
 
   await runGit(["remote", "remove", remote], { cwd: repo.gitDir });
-  await runGitOrThrow(["fetch", REMOTE, `refs/pull/${detail.number}/head`], { cwd: repo.gitDir });
+  // `refs/pull/<n>/head` lives on the repository the pull request was opened
+  // against, which is the trunk's remote — in a fork that is `upstream`, and
+  // origin's `refs/pull/42/head` is a different pull request or none.
+  const base = (await trunkOf(repo.gitDir)).remote;
+  await runGitOrThrow(["fetch", base, `refs/pull/${detail.number}/head`], { cwd: repo.gitDir });
   const sha = await gitOutput(["rev-parse", "FETCH_HEAD"], { cwd: repo.gitDir });
   step.succeed(`fetched pull request ${detail.number}`);
 
@@ -545,6 +618,13 @@ export async function checkoutPullRequest(
       ["branch", `--set-upstream-to=${head.remote}/${detail.headRefName}`, branch],
       { cwd: repo.gitDir },
     );
+    // Pinned per branch, so a `remote.pushDefault` set for the fork workflow —
+    // "everything I push goes to my fork" — does not catch this one: a pull
+    // request's branch goes back to the pull request, whatever else is true
+    // of the repository. `publishRemote` reads this before anything else.
+    await runGitOrThrow(["config", `branch.${branch}.pushRemote`, head.remote], {
+      cwd: repo.gitDir,
+    });
   }
   await runGitOrThrow(
     ["config", "--replace-all", `branch.${branch}.description`, `${detail.title}\n\n${detail.url}`],

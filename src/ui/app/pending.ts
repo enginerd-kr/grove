@@ -38,6 +38,14 @@ export type Pending =
   /** `/prune`: every finished worktree, as the dry run described them. */
   | { readonly kind: "prune"; readonly result: PruneResult }
   /**
+   * `/upstream`, where an `upstream` remote is already here and points
+   * somewhere else. Typing the URL was the consent for everything else this
+   * command does; replacing a remote somebody chose is the one part it asks
+   * about, because that is the part that undoes a decision rather than
+   * making one.
+   */
+  | { readonly kind: "upstream"; readonly url: string; readonly existing: string }
+  /**
    * `/open`, where the line that would open it is one nobody here has read.
    *
    * The one question here that grants something instead of taking it away, and
@@ -177,10 +185,10 @@ export function describePending(target: Pending): {
   // branch stops being only yours, and the name on the far end is the part
   // worth reading before answering.
   if (target.kind === "publish") {
-    const { dir, branch } = target.summary;
+    const { dir, branch, publishRemote } = target.summary;
 
     return {
-      text: `sync ${dir}? it is on no remote yet, so this pushes it to origin/${branch}`,
+      text: `sync ${dir}? it is on no remote yet, so this pushes it to ${publishRemote}/${branch}`,
       colour: theme.warn,
     };
   }
@@ -190,6 +198,16 @@ export function describePending(target: Pending): {
 
     return {
       text: `sync every worktree? ${branches} force-pushed`,
+      colour: theme.warn,
+    };
+  }
+
+  // The two URLs, whole: which remote is being replaced is the entire
+  // question, and a prompt that abbreviated either would be asking somebody
+  // to agree to something it had not shown them.
+  if (target.kind === "upstream") {
+    return {
+      text: `replace upstream? it points at ${target.existing}, and would point at ${target.url}`,
       colour: theme.warn,
     };
   }
@@ -280,6 +298,11 @@ export function commitPending(
       label: `syncing ${target.summary.dir}`,
       run: () => service.sync(target.summary.path, { publish: true }),
     };
+  }
+
+  // `y` is `--force`: the question named the remote being replaced.
+  if (target.kind === "upstream") {
+    return { label: `following ${target.url}`, run: () => service.upstream(target.url, true) };
   }
 
   // `y` here records having read the line that was on the row, which is what
