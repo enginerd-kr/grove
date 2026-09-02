@@ -172,6 +172,11 @@ Rules:
 
 - Paths must stay inside the worktree. Absolute paths, `..`, `.git`, and
   `.bare` reject the whole file.
+- A `copy` or `link` path can be a pattern: `packages/*/.env`,
+  `**/.env.local`, `apps/{web,api}/node_modules`. It is matched against the
+  trunk's worktree when setup runs, so a package added later is covered. The
+  report names each match; a pattern that matches nothing is reported as
+  missing under its own spelling.
 - Unknown keys are errors. `cpoy = [".env"]` fails instead of doing nothing.
 - List keys accept a bare string: `copy = ".env"`.
 
@@ -334,6 +339,14 @@ skips `[teardown]`.
 prints what would go. Dirty, mid-rebase, locked, or current worktrees are
 skipped and reported.
 
+`--closed` adds the one case only the forge can see: a pull request closed
+without being merged, its branch still on the remote and none of its commits
+on the trunk. It asks `gh` about every worktree the other two answers left
+alone, one question each, and counts a pull request only when its head is the
+commit the worktree is at, so a reused branch name does not match an old
+pull request. Needs `gh`; exits `10` without it, before anything is removed.
+`/prune` on the screen never asks the forge.
+
 ### reset
 
 `git reset --hard`. `--clean` also deletes untracked files. `--to <ref>` resets
@@ -374,13 +387,56 @@ grove exec -- sh -c 'echo $GROVE_BRANCH'
 | 11 | `exec` failed in at least one worktree |
 | 130 | Ctrl-C |
 
-A typical agent loop:
+### What `--json` says
+
+Every command's document is its result object, and only the fields below need
+reading in a script. The exit code is the verdict: non-zero is failure, and
+success is never to be inferred from what was printed on stderr.
+
+| command | fields worth reading |
+| --- | --- |
+| `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `setup` |
+| `add`'s `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
+| `list` | one row per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished` |
+| `sync` | exit `4` with nothing pushed means the branch is on no remote yet |
+| `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when it stays |
+
+`setup.untrusted: true` means `.grove.toml`'s commands were printed and not
+run, because nobody on this machine has approved that version of the file.
+`setup.failed` is set when a command exited non-zero; the worktree exists
+either way, and `add` exits `9`.
+
+### Trust is a person's decision
+
+The gate exists so that a human reads `.grove.toml`'s commands before they
+run. An agent passing `--trust` is exactly what it guards against. Approve
+the file once, as yourself: `y` when the screen asks, or `grove setup --trust`
+in a terminal. The approval is stored in the repository, so every later
+`grove add` on this machine runs the commands without being asked, from an
+agent or not.
+
+A typical agent loop, once the file has been approved:
 
 ```bash
-grove add agents/<task> --trust --json   # create; read the path from stdout
+grove add agents/<task> --json           # create; read `path` from stdout
 # ... work in the worktree ...
 grove sync agents/<task> --publish        # first push too; exit 4 without it
 grove remove agents/<task> --delete-branch
+```
+
+A policy for an `AGENTS.md` or `CLAUDE.md`, ready to paste:
+
+```markdown
+## Worktrees
+
+- Inspect with `grove list --json`. Never guess a path from a branch name.
+- For a task, create a worktree with `grove add agents/<task> --json` and
+  work only in the `path` it returns.
+- A non-zero exit is a failure. Do not read success out of the log.
+- If the result says `setup.untrusted`, report it. Never pass `--trust`;
+  approving the setup file is the user's decision.
+- Do not run `grove remove`, `grove prune`, `--delete-branch`, `--force`, or
+  `grove reset` unless the user asked for that cleanup.
 ```
 
 ## Troubleshooting
@@ -393,6 +449,13 @@ Reports problems and the command that fixes each. Writes nothing. Checks for:
 a bare clone with no fetch refspec, worktrees git lists that are missing on
 disk, leftover directories, a root `.git` pointing at the wrong place, and
 broken symlinks. Exits `6` on a problem, `0` on warnings only.
+
+One of the missing-on-disk cases hides from git itself: a worktree that was
+locked and then deleted. A coding agent locks the worktree it works in, its
+session dies, the directory is cleaned up, and the entry stays because
+`git worktree prune` skips locked entries by design. The branch then reads as
+checked out at a path that does not exist, and `grove add` of it fails.
+`doctor` names the entry and prints the unlock to run before the prune.
 
 Not bugs:
 
