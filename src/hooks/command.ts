@@ -3,7 +3,15 @@ import { runShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import { plural, toLines } from "../core/text.ts";
 import type { Reporter } from "../report/reporter.ts";
-import { governingFiles, type HookEnv, type Hooks, openGatedHere, openHere } from "./config.ts";
+import {
+  governingFiles,
+  type HookCommand,
+  type HookEnv,
+  type Hooks,
+  namesSources,
+  openGatedHere,
+  openHere,
+} from "./config.ts";
 import { repoHooks } from "./source.ts";
 import { awaitingTrust } from "./trust.ts";
 
@@ -48,7 +56,8 @@ export async function pendingCommands(
   // the same shell on the same line; that grove stops watching it afterwards
   // makes it more worth listing rather than less.
   const opening = openHere(hooks);
-  const waiting = opening === "" ? hooks.commands : [...hooks.commands, opening];
+  const lines = hooks.commands.map((command) => command.line);
+  const waiting = opening === "" ? lines : [...lines, opening];
   // Nothing gated is nothing to ask about, whatever else the file asks for: a
   // `.grove.local.toml` you wrote is not a thing to be shown and asked to agree
   // to. Those commands run, and this returns the empty answer that says so.
@@ -158,7 +167,7 @@ export async function runCommands(
   target: HookTarget,
   /** The whole file, for the fingerprint that trust is keyed on and the path to name. */
   hooks: Hooks,
-  section: { readonly commands: readonly string[]; readonly env: readonly HookEnv[] },
+  section: { readonly commands: readonly HookCommand[]; readonly env: readonly HookEnv[] },
   /** How the refusal reads: `2 teardown commands in … — the worktree still goes`. */
   warning: { readonly noun: string; readonly tail: string },
   reporter: Reporter,
@@ -202,24 +211,36 @@ export async function runCommands(
 
   const commandEnv = commandEnvFor(repo, target, env);
 
+  // Which file the line was written in, said out loud only where there is more
+  // than one it could have been — see `namesSources`. It goes on the step and
+  // not on a line of its own, because the thing it explains is the command, and
+  // a header would be a fact you have to carry down the list to use.
+  const named = namesSources(hooks);
+  const say = (command: HookCommand) =>
+    named ? `${command.line} (${command.from})` : command.line;
+
   const ran: string[] = [];
   let failed: HookFailure | undefined;
 
   for (const command of commands) {
-    const step = reporter.step(`running ${command}`);
-    const result = await runShell(command, { cwd: target.path, env: commandEnv });
+    const step = reporter.step(`running ${say(command)}`);
+    const result = await runShell(command.line, { cwd: target.path, env: commandEnv });
 
     if (result.code !== 0) {
-      step.fail(`${command} exited ${result.code}`);
+      step.fail(`${say(command)} exited ${result.code}`);
       // The rest do not run. They were written as a sequence — an install and
       // then a build over what it installed — so carrying on past a failure
       // would be running the second half against the first half's absence.
-      failed = { command, code: result.code, details: tail(result.stderr, result.stdout) };
+      failed = {
+        command: command.line,
+        code: result.code,
+        details: tail(result.stderr, result.stdout),
+      };
       break;
     }
 
-    step.succeed(`ran ${command}`);
-    ran.push(command);
+    step.succeed(`ran ${say(command)}`);
+    ran.push(command.line);
   }
 
   return { ran, failed, untrusted };
