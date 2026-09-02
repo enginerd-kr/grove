@@ -72,7 +72,7 @@ describe("a repository with nothing wrong", () => {
       expect(diagnosis.gitDir).toBe(join(root, ".bare"));
       expect(diagnosis.kind).toBe("managed");
       // A clean report says how much it is claiming.
-      expect(diagnosis.checked).toBe(7);
+      expect(diagnosis.checked).toBe(8);
       // The two the report exists for: the header is what turns three messages
       // into one, and "what version?" is the first of the three.
       expect(diagnosis.grove).toBe(version);
@@ -213,9 +213,33 @@ describe("directories and worktrees that disagree", () => {
       expect(failureFor(diagnosis)).toBeUndefined();
       expect(diagnosis.findings[0]?.details[0]).toContain("feat/login");
       expect(diagnosis.findings[0]?.fix).toEqual([`git -C ${repo.gitDir} worktree prune`]);
-      // The tally counts it, even though it does not fail: "1 warning, out of 7
+      // The tally counts it, even though it does not fail: "1 warning, out of 8
       // checks" is the report saying it looked and found something untidy.
-      expect(formatDiagnosis(diagnosis)).toContain("1 warning, out of 7 checks");
+      expect(formatDiagnosis(diagnosis)).toContain("1 warning, out of 8 checks");
+    });
+  });
+
+  test("a locked worktree that is gone from disk is a warning, with the unlock first", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const added = await seedWorktree(repo, "feat/login");
+
+      // What a crashed agent session leaves: it locked the worktree it was
+      // working in, and whatever cleaned up after it deleted the directory.
+      // git lists this without `prunable`, and `git worktree prune` skips it.
+      await seedGit(repo.gitDir, ["worktree", "lock", "--reason", "agent session", added.path]);
+      await rm(added.path, { recursive: true, force: true });
+
+      const diagnosis = await diagnose(repo);
+
+      expect(reported(diagnosis)).toEqual([["locked-phantom-worktree", "warning"]]);
+      expect(failureFor(diagnosis)).toBeUndefined();
+      expect(diagnosis.findings[0]?.details).toEqual(["feat/login — agent session"]);
+      // Unlock first: `prune` alone is what has already been declining.
+      expect(diagnosis.findings[0]?.fix).toEqual([
+        `git -C ${repo.gitDir} worktree unlock ${added.path}`,
+        `git -C ${repo.gitDir} worktree prune`,
+      ]);
     });
   });
 
@@ -330,7 +354,7 @@ describe("the printed report", () => {
       expect(report).toContain("! 1 directory left behind by a pruned worktree");
       // The fix is a line to paste, marked with the arrow that starts it.
       expect(report).toContain(`    → git -C ${bare} config remote.origin.fetch`);
-      expect(report).toContain("1 problem and 1 warning, out of 7 checks");
+      expect(report).toContain("1 problem and 1 warning, out of 8 checks");
 
       // The error is what decides the exit code, and the warning beside it does
       // not change the count: "1 problem" is one, not two.

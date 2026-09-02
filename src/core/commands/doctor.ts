@@ -254,6 +254,49 @@ async function checkPrunable({ repo, worktrees }: Context): Promise<Finding | un
   };
 }
 
+/**
+ * The worktree the check above cannot see: locked, and gone from disk.
+ *
+ * `git worktree prune` skips a locked entry by design — the lock exists to say
+ * "the directory is on a drive that is not mounted right now, leave it" — and
+ * so `git worktree list` never marks one `prunable` either. Which is the right
+ * behaviour for a portable drive and the wrong one for how this state actually
+ * arises: a coding agent locks the worktree it is working in, its session dies,
+ * and the directory is deleted by whatever cleaned up after it. What is left is
+ * an entry nothing will prune, holding a branch git still considers checked
+ * out — so `grove add` of that branch fails with "already checked out at" a
+ * path that does not exist.
+ *
+ * The fix is two commands rather than one because the unlock has to come
+ * first; `prune` alone is exactly what has already been silently declining.
+ */
+async function checkLockedPhantoms({ repo, worktrees }: Context): Promise<Finding | undefined> {
+  const phantoms: WorktreeRecord[] = [];
+  for (const record of worktrees) {
+    if (record.bare || record.locked === undefined || record.prunable !== undefined) continue;
+    if (!(await pathExists(record.path))) phantoms.push(record);
+  }
+  if (phantoms.length === 0) return undefined;
+
+  return {
+    check: "locked-phantom-worktree",
+    severity: "warning",
+    summary:
+      `${plural(phantoms.length, "worktree")} git still lists, gone from disk, and locked` +
+      " — which `git worktree prune` skips",
+    details: phantoms.map((record) => {
+      const why =
+        record.locked === undefined || record.locked.length === 0 ? "" : ` — ${record.locked}`;
+
+      return `${worktreeDir(repo.root, record.path)}${why}`;
+    }),
+    fix: [
+      ...phantoms.map((record) => `git -C ${repo.gitDir} worktree unlock ${record.path}`),
+      `git -C ${repo.gitDir} worktree prune`,
+    ],
+  };
+}
+
 /** A directory's `.git`, and what it is. */
 type GitEntry =
   | { readonly kind: "absent" }
@@ -398,6 +441,7 @@ const CHECKS: readonly Check[] = [
   checkOriginHead,
   checkGitFile,
   checkPrunable,
+  checkLockedPhantoms,
   checkOrphans,
   checkLinks,
 ];
