@@ -42,6 +42,7 @@ export type CommandName =
   | "sync-all"
   | "prune"
   | "review"
+  | "upstream"
   | "refresh"
   | "log";
 
@@ -79,6 +80,7 @@ export function commandsFor(logOn: boolean): readonly MenuCommand[] {
     { name: "sync-all", summary: "sync every worktree, not just the row under the cursor" },
     { name: "prune", summary: "remove every worktree marked merged or gone, after asking" },
     { name: "review", summary: "pick one of the open pull requests and check it out" },
+    { name: "upstream", summary: "follow another repository's trunk — this is a fork of it" },
     { name: "refresh", summary: "re-read the worktrees now, without waiting for the clock" },
     {
       name: "log",

@@ -38,6 +38,14 @@ export type Pending =
   /** `/prune`: every finished worktree, as the dry run described them. */
   | { readonly kind: "prune"; readonly result: PruneResult }
   /**
+   * `/upstream`, where an `upstream` remote is already here and points
+   * somewhere else. Typing the URL was the consent for everything else this
+   * command does; replacing a remote somebody chose is the one part it asks
+   * about, because that is the part that undoes a decision rather than
+   * making one.
+   */
+  | { readonly kind: "upstream"; readonly url: string; readonly existing: string }
+  /**
    * `/open`, where the line that would open it is one nobody here has read.
    *
    * The one question here that grants something instead of taking it away, and
@@ -194,6 +202,16 @@ export function describePending(target: Pending): {
     };
   }
 
+  // The two URLs, whole: which remote is being replaced is the entire
+  // question, and a prompt that abbreviated either would be asking somebody
+  // to agree to something it had not shown them.
+  if (target.kind === "upstream") {
+    return {
+      text: `replace upstream? it points at ${target.existing}, and would point at ${target.url}`,
+      colour: theme.warn,
+    };
+  }
+
   // Named, not counted: `remove 3 finished worktrees?` is a question about a
   // number, and the person answering is weighing directories. What stays is
   // said too — the branches, and the worktrees prune declines to touch —
@@ -280,6 +298,11 @@ export function commitPending(
       label: `syncing ${target.summary.dir}`,
       run: () => service.sync(target.summary.path, { publish: true }),
     };
+  }
+
+  // `y` is `--force`: the question named the remote being replaced.
+  if (target.kind === "upstream") {
+    return { label: `following ${target.url}`, run: () => service.upstream(target.url, true) };
   }
 
   // `y` here records having read the line that was on the row, which is what

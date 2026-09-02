@@ -58,6 +58,8 @@ type Mode =
    * prompt said.
    */
   | ({ readonly kind: "add"; readonly from?: string } & Prompt)
+  /** `/upstream`: the URL being typed. Nothing else is carried; the trunk is read when it runs. */
+  | ({ readonly kind: "upstream" } & Prompt)
   | { readonly kind: "confirm"; readonly target: Pending }
   /**
    * The open pull requests, and which one the cursor is on.
@@ -821,6 +823,8 @@ export function App({
           return void beginPrune();
         case "review":
           return void openPrs();
+        case "upstream":
+          return setMode({ kind: "upstream", value: "", caret: 0 });
         case "refresh":
           return void perform("reading worktrees", async () => "refreshed");
         // A view, not an action: nothing is read, nothing is written, and the
@@ -990,6 +994,29 @@ export function App({
       // what the one before it left. A key `editPrompt` does not take comes
       // back as the mode itself, which React draws nothing for.
       return setMode((now) => (now.kind === "add" ? (editPrompt(now, input, key) ?? now) : now));
+    }
+
+    if (mode.kind === "upstream") {
+      if (key.escape) return setMode({ kind: "list" });
+      if (key.return) {
+        const url = mode.value.trim();
+        if (url.length === 0) return setMode({ kind: "list" });
+
+        // Asked only where it would replace a remote somebody chose; the URL
+        // typed here is the consent for everything else it does.
+        return void (async () => {
+          const existing = await service.pendingUpstream(url);
+          if (existing !== undefined) {
+            return setMode({ kind: "confirm", target: { kind: "upstream", url, existing } });
+          }
+
+          return perform(`following ${url}`, () => service.upstream(url));
+        })();
+      }
+
+      return setMode((now) =>
+        now.kind === "upstream" ? (editPrompt(now, input, key) ?? now) : now,
+      );
     }
 
     if (mode.kind === "confirm") {
@@ -1321,6 +1348,28 @@ export function App({
             <Text inverse>{mode.value.slice(mode.caret, mode.caret + 1) || " "}</Text>
             <Text color={theme.accent}>{mode.value.slice(mode.caret + 1)}</Text>
           </Text>
+        </Box>
+      ) : null}
+
+      {mode.kind === "upstream" ? (
+        // What enter will do, said above the box rather than asked afterwards:
+        // reading these two lines is the agreement, the way the first-run
+        // screen says what a clone does before the URL is typed.
+        <Box flexDirection="column">
+          <Text dimColor wrap="truncate">
+            {trunkName} will be measured against this repository's trunk from now on.
+          </Text>
+          <Text dimColor wrap="truncate">
+            Your branches still go to origin.
+          </Text>
+          <Box borderStyle="round" borderColor={theme.accent} paddingX={1}>
+            <Text wrap="truncate">
+              <Text dimColor>upstream </Text>
+              <Text color={theme.accent}>{mode.value.slice(0, mode.caret)}</Text>
+              <Text inverse>{mode.value.slice(mode.caret, mode.caret + 1) || " "}</Text>
+              <Text color={theme.accent}>{mode.value.slice(mode.caret + 1)}</Text>
+            </Text>
+          </Box>
         </Box>
       ) : null}
 

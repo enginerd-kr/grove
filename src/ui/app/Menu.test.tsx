@@ -33,6 +33,7 @@ describe("matching", () => {
     expect(matching(COMMANDS, "re").map((command) => command.name)).toEqual([
       "rebase",
       "review",
+      "upstream",
       "refresh",
     ]);
   });

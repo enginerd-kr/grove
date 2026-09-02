@@ -360,6 +360,7 @@ describe("hintsFor", () => {
 
   test("a mode that takes the keyboard says only what it answers to", () => {
     expect(hintsFor("add", leaf).map((hint) => hint.keys)).toEqual(["enter", "esc"]);
+    expect(hintsFor("upstream", leaf).map((hint) => hint.keys)).toEqual(["enter", "esc"]);
     expect(hintsFor("busy", leaf).map((hint) => hint.keys)).toEqual(["ctrl+c"]);
     expect(hintsFor("pick", leaf).map((hint) => hint.keys)).toEqual(["↑↓", "enter", "esc"]);
     expect(hintsFor("menu", leaf).map((hint) => hint.keys)).toEqual(["↑↓", "enter", "esc"]);

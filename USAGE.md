@@ -122,6 +122,7 @@ Every destructive action asks first. `y` confirms. Any other key cancels.
 | `/sync-all` | sync every worktree |
 | `/prune` | remove the worktrees badged `merged` or `gone` |
 | `/review` | check out an open pull request |
+| `/upstream` | this is a fork: follow another repository's trunk |
 | `/refresh` | re-read worktrees now |
 | `/log` | toggle the commit panel |
 
@@ -256,21 +257,28 @@ a branch from, and what `s` rebases onto.
 `origin`. `--push`, `--publish`, and every push `s` makes follow this.
 `grove add` looks for an existing branch on that same remote.
 
-So a fork is three lines, all git's:
+So a fork is one line:
 
 ```bash
-grove clone git@github.com:you/repo.git      # origin is your fork
-git -C main remote add upstream git@github.com:them/repo.git
-git -C main fetch upstream
-git -C main branch -u upstream/main main     # the trunk follows theirs
-git -C main config remote.pushDefault origin # your branches go to yours
+grove clone git@github.com:you/repo.git --upstream git@github.com:them/repo.git
 ```
+
+or, in a repository you already have, `/upstream` on the screen or
+`grove upstream <url>`. Either one writes three git settings and nothing of
+grove's: a remote called `upstream`, `git branch -u upstream/main main`, and
+`remote.pushDefault = origin`. `git pull` and `git push` read the same
+three. The same URL again changes nothing; a different one is refused
+unless `--force` says to replace it, and the screen asks.
+
+Nothing is detected. Which repository a fork came from is a fact only the
+forge holds, so the URL is typed once by somebody who knows it.
 
 From then on `a` cuts from `upstream/main`, `s` rebases onto it and pushes
 to your fork, and `merged` means merged into theirs. `grove pr` fetches the
 pull request from the trunk's remote, and a `pr/<n>` worktree always pushes
-back to the pull request, whatever `pushDefault` says. `doctor` reports a
-trunk that tracks a remote nothing has been fetched from.
+back to the pull request, whatever `pushDefault` says. `doctor` reports an
+`upstream` remote the trunk does not follow yet, and a trunk that tracks a
+remote nothing has been fetched from.
 
 ## CLI reference
 
@@ -278,6 +286,7 @@ Every command has `--help`, generated from the parser's own table.
 
 ```bash
 grove clone <url> [-b <branch>]   # first-run screen; `init` is an alias
+grove upstream <url>              # /upstream
 grove add <branch>                # a
 grove list                        # the rows, as text
 grove path [target]               # enter; no target prints the root
@@ -483,9 +492,10 @@ grove doctor
 
 Reports problems and the command that fixes each. Writes nothing. Checks for:
 a bare clone with no fetch refspec, a trunk tracking a remote nothing has
-been fetched from, worktrees git lists that are missing on disk, leftover
-directories, a root `.git` pointing at the wrong place, and broken symlinks.
-Exits `6` on a problem, `0` on warnings only.
+been fetched from, an `upstream` remote the trunk does not follow, worktrees
+git lists that are missing on disk, leftover directories, a root `.git`
+pointing at the wrong place, and broken symlinks. Exits `6` on a problem,
+`0` on warnings only.
 
 One of the missing-on-disk cases hides from git itself: a worktree that was
 locked and then deleted. A coding agent locks the worktree it works in, its

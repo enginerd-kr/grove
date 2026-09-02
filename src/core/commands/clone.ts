@@ -13,7 +13,7 @@ import {
   remoteRef,
   updateRemoteHead,
 } from "../branches.ts";
-import { GroveError } from "../errors.ts";
+import { GroveError, isGroveError } from "../errors.ts";
 import { isDirectory, isEmptyOrMissing, pathExists } from "../fs.ts";
 import { gitOutput, parseGitProgress, runGitOrThrow } from "../git.ts";
 import {
@@ -24,6 +24,7 @@ import {
   repoPaths,
   worktreeRelPath,
 } from "../layout.ts";
+import { followUpstream, type UpstreamResult } from "./upstream.ts";
 
 /**
  * `grove clone` — turn a remote URL into a managed repository.
@@ -39,6 +40,11 @@ export type CloneOptions = {
   readonly dir?: string;
   /** Branch to check out first; defaults to whatever the remote calls default. */
   readonly branch?: string;
+  /**
+   * The repository this one was forked from — `grove upstream <url>`, run
+   * on the clone the moment it exists. See `upstream.ts` for what it sets.
+   */
+  readonly upstream?: string;
 };
 
 export type CloneResult = {
@@ -48,6 +54,8 @@ export type CloneResult = {
   /** The branch that got the first worktree. */
   readonly branch: string;
   readonly worktree: string;
+  /** What `--upstream` set, when it was given. */
+  readonly upstream?: UpstreamResult;
 };
 
 export async function cloneRepo(
@@ -79,6 +87,8 @@ export async function cloneRepo(
   // Remember whether we are the ones creating it, so a failure cleans up after
   // itself without deleting a directory the user had already made.
   const rootExisted = await pathExists(root);
+  let trunk = "";
+  let branch = "";
 
   try {
     await mkdir(root, { recursive: true });
@@ -105,8 +115,8 @@ export async function cloneRepo(
     await enableReflogs(paths.gitDir);
     await configureRemote(paths.gitDir, reporter);
 
-    const trunk = await defaultBranch(paths.gitDir);
-    const branch = options.branch ?? trunk;
+    trunk = await defaultBranch(paths.gitDir);
+    branch = options.branch ?? trunk;
 
     const worktree = join(root, worktreeRelPath(branch));
     await Bun.write(paths.gitFile, GIT_FILE_CONTENTS);
@@ -115,14 +125,34 @@ export async function cloneRepo(
 
     reporter.info(`${relative(cwd, root) || root} is ready`);
     await sayWhatTheFileWants(paths, worktree, reporter);
-
-    return { root, gitDir: paths.gitDir, defaultBranch: trunk, branch, worktree };
   } catch (error) {
     // A partial `.bare` is worse than nothing: discovery would find it, every
     // command would then fail obscurely, and re-running clone would refuse
     // because the directory is no longer empty. Removing it makes clone
     // idempotent — the second attempt behaves like the first.
     await rm(rootExisted ? paths.gitDir : root, { recursive: true, force: true });
+    throw error;
+  }
+
+  const worktree = join(root, worktreeRelPath(branch));
+  const result = { root, gitDir: paths.gitDir, defaultBranch: trunk, branch, worktree };
+  if (options.upstream === undefined) return result;
+
+  // Outside the cleanup above on purpose: the clone is done and correct, and
+  // a mistyped `--upstream` is not a reason to delete it. The failure carries
+  // the command that finishes the job once the URL is right.
+  try {
+    const upstream = await followUpstream(paths, { url: options.upstream, force: false }, reporter);
+
+    return { ...result, upstream };
+  } catch (error) {
+    if (isGroveError(error)) {
+      throw new GroveError(error.code, error.message, {
+        ...(error.details === undefined ? {} : { details: error.details }),
+        hint: `the clone is ready without it; grove upstream <url> from inside it finishes this`,
+        cause: error,
+      });
+    }
     throw error;
   }
 }

@@ -9,6 +9,7 @@ import { gitSucceeds, runGit } from "../git.ts";
 import { BARE_DIR, type RepoKind, type RepoPaths } from "../layout.ts";
 import { plural } from "../text.ts";
 import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
+import { existingUpstream, UPSTREAM } from "./upstream.ts";
 
 /**
  * `grove doctor` — the questions a maintainer would ask first, asked by the tool.
@@ -220,6 +221,45 @@ async function checkTrunkTracking({
       `track it — and nothing has been fetched from ${trunk.remote} into refs/remotes/${trunk.remote}/`,
     ],
     fix: [`git -C ${repo.gitDir} fetch ${trunk.remote} --prune --tags`],
+  };
+}
+
+/**
+ * An `upstream` remote that the trunk does not follow.
+ *
+ * The state every forking guide leaves a repository in: `git remote add
+ * upstream …` done, and the line that makes it count — `git branch -u
+ * upstream/main main` — not. grove then measures everything against the
+ * fork's own copy of the trunk, which moves only when its owner pushes to
+ * it, and nothing on the screen says why `merged` never appears.
+ *
+ * The one signal of a fork that needs no forge: the remote is there by the
+ * name everybody uses for it. A second remote by any other name — a deploy
+ * target, a mirror — says nothing about forks and is left alone.
+ */
+async function checkUpstreamUnfollowed({
+  repo,
+  hasOrigin,
+  hasFetchRefspec,
+  hasRemoteTracking,
+}: Context): Promise<Finding | undefined> {
+  if (!hasOrigin || !hasFetchRefspec || !hasRemoteTracking) return undefined;
+
+  const url = await existingUpstream(repo.gitDir);
+  if (url === undefined) return undefined;
+
+  const trunk = await trunkOf(repo.gitDir).catch(() => undefined);
+  if (trunk === undefined || trunk.remote === UPSTREAM) return undefined;
+
+  return {
+    check: "upstream-unfollowed",
+    severity: "warning",
+    summary: `there is an ${UPSTREAM} remote, and ${trunk.branch} still follows ${trunk.ref}`,
+    details: [
+      `${UPSTREAM} is ${url}`,
+      `until the trunk follows it, drift and merged are measured against ${trunk.remote}'s copy`,
+    ],
+    fix: [`grove -C ${repo.root} upstream ${url}`],
   };
 }
 
@@ -480,6 +520,7 @@ const CHECKS: readonly Check[] = [
   checkRemoteTracking,
   checkOriginHead,
   checkTrunkTracking,
+  checkUpstreamUnfollowed,
   checkGitFile,
   checkPrunable,
   checkLockedPhantoms,

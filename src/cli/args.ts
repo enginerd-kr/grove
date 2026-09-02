@@ -34,6 +34,13 @@ export type GroveCommand =
       readonly url: string;
       readonly dir?: string;
       readonly branch?: string;
+      /** `--upstream <url>`: the repository this one was forked from. */
+      readonly upstream?: string;
+    }
+  | {
+      readonly name: "upstream";
+      readonly url: string;
+      readonly force: boolean;
     }
   | {
       readonly name: "add";
@@ -211,7 +218,17 @@ function buildCommand(
   switch (spec.name) {
     case "clone": {
       if (first === undefined) return needs("a repository URL");
-      return { name: "clone", url: first, dir: second, branch: str(values, "branch") };
+      return {
+        name: "clone",
+        url: first,
+        dir: second,
+        branch: str(values, "branch"),
+        upstream: str(values, "upstream"),
+      };
+    }
+    case "upstream": {
+      if (first === undefined) return needs("the URL of the repository this was forked from");
+      return { name: "upstream", url: first, force: bool(values, "force") };
     }
     case "add": {
       if (first === undefined) return needs("a branch name");

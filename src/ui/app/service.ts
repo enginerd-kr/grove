@@ -21,6 +21,7 @@ import {
   failureFor as syncFailureFor,
   syncWorktrees,
 } from "../../core/commands/sync.ts";
+import { existingUpstream, followUpstream } from "../../core/commands/upstream.ts";
 import { GroveError } from "../../core/errors.ts";
 import { type Commit, recentCommits } from "../../core/history.ts";
 import { deepestFirst, type RepoPaths, repoPaths } from "../../core/layout.ts";
@@ -247,6 +248,14 @@ export type WorktreeService = {
    * locked, or the one you are standing in are left alone and counted.
    */
   readonly prune: () => Promise<string>;
+  /**
+   * `/upstream`'s one question: the URL an `upstream` remote already points
+   * at, when there is one and it is not this one. Nothing otherwise, and the
+   * command runs without asking.
+   */
+  readonly pendingUpstream: (url: string) => Promise<string | undefined>;
+  /** `grove upstream <url>`, with `force` where the prompt's `y` answered for it. */
+  readonly upstream: (url: string, force?: boolean) => Promise<string>;
   /**
    * The commands a worktree was just denied, if any.
    *
@@ -559,6 +568,18 @@ export function createWorktreeService(
       );
 
       return describePrune(result);
+    },
+
+    pendingUpstream: async (url) => {
+      const existing = await existingUpstream(repo.gitDir);
+
+      return existing === undefined || existing === url ? undefined : existing;
+    },
+
+    upstream: async (url, force = false) => {
+      const result = await followUpstream(repo, { url, force }, reporter);
+
+      return `${result.trunk} now follows ${result.ref}; branches are pushed to origin`;
     },
 
     trustAndRun: async (branch) => {

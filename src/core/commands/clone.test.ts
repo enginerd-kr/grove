@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
+import { trunkOf } from "../branches.ts";
 import { pathExists } from "../fs.ts";
 import {
   type Attempt,
   attempt,
   probeGit,
   refused,
+  seedGit,
   succeeded,
   withTempRepo,
 } from "../test-utils.ts";
@@ -40,15 +42,16 @@ import { type CloneResult, cloneRepo } from "./clone.ts";
 type CloneCall = {
   readonly dir?: string;
   readonly branch?: string;
+  readonly upstream?: string;
 };
 
 /** Clones into the empty work directory, and hands back whichever outcome happened. */
 function attemptClone(
   work: string,
   url: string,
-  { dir, branch }: CloneCall = {},
+  { dir, branch, upstream }: CloneCall = {},
 ): Promise<Attempt<CloneResult>> {
-  return attempt((reporter) => cloneRepo(work, { url, dir, branch }, reporter));
+  return attempt((reporter) => cloneRepo(work, { url, dir, branch, upstream }, reporter));
 }
 
 /** The branch names that exist locally, which a fresh clone keeps to one. */
@@ -61,6 +64,50 @@ async function localBranches(gitDir: string): Promise<readonly string[]> {
 
   return result.stdout.split("\n").filter((line) => line.length > 0);
 }
+
+describe("grove clone --upstream", () => {
+  test("is `grove upstream` on the clone the moment it exists", async () => {
+    await withTempRepo(async (temp) => {
+      const canonical = join(temp.root, "canonical.git");
+      await seedGit(temp.root, ["clone", "--bare", temp.originPath, canonical]);
+
+      const result = succeeded(
+        await attemptClone(temp.work, temp.originUrl, {
+          dir: "app",
+          upstream: `file://${canonical}`,
+        }),
+      );
+
+      expect(result.upstream).toEqual({
+        remote: "upstream",
+        url: `file://${canonical}`,
+        trunk: "main",
+        ref: "upstream/main",
+      });
+      expect(await trunkOf(result.gitDir)).toMatchObject({ remote: "upstream" });
+    });
+  });
+
+  test("a bad upstream URL fails the command but keeps the clone", async () => {
+    await withTempRepo(async (temp) => {
+      const error = refused(
+        await attemptClone(temp.work, temp.originUrl, {
+          dir: "app",
+          upstream: `file://${join(temp.root, "nowhere.git")}`,
+        }),
+      );
+
+      expect(error.code).toBe("remote");
+      expect(error.hint).toContain("grove upstream");
+      // The clone is whole and usable, with no `upstream` remote left in it.
+      const root = join(temp.work, "app");
+      expect(await pathExists(join(root, "main", "README.md"))).toBe(true);
+      expect((await trunkOf(join(root, ".bare"))).ref).toBe("origin/main");
+      const remotes = await probeGit(join(root, ".bare"), ["remote"]);
+      expect(remotes.stdout.trim()).toBe("origin");
+    });
+  });
+});
 
 describe("grove clone", () => {
   test("lays out .bare, a .git pointer, and a worktree for the default branch", async () => {
