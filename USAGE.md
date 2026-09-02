@@ -1,5 +1,7 @@
 # Using grove
 
+> [한국어](docs/md/USAGE.ko.md)
+
 grove manages git worktrees. Run `grove` and you get an interactive screen:
 one row per worktree, one key per action. Every action is also a CLI command
 (`grove add`, `grove sync`, ...) for scripts, agents, and non-interactive

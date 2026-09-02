@@ -17,6 +17,8 @@ grove is a Git worktree manager with project-defined setup. Clone once, branch f
 
 [Install](#install) · [Quick Start](#quick-start) · [Project Setup](#project-setup-grovetoml) · [Development](#development)
 
+[한국어](docs/md/README.ko.md)
+
 </div>
 
 <p align="center">
