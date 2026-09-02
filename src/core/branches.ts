@@ -1,6 +1,7 @@
 import { type Reporter, withStep } from "../report/reporter.ts";
 import { GroveError } from "./errors.ts";
 import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
+import { toLines } from "./text.ts";
 
 /** Questions about refs, asked of the bare repository — and the calls that maintain them. */
 
@@ -42,6 +43,23 @@ export function enableReflogs(bare: string): Promise<boolean> {
 }
 
 /**
+ * What a fetch left behind — which is not the same as how git said it went.
+ *
+ * `fetched` is the claim the callers act on: the remote-tracking branches are
+ * as the remote has them. `staleTags` is the part of a nonzero exit that does
+ * not touch that claim — see `fetchRemotes`.
+ */
+export type FetchOutcome = {
+  /** The remote-tracking branches are as the remote has them. */
+  readonly fetched: boolean;
+  /** Tags whose local copy disagrees with the remote's, and so was kept. */
+  readonly staleTags: readonly string[];
+};
+
+/** The one refusal a fetch can exit nonzero on with every branch delivered. */
+const CLOBBERED_TAG = "would clobber existing tag";
+
+/**
  * Brings every remote-tracking ref up to date.
  *
  * Here because everything else in this file reads what it produces: `origin/main`
@@ -52,9 +70,43 @@ export function enableReflogs(bare: string): Promise<boolean> {
  * real work and would rather fail there with a better message, and the app polls
  * this in the background, where being offline is an ordinary state of affairs
  * and not something to interrupt anyone about.
+ *
+ * And the answer is read off the stderr, not the exit code alone, because git
+ * exits nonzero for "one ref was refused" exactly as it does for "the remote
+ * was unreachable" — and one of those refusals happens while every branch is
+ * delivered. `--tags` does not force, so a tag that was moved on the remote
+ * after being fetched — a release re-cut, most often — is refused with "would
+ * clobber existing tag" on every fetch from then on, forever, with the trunk
+ * arriving fine right next to it. Reading that exit code as "could not fetch"
+ * told the user their sync ran against a stale trunk when it had not. So: a
+ * failure whose every complaint is a clobbered tag is a fetch that happened,
+ * with the tags reported for the caller to warn about; anything else — a dead
+ * remote, a branch refused — is not.
  */
-export function fetchRemotes(bare: string): Promise<boolean> {
-  return gitSucceeds(["fetch", "--all", "--prune", "--tags"], { cwd: bare });
+export async function fetchRemotes(bare: string): Promise<FetchOutcome> {
+  const result = await runGit(["fetch", "--all", "--prune", "--tags"], { cwd: bare });
+  if (result.code === 0) return { fetched: true, staleTags: [] };
+
+  // ` ! [rejected]  v0.4.4  -> v0.4.4  (would clobber existing tag)` — the
+  // parenthesised reason is git's, matched under the `LC_ALL=C` that `runGit`
+  // pins, the same bargain `classifyGitError` already makes.
+  const rejections = toLines(result.stderr)
+    .map((line) => /!\s+\[rejected\]\s+(\S+)\s+->\s+\S+\s+\((.+)\)/.exec(line))
+    .filter((match) => match !== null);
+
+  const fetched =
+    rejections.length > 0 &&
+    rejections.every((match) => match[2] === CLOBBERED_TAG) &&
+    // `--all` means one stderr for every remote: a clobbered tag on one does
+    // not vouch for a remote that was unreachable underneath it.
+    !/^fatal:/m.test(result.stderr);
+
+  return {
+    fetched,
+    staleTags: fetched
+      ? rejections.map((match) => match[1]).filter((tag) => tag !== undefined)
+      : [],
+  };
 }
 
 export type Drift = { readonly ahead: number; readonly behind: number };

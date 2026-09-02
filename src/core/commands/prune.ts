@@ -107,7 +107,9 @@ export async function pruneWorktrees(
     // tool follows — `add` throws on a failed fetch, because its fetch is what
     // decides whether the branch is an existing remote one or a new one, and
     // there is no half-answer to that.
-    if (await fetchRemotes(repo.gitDir)) step.succeed("fetched");
+    // `.fetched` and nothing else: a stale tag — see `fetchRemotes` — changes
+    // no answer prune gives, and `sync` already owns the warning about it.
+    if ((await fetchRemotes(repo.gitDir)).fetched) step.succeed("fetched");
     else step.fail("could not fetch — working from what was last seen");
   }
 

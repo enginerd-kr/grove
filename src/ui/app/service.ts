@@ -273,7 +273,7 @@ export function createWorktreeService(
   return {
     list: () => listWorktreeSummaries(repo, cwd),
 
-    fetch: () => fetchRemotes(repo.gitDir),
+    fetch: () => fetchRemotes(repo.gitDir).then((outcome) => outcome.fetched),
 
     log: (path, limit) => recentCommits(path, limit),
 

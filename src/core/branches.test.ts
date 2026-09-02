@@ -153,18 +153,37 @@ describe("fetchRemotes", () => {
       // Nothing has looked at the remote yet, so the tracking ref is stale.
       expect((await seedGit(bare, ["rev-parse", "origin/main"])).trim()).toBe(before);
 
-      expect(await fetchRemotes(bare)).toBe(true);
+      expect(await fetchRemotes(bare)).toEqual({ fetched: true, staleTags: [] });
       expect((await seedGit(bare, ["rev-parse", "origin/main"])).trim()).toBe(pushed);
     });
   });
 
-  test("answers false rather than throwing when the remote is unreachable", async () => {
+  test("answers unfetched rather than throwing when the remote is unreachable", async () => {
     await withTempRepo(async (repo) => {
       const orphan = join(repo.work, "orphan.git");
       await seedGit(repo.work, ["init", "--bare", "--initial-branch=main", orphan]);
       await seedGit(orphan, ["remote", "add", "origin", `file://${join(repo.root, "gone.git")}`]);
 
-      expect(await fetchRemotes(orphan)).toBe(false);
+      expect(await fetchRemotes(orphan)).toEqual({ fetched: false, staleTags: [] });
+    });
+  });
+
+  test("a tag the remote re-cut is reported stale, not as a failed fetch", async () => {
+    await withTempRepo(async (repo) => {
+      // The tag exists before the clone, so the clone's fetch takes it — and
+      // then the remote moves it, which `--tags` refuses to follow. Git exits
+      // nonzero on that refusal exactly as it does when nothing was fetched
+      // at all, which is the confusion this outcome exists to untangle.
+      await seedGit(repo.originPath, ["tag", "v1", "main"]);
+      const bare = await bareClone(repo);
+      await seedGit(repo.originPath, ["tag", "-f", "v1", "main~1"]);
+
+      const pushed = await pushToOrigin(repo, "main", "Add a line to app.txt");
+
+      expect(await fetchRemotes(bare)).toEqual({ fetched: true, staleTags: ["v1"] });
+      // The claim `fetched` makes, checked: the branches arrived even though
+      // git's exit code called the whole fetch a failure.
+      expect((await seedGit(bare, ["rev-parse", "origin/main"])).trim()).toBe(pushed);
     });
   });
 });
@@ -275,7 +294,7 @@ describe("branchStates", () => {
       const stale = await branchStates(bare, "origin/main");
       expect(stale.get("feat/login")?.gone).toBe(false);
 
-      expect(await fetchRemotes(bare)).toBe(true);
+      expect(await fetchRemotes(bare)).toEqual({ fetched: true, staleTags: [] });
 
       const pruned = await branchStates(bare, "origin/main");
       expect(pruned.get("feat/login")?.gone).toBe(true);

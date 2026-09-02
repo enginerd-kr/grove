@@ -108,8 +108,19 @@ export async function syncWorktrees(
   // means every worktree below is measured against whatever was last seen. A
   // `✓ fetched` over that is the stale-trunk sync this command exists to
   // prevent, reported as the success it was not.
-  if (await fetchRemotes(repo.gitDir)) step.succeed("fetched");
+  const fetch = await fetchRemotes(repo.gitDir);
+  if (fetch.fetched) step.succeed("fetched");
   else step.fail("could not fetch — the trunk below is as it was last seen");
+  // The one refusal that leaves `fetched` standing — the branches all arrived,
+  // so the sync below is sound, but a tag the remote re-cut stays stale here
+  // until somebody deletes the local copy, and it is warned about because
+  // nothing else ever will: the same refusal comes back on every fetch.
+  for (const tag of fetch.staleTags) {
+    reporter.warn(
+      `local tag ${tag} disagrees with the remote's and was kept — ` +
+        `\`git tag -d ${tag}\` and sync again to take theirs`,
+    );
+  }
 
   const trunk = await defaultBranch(repo.gitDir);
   const outcomes: SyncOutcome[] = [];

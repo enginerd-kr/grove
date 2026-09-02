@@ -393,6 +393,44 @@ describe("grove sync", () => {
     });
   });
 
+  test("a tag the remote re-cut does not turn the fetch report into a lie", async () => {
+    await withTempRepo(async (temp) => {
+      // The tag arrives with the clone; the remote then moves it, which
+      // `--tags` refuses to follow — so git exits nonzero on every fetch from
+      // then on, with the branches delivered fine right next to the refusal.
+      // Reading that as "could not fetch" told the user their sync ran against
+      // a stale trunk when the trunk below is exactly what the remote has.
+      await seedGit(temp.originPath, ["tag", "v1", "main"]);
+      const repo = await managedRepo(temp);
+      await seedGit(temp.originPath, ["tag", "-f", "v1", "main~1"]);
+
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+
+      const outcome = await attemptSync(repo, { target: "main" });
+
+      expect(outcome.log.err.join("")).toContain("✓ fetched");
+      expect(outcome.log.err.join("")).not.toContain("could not fetch");
+      // The tag is still said — once, with the way out — because nothing else
+      // ever will: the same refusal comes back on every fetch until the local
+      // copy goes.
+      expect(outcome.log.err).toContain(
+        "! local tag v1 disagrees with the remote's and was kept — `git tag -d v1` and sync again to take theirs\n",
+      );
+
+      // The claim behind `✓ fetched`, checked end to end: the trunk moved.
+      expect(succeeded(outcome)).toEqual([
+        {
+          path: join(repo.root, "main"),
+          dir: "main",
+          branch: "main",
+          kind: "fast-forwarded",
+          onto: "origin/main",
+        },
+      ]);
+      expect(await Bun.file(join(repo.root, "main", "trunk.txt")).text()).toBe("trunk\n");
+    });
+  });
+
   test("aborts a conflicting rebase and exits 5, and --no-abort leaves it stopped part-way", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
