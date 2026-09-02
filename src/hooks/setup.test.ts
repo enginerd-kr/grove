@@ -5,7 +5,7 @@ import { ExitCode, errorToExitCode } from "../cli/exit-codes.ts";
 import { entryExists } from "../core/fs.ts";
 import { seedGit } from "../core/test-utils.ts";
 import { failureFor, pendingCommands } from "./command.ts";
-import { HOOKS_FILE, NO_HOOKS } from "./config.ts";
+import { HOOKS_FILE, NO_HOOKS, platformKeyFor } from "./config.ts";
 import { describeSetup, runSetup, type SetupResult, trustAndRun } from "./setup.ts";
 import { repoHooks } from "./source.ts";
 import { recorder, refusalFromRun, setUp, withRepo } from "./test-utils.ts";
@@ -32,6 +32,32 @@ describe("runSetup", () => {
       });
       expect(describeSetup(result)).toBe(`no ${HOOKS_FILE}`);
       expect(fixture.log.warnings).toEqual([]);
+    });
+  });
+
+  test("takes the platform's own lines out of a table, and says when none are for here", async () => {
+    await withRepo(async (fixture) => {
+      const here = platformKeyFor(process.platform);
+      const elsewhere = here === "macos" ? "linux" : "macos";
+      await Bun.write(join(fixture.trunk, ".env"), "SECRET=1\n");
+      await Bun.write(join(fixture.trunk, "other.env"), "SECRET=2\n");
+      await fixture.configure(`[setup.copy]\n${here} = [".env"]\n${elsewhere} = ["other.env"]\n`);
+
+      const result = await setUp(fixture);
+
+      expect(result.copied).toEqual([".env"]);
+      expect(await entryExists(join(fixture.worktree, "other.env"))).toBe(false);
+      expect(fixture.log.infos.join("\n")).not.toContain("is for");
+
+      // The same file with only the other machine's line: nothing to do, which
+      // is not "no file", and the run says which platform it was not for.
+      fixture.log.reset();
+      await fixture.configure(`[setup.copy]\n${elsewhere} = ["other.env"]\n`);
+      const nothing = await setUp(fixture);
+
+      expect(nothing.copied).toEqual([]);
+      expect(describeSetup(nothing)).toBe("nothing to do");
+      expect(fixture.log.infos.join("\n")).toContain(`nothing in ${HOOKS_FILE} is for ${here}`);
     });
   });
 

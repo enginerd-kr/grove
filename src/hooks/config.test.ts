@@ -6,9 +6,9 @@ import {
   HOOKS_FILE,
   NO_HOOKS,
   NO_TEARDOWN,
-  openTargetFor,
   parseHooks,
   plannedCount,
+  platformKeyFor,
   readHooks,
 } from "./config.ts";
 import { repoHooks } from "./source.ts";
@@ -104,6 +104,176 @@ linux = "code . --new-window"
     const inTable = refusalFrom(() => parseHooks('[setup.open]\nmacos = "  "\n'));
     expect(inTable.message).toContain("setup.open.macos has nothing to open");
     expect(inTable.hint).toContain("open -a");
+  });
+
+  describe("per platform", () => {
+    test("a list key can be written once per platform, like open", () => {
+      const text = `
+[setup]
+link = ["node_modules"]
+
+[setup.copy]
+macos   = [".env"]
+windows = [".env", "local.bat"]
+
+[setup.run]
+linux   = "bun install"
+windows = ["bun install", "npm run win-post"]
+
+[teardown.run]
+macos = ["docker compose down", "colima stop"]
+`;
+      const mac = parseHooks(text, HOOKS_FILE, "darwin");
+      const win = parseHooks(text, HOOKS_FILE, "win32");
+      const linux = parseHooks(text, HOOKS_FILE, "linux");
+
+      // A bare list is the file that is the same everywhere, and still is.
+      expect(mac.link).toEqual(["node_modules"]);
+      expect(win.link).toEqual(["node_modules"]);
+
+      expect(mac.copy).toEqual([".env"]);
+      expect(win.copy).toEqual([".env", "local.bat"]);
+      // A platform the table leaves out gets nothing, rather than a guess.
+      expect(linux.copy).toEqual([]);
+
+      // A bare string inside the table reads as it does outside it.
+      expect(linux.commands).toEqual(["bun install"]);
+      expect(win.commands).toEqual(["bun install", "npm run win-post"]);
+      expect(mac.commands).toEqual([]);
+
+      expect(mac.teardown.commands).toEqual(["docker compose down", "colima stop"]);
+      expect(linux.teardown.commands).toEqual([]);
+    });
+
+    test("an inline table is the same table", () => {
+      const hooks = parseHooks('[setup]\ncopy = { macos = [".env"] }\n', HOOKS_FILE, "darwin");
+
+      expect(hooks.copy).toEqual([".env"]);
+    });
+
+    test("refuses a platform it does not have, the way [setup.open] does", () => {
+      const error = refusalFrom(() => parseHooks('[setup.copy]\nubuntu = [".env"]\n'));
+
+      expect(error.message).toContain('[setup.copy] has no key named "ubuntu"');
+      expect(error.hint).toBe("the keys are macos, linux, windows");
+    });
+
+    test("a wrong value inside the table names the key, with the key's own example", () => {
+      const error = refusalFrom(() =>
+        parseHooks("[setup.copy]\nmacos = 5\n", HOOKS_FILE, "darwin"),
+      );
+
+      expect(error.message).toContain("setup.copy.macos must be a list of strings");
+      // A path, and not the `open -a` line the `macos` key would otherwise
+      // reach for: the advice is about `copy`.
+      expect(error.hint).toBe('for example: macos = [".env"]');
+
+      expect(refusalFrom(() => parseHooks("[teardown.run]\nlinux = [1]\n")).hint).toContain(
+        '"bun install"',
+      );
+    });
+
+    test("the other platforms' lines are checked too, so a bad file is refused everywhere", () => {
+      // Read for a Mac, and what was written for Windows is still wrong.
+      expect(
+        refusalFrom(() => parseHooks("[setup.copy]\nwindows = 5\n", HOOKS_FILE, "darwin")).message,
+      ).toContain("setup.copy.windows");
+
+      // The path check too, which is the one that matters: a `..` aimed at the
+      // machine that will pull this next week is refused on the one writing it.
+      const climbing = refusalFrom(() =>
+        parseHooks('[setup.copy]\nwindows = ["../.ssh"]\n', HOOKS_FILE, "darwin"),
+      );
+      expect(climbing.message).toContain('"../.ssh"');
+      expect(climbing.hint).toContain("inside the worktree");
+      expect(
+        refusalFrom(() => parseHooks('[setup.link]\nlinux = ["/etc"]\n', HOOKS_FILE, "win32")).code,
+      ).toBe("usage");
+    });
+
+    test("counts what was written for other platforms, so the file still asked for something", () => {
+      const text = `
+[setup.copy]
+windows = [".env", "local.bat"]
+
+[setup.run]
+linux = "bun install"
+
+[teardown.run]
+linux = ["docker compose down"]
+`;
+      const mac = parseHooks(text, HOOKS_FILE, "darwin");
+
+      expect(mac.copy).toEqual([]);
+      expect(mac.commands).toEqual([]);
+      // Three [setup] lines for machines this is not. [teardown]'s is not
+      // counted, as `plannedCount` never counted it.
+      expect(mac.elsewhere).toBe(3);
+      expect(plannedCount(mac)).toBe(3);
+      expect(parseHooks(text, HOOKS_FILE, "win32").elsewhere).toBe(1);
+      expect(parseHooks(text, HOOKS_FILE, "linux").elsewhere).toBe(2);
+    });
+
+    describe("env", () => {
+      test("a platform's variables sit inside the table, over the shared ones", () => {
+        const text = `
+[setup.env]
+PORT = "3000"
+SHELL = "sh"
+macos = { SHELL = "zsh", DOCKER_HOST = "unix:///tmp/colima.sock" }
+
+[setup.env.windows]
+SHELL = "pwsh"
+`;
+        expect(parseHooks(text, HOOKS_FILE, "darwin").env).toEqual([
+          { name: "PORT", value: "3000" },
+          { name: "SHELL", value: "zsh" },
+          { name: "DOCKER_HOST", value: "unix:///tmp/colima.sock" },
+        ]);
+        // `[setup.env.windows]` is the same TOML as `windows = { … }`.
+        expect(parseHooks(text, HOOKS_FILE, "win32").env).toEqual([
+          { name: "PORT", value: "3000" },
+          { name: "SHELL", value: "pwsh" },
+        ]);
+        // A platform the table says nothing about keeps the shared ones only.
+        expect(parseHooks(text, HOOKS_FILE, "linux").env).toEqual([
+          { name: "PORT", value: "3000" },
+          { name: "SHELL", value: "sh" },
+        ]);
+      });
+
+      test("a platform name is not a variable, so a string there is refused", () => {
+        const error = refusalFrom(() => parseHooks('[setup.env]\nmacos = ""\n'));
+
+        expect(error.code).toBe("usage");
+        expect(error.message).toContain(
+          "setup.env.macos must be a table of variables for that platform",
+        );
+        expect(error.hint).toContain("macos = {");
+      });
+
+      test("every platform's names are checked, and [teardown] keeps its own", () => {
+        const error = refusalFrom(() =>
+          parseHooks('[setup.env]\nwindows = { "A B" = "x" }\n', HOOKS_FILE, "darwin"),
+        );
+        expect(error.message).toContain("setup.env.windows has no name");
+
+        const hooks = parseHooks(
+          `
+[setup.env]
+linux = { TOKEN = "install" }
+
+[teardown.env]
+linux = { TOKEN = "cleanup" }
+`,
+          HOOKS_FILE,
+          "linux",
+        );
+
+        expect(hooks.env).toEqual([{ name: "TOKEN", value: "install" }]);
+        expect(hooks.teardown.env).toEqual([{ name: "TOKEN", value: "cleanup" }]);
+      });
+    });
   });
 
   test("[teardown] has no open — there is nothing to open in a worktree that is going", () => {
@@ -292,15 +462,15 @@ env = { PORT = 3000, DEBUG = true }
   });
 });
 
-describe("openTargetFor", () => {
+describe("platformKeyFor", () => {
   test("names platforms the way a config line does, not the way Node does", () => {
-    expect(openTargetFor("darwin")).toBe("macos");
-    expect(openTargetFor("win32")).toBe("windows");
+    expect(platformKeyFor("darwin")).toBe("macos");
+    expect(platformKeyFor("win32")).toBe("windows");
     // Everything else is "the name is the command", which is as true on
     // FreeBSD as on Ubuntu — and `process.platform` could not tell the
     // distributions apart to do better.
-    expect(openTargetFor("linux")).toBe("linux");
-    expect(openTargetFor("freebsd")).toBe("linux");
+    expect(platformKeyFor("linux")).toBe("linux");
+    expect(platformKeyFor("freebsd")).toBe("linux");
   });
 });
 
@@ -442,6 +612,15 @@ describe("readHooks", () => {
   test("a worktree with no file plans nothing", async () => {
     await withTempRepo(async (temp) => {
       expect(await readHooks(temp.work)).toEqual(NO_HOOKS);
+    });
+  });
+
+  test("reads for the platform it is asked about", async () => {
+    await withTempRepo(async (temp) => {
+      await Bun.write(join(temp.work, HOOKS_FILE), '[setup.copy]\nwindows = ["local.bat"]\n');
+
+      expect((await readHooks(temp.work, { platform: "win32" })).copy).toEqual(["local.bat"]);
+      expect((await readHooks(temp.work, { platform: "linux" })).copy).toEqual([]);
     });
   });
 });

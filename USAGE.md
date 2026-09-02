@@ -157,12 +157,25 @@ Rules:
 - Unknown keys are errors. `cpoy = [".env"]` fails instead of doing nothing.
 - List keys accept a bare string: `copy = ".env"`.
 
-`open` can be per-platform:
+Any key can be per-platform. The keys are `macos`, `linux`, `windows`; a
+platform the table leaves out gets nothing there. `env`'s platform keys hold
+that platform's variables, over the shared ones:
 
 ```toml
 [setup.open]
 macos = 'open -a "Visual Studio Code" .'
 linux = "code ."
+
+[setup.copy]
+macos   = [".env"]
+windows = [".env", "local.bat"]
+
+[setup.env]
+PORT    = 3000
+windows = { SHELL = "pwsh" }
+
+[teardown.run]
+macos = ["docker compose down", "colima stop"]
 ```
 
 ### Three config layers

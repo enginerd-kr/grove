@@ -9,7 +9,7 @@ import {
   type Hooks,
   openGatedHere,
   openHere,
-  openTargetFor,
+  platformKeyFor,
   wantsOpen,
 } from "./config.ts";
 import { repoHooks } from "./source.ts";
@@ -95,7 +95,7 @@ export async function openWhatItAsksFor(
     if (wantsOpen(hooks.open) && !untrusted) {
       reporter.info(
         `nothing in ${configuredFiles(hooks).join(" and ")} opens on ` +
-          openTargetFor(process.platform),
+          platformKeyFor(process.platform),
       );
     }
 

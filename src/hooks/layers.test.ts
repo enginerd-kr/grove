@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { entryExists } from "../core/fs.ts";
 import { pendingCommands } from "./command.ts";
-import { HOOKS_FILE, LOCAL_HOOKS_FILE, openTargetFor } from "./config.ts";
+import { HOOKS_FILE, LOCAL_HOOKS_FILE, platformKeyFor } from "./config.ts";
 import { runSetup } from "./setup.ts";
 import { repoHooks } from "./source.ts";
 import { refusalFromRun, setUp, withRepo } from "./test-utils.ts";
@@ -18,7 +18,7 @@ import { fingerprintOf, trust } from "./trust.ts";
  */
 
 /** The `open` key for the machine this is running on — the only one that runs. */
-const HERE = openTargetFor(process.platform);
+const HERE = platformKeyFor(process.platform);
 
 describe("layers", () => {
   test("each layer adds to the ones under it", async () => {
@@ -73,6 +73,23 @@ describe("layers", () => {
       for (const target of ["macos", "linux", "windows"] as const) {
         if (target !== HERE) expect(hooks.open[target]).toBe("code .");
       }
+    });
+  });
+
+  test("a list written per platform collects with the layers under it, for this platform", async () => {
+    await withRepo(async (fixture) => {
+      const elsewhere = HERE === "macos" ? "linux" : "macos";
+      await fixture.configureGlobal(`[setup.copy]\n${HERE} = [".npmrc"]\n`);
+      await fixture.configure('[setup]\ncopy = [".env"]\n');
+      await fixture.configureLocal(`[setup.copy]\n${elsewhere} = ["certs"]\n`);
+
+      const hooks = await repoHooks(fixture.repo);
+
+      // The layer that wrote its copy for another machine adds nothing here —
+      // and is still counted as having asked, so the run does not call the
+      // file absent.
+      expect(hooks.copy).toEqual([".npmrc", ".env"]);
+      expect(hooks.elsewhere).toBe(1);
     });
   });
 

@@ -51,22 +51,36 @@ import { fingerprintOf } from "./trust.ts";
  * worktree. What it is not is a line that works everywhere: `open -a` is macOS
  * and `xdg-open` is not, and `code` is on a Linux PATH long before macOS has
  * been asked to install the shim. A file whose whole claim is that it travels
- * cannot pick one of those, so `[setup.open]` writes it once per platform:
+ * cannot pick one of those, so a key can be written once per platform:
  *
  * ```toml
  * [setup.open]
  * macos = 'open -a "Visual Studio Code" .'
  * linux = "code ."
+ *
+ * [setup.copy]
+ * macos   = [".env"]
+ * windows = [".env", "local.bat"]
+ *
+ * [setup.env]
+ * PORT  = "3000"
+ * macos = { DOCKER_HOST = "unix:///Users/me/.colima/docker.sock" }
  * ```
  *
- * A platform the table leaves out opens nothing, and the run says so rather
- * than leaving somebody to wonder why their editor was the one that did not
- * appear. A bare `open = "code ."` fills all three, for the file whose team is
- * all on one kind of machine.
+ * The same table for every key, because `open` was not the only line that is
+ * true on one machine and wrong on another: the `.bat` is Windows and the
+ * socket is macOS. `copy`, `link`, `run` and `[teardown] run` take a table
+ * whose values are the lists they would otherwise have been; `env` takes a
+ * table inside its own, since its values are already names and a platform's
+ * worth of them is a set. A platform the table leaves out gets nothing, and
+ * the run says so rather than leaving somebody to wonder why their machine was
+ * the one nothing happened on. A bare `open = "code ."` or `copy = [".env"]`
+ * fills all three, for the file whose team is all on one kind of machine.
  *
- * One line and not a list, because the shell it is handed to already spells
- * "and this too" as `&&` — and because a list is what somebody reaches for when
- * what they wanted was the table above, which is where the refusal points them.
+ * `open` is one line and not a list, because the shell it is handed to already
+ * spells "and this too" as `&&` — and because a list is what somebody reaches
+ * for when what they wanted was the table above, which is where the refusal
+ * points them.
  *
  * TOML because Bun parses it with no dependency, and because a file people are
  * expected to read and review deserves comments. It is read out of the trunk's
@@ -144,12 +158,18 @@ export type TeardownHook = {
   readonly commands: readonly string[];
 };
 
-/** The platforms `[setup.open]` can name, which is every one grove runs on. */
-export const OPEN_TARGETS = ["macos", "linux", "windows"] as const;
-export type OpenTarget = (typeof OPEN_TARGETS)[number];
+/**
+ * The platforms a key's table can name, which is every one grove runs on.
+ *
+ * One list for every key that takes the table — `copy`, `link`, `run`, `env`,
+ * `open`, and `[teardown]`'s two — so that the refusal for a misspelt one
+ * reads the same wherever it landed.
+ */
+export const PLATFORM_KEYS = ["macos", "linux", "windows"] as const;
+export type PlatformKey = (typeof PLATFORM_KEYS)[number];
 
 /** One command line per platform, run in the worktree. `""` means "not here". */
-export type OpenHook = Readonly<Record<OpenTarget, string>>;
+export type OpenHook = Readonly<Record<PlatformKey, string>>;
 
 /**
  * Which key a running platform answers to.
@@ -161,18 +181,18 @@ export type OpenHook = Readonly<Record<OpenTarget, string>>;
  * per distribution: `process.platform` cannot tell Ubuntu from Fedora, so an
  * `ubuntu` key would be a promise this could not keep.
  */
-export function openTargetFor(platform: NodeJS.Platform): OpenTarget {
+export function platformKeyFor(platform: NodeJS.Platform): PlatformKey {
   if (platform === "darwin") return "macos";
   if (platform === "win32") return "windows";
 
   return "linux";
 }
 
-export const NO_OPEN: OpenHook = mapTargets(() => "");
+export const NO_OPEN: OpenHook = mapPlatforms(() => "");
 
 /** Whether the file asked to open anything at all, on any platform. */
 export function wantsOpen(open: OpenHook): boolean {
-  return OPEN_TARGETS.some((target) => open[target] !== "");
+  return PLATFORM_KEYS.some((target) => open[target] !== "");
 }
 
 /**
@@ -184,11 +204,18 @@ export function wantsOpen(open: OpenHook): boolean {
  * nothing, which is "nothing to open" and not an error.
  */
 export function openHere(hooks: Hooks, platform: NodeJS.Platform = process.platform): string {
-  return hooks.open[openTargetFor(platform)];
+  return hooks.open[platformKeyFor(platform)];
 }
 
 export type Hooks = {
-  /** Paths taken from the trunk, each a file or a whole directory. */
+  /**
+   * Paths taken from the trunk, each a file or a whole directory.
+   *
+   * Already the platform's own: a file that writes `copy` as a table is read
+   * for the machine reading it, and what it said for the other two is checked
+   * and then let go of — see `parseHooks`. So every list below is the answer
+   * for here, and nothing downstream has to ask which platform it is on.
+   */
   readonly copy: readonly string[];
   readonly link: readonly string[];
   /** Given to every command, over the environment grove was started in. */
@@ -208,12 +235,29 @@ export type Hooks = {
    * `open = "code ."` fills all three, which is the common case and stays a
    * single line.
    *
+   * The one key still kept for all three platforms, where the lists above are
+   * read for this one: the run says "nothing opens on linux" by looking at
+   * what the other two were given, and a layer may name only the machine it
+   * was written on, which `mergeHooks` decides slot by slot.
+   *
    * Held apart from `commands` all the way down rather than merged with a flag:
    * every rule that applies to one is the opposite of the rule for the other —
    * awaited against watched-briefly-then-released, killable against not, part
    * of what `add` reports against beside it.
    */
   readonly open: OpenHook;
+  /**
+   * How many `copy`, `link` and `run` lines the file wrote for platforms this
+   * is not.
+   *
+   * Kept for one question: whether the file asked for anything. A file whose
+   * every line is for Windows has, on a Mac, nothing to do — and "nothing to
+   * do" is a different answer from "no file at all", which is what a count of
+   * zero would otherwise read as. See `plannedCount`. Not in `GatedCounts`,
+   * because those lines never run here and there is nothing for trust to hold
+   * back; `[teardown]` is left out as `plannedCount` leaves it out.
+   */
+  readonly elsewhere: number;
   /**
    * `[teardown]`, carried on the same record.
    *
@@ -260,23 +304,28 @@ export type HookLayer = {
  * for trust to hold back, and holding back the `run` line your own
  * `.grove.local.toml` added on top of it would be asking you to agree to your
  * own file. Zero here means the gate is not in the way at all.
+ *
+ * `commands` counts the platform's own lines and nothing written for another:
+ * a `[setup.run] windows = […]` in a tracked file is not held back on a Mac,
+ * and is not offered there either, because it will not run there. The same
+ * rule `open` already follows, one slot at a time.
  */
 export type GatedCounts = {
   readonly commands: number;
   readonly teardown: number;
   /** Per platform, because `open` merges per platform — see `mergeHooks`. */
-  readonly open: Readonly<Record<OpenTarget, boolean>>;
+  readonly open: Readonly<Record<PlatformKey, boolean>>;
 };
 
 export const NOTHING_GATED: GatedCounts = {
   commands: 0,
   teardown: 0,
-  open: mapTargets(() => false),
+  open: mapPlatforms(() => false),
 };
 
 /** Whether the `open` line that would actually run came from a gated layer. */
 export function openGatedHere(hooks: Hooks, platform: NodeJS.Platform = process.platform): boolean {
-  return hooks.gated.open[openTargetFor(platform)];
+  return hooks.gated.open[platformKeyFor(platform)];
 }
 
 /**
@@ -325,6 +374,7 @@ export const NO_HOOKS: Hooks = {
   env: [],
   commands: [],
   open: NO_OPEN,
+  elsewhere: 0,
   teardown: NO_TEARDOWN,
   layers: [],
   gated: NOTHING_GATED,
@@ -336,14 +386,20 @@ export function plannedCount(hooks: Hooks): number {
   // application, and the rest is how to start it rather than more work. Counted
   // even when this platform is not one it named, because the question here is
   // whether the file asked for anything — "nothing to do" and "no file at all"
-  // are different answers and this is what tells them apart.
+  // are different answers and this is what tells them apart. `elsewhere` is
+  // the same allowance for the lists: a line for Windows is still a line.
   return (
-    hooks.copy.length + hooks.link.length + hooks.commands.length + (wantsOpen(hooks.open) ? 1 : 0)
+    hooks.copy.length +
+    hooks.link.length +
+    hooks.commands.length +
+    hooks.elsewhere +
+    (wantsOpen(hooks.open) ? 1 : 0)
   );
 }
 
 /** What each key's error says to write instead, so the advice is about that key. */
-const EXAMPLES: Readonly<Record<string, string>> = {
+type ExampleKey = "copy" | "link" | "run" | "open" | "env" | PlatformKey;
+const EXAMPLES: Readonly<Record<ExampleKey, string>> = {
   copy: ".env",
   link: "node_modules",
   run: "bun install",
@@ -359,13 +415,17 @@ const EXAMPLES: Readonly<Record<string, string>> = {
  *
  * `copy = ".env"` is what people write the first time, and refusing it would be
  * pedantry about a shape that has exactly one sensible reading.
+ *
+ * The example is passed in rather than looked up by `key`, because inside a
+ * platform table the key is `macos` and the thing to show is still a path.
  */
-function stringsAt(
+function listAt(
   /** The file being read, so a refusal names the one that has to be edited. */
   file: string,
   section: string,
   table: Record<string, unknown>,
   key: string,
+  example: string,
 ): readonly string[] {
   const value = table[key];
   if (value === undefined) return [];
@@ -373,11 +433,55 @@ function stringsAt(
 
   if (!Array.isArray(value) || value.some((each) => typeof each !== "string")) {
     throw new GroveError("usage", `${file}: ${section}.${key} must be a list of strings`, {
-      hint: `for example: ${key} = [${JSON.stringify(EXAMPLES[key] ?? ".env")}]`,
+      hint: `for example: ${key} = [${JSON.stringify(example)}]`,
     });
   }
 
   return value as readonly string[];
+}
+
+/**
+ * A list key, read for one platform and checked for all three.
+ *
+ * `here` is what this machine does. `other` is what the file said the two it
+ * is not should do — handed back rather than dropped, because a file is
+ * refused as a whole or not at all: `[setup.copy] windows = ["../.ssh"]` is
+ * a bad file on a Mac too, and finding that out from the Windows machine that
+ * pulled it next week is the failure the unknown-key check exists to prevent,
+ * arrived at from the other side.
+ */
+type PerPlatform = {
+  readonly here: readonly string[];
+  readonly other: readonly string[];
+};
+
+function perPlatformListAt(
+  file: string,
+  section: string,
+  table: Record<string, unknown>,
+  key: "copy" | "link" | "run",
+  platform: NodeJS.Platform,
+): PerPlatform {
+  const value = table[key];
+  if (value === undefined) return { here: [], other: [] };
+
+  // A bare list — or a bare string — is the file that is the same everywhere,
+  // and stays one line. A table names the platforms apart; `copy = { macos =
+  // […] }` is the same TOML as `[setup.copy]` and reads the same.
+  if (!isTable(value)) {
+    return { here: listAt(file, section, table, key, EXAMPLES[key]), other: [] };
+  }
+
+  const label = `${section}.${key}`;
+  refuseUnknownKeys(file, label, value, new Set(PLATFORM_KEYS));
+
+  const lists = mapPlatforms((target) => listAt(file, label, value, target, EXAMPLES[key]));
+  const target = platformKeyFor(platform);
+
+  return {
+    here: lists[target],
+    other: PLATFORM_KEYS.filter((each) => each !== target).flatMap((each) => lists[each]),
+  };
 }
 
 /**
@@ -400,14 +504,14 @@ function openAt(file: string, setup: Record<string, unknown>): OpenHook {
   if (value === undefined) return NO_OPEN;
 
   if (isTable(value)) {
-    refuseUnknownKeys(file, "setup.open", value, new Set(OPEN_TARGETS));
+    refuseUnknownKeys(file, "setup.open", value, new Set(PLATFORM_KEYS));
 
-    return mapTargets((target) => commandAt(file, "setup.open", value, target));
+    return mapPlatforms((target) => commandAt(file, "setup.open", value, target));
   }
 
   const line = commandAt(file, "setup", setup, "open");
 
-  return mapTargets(() => line);
+  return mapPlatforms(() => line);
 }
 
 /**
@@ -426,7 +530,7 @@ function commandAt(
   file: string,
   section: string,
   table: Record<string, unknown>,
-  key: string,
+  key: "open" | PlatformKey,
 ): string {
   const value = table[key];
   if (value === undefined) return "";
@@ -434,14 +538,14 @@ function commandAt(
   if (typeof value !== "string") {
     throw new GroveError("usage", `${file}: ${section}.${key} must be one command line`, {
       hint:
-        `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)} — ` +
+        `for example: ${key} = ${JSON.stringify(EXAMPLES[key])} — ` +
         "and [setup.open] to say it differently per platform",
     });
   }
 
   if (value.trim().length === 0) {
     throw new GroveError("usage", `${file}: ${section}.${key} has nothing to open`, {
-      hint: `for example: ${key} = ${JSON.stringify(EXAMPLES[key] ?? EXAMPLES.open)}`,
+      hint: `for example: ${key} = ${JSON.stringify(EXAMPLES[key])}`,
     });
   }
 
@@ -481,11 +585,16 @@ const KNOWN_TEARDOWN = new Set(["env", "run"]);
 /** A name a shell would accept, which is the only kind worth passing to one. */
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** The name, checked once, wherever the two spellings below found it. */
-function checkedEnvName(file: string, section: string, name: string, wrote: string): string {
+/**
+ * The name, checked once, wherever the spellings below found it.
+ *
+ * `label` is the table it was found in — `setup.env`, or `setup.env.macos` for
+ * a platform's own — so the refusal names the line to go and fix.
+ */
+function checkedEnvName(file: string, label: string, name: string, wrote: string): string {
   if (ENV_NAME.test(name)) return name;
 
-  throw new GroveError("usage", `${file}: ${section}.env has no name in ${wrote}`, {
+  throw new GroveError("usage", `${file}: ${label} has no name in ${wrote}`, {
     hint: `a name, then its value: ${EXAMPLES.env} — or UV_INDEX_USERNAME = "PLACE_HOLDER"`,
   });
 }
@@ -499,11 +608,11 @@ function checkedEnvName(file: string, section: string, name: string, wrote: stri
  * list or a table is a different matter: there is no obvious string for those,
  * and guessing one is how a config file starts lying.
  */
-function scalar(file: string, section: string, value: unknown, name: string): string {
+function scalar(file: string, label: string, value: unknown, name: string): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") return String(value);
 
-  throw new GroveError("usage", `${file}: ${section}.env.${name} must be a string`, {
+  throw new GroveError("usage", `${file}: ${label}.${name} must be a string`, {
     hint: `for example: ${name} = "PLACE_HOLDER"`,
   });
 }
@@ -540,22 +649,80 @@ function scalar(file: string, section: string, value: unknown, name: string): st
  * much: the values sit in a file git can see, one `git add -A` away from being
  * pushed. For a real secret, keep pointing the tool at a credential store; this
  * is for the settings that merely have to *be there*.
+ *
+ * A platform's own names go in a table under its key, inside the same table:
+ *
+ * ```toml
+ * [setup.env]
+ * PORT  = "3000"
+ * macos = { DOCKER_HOST = "unix:///Users/me/.colima/docker.sock" }
+ * ```
+ *
+ * Inside rather than beside, because `env`'s values are already a set of names
+ * and a platform's worth of them is another set — so the shape every other key
+ * uses, a platform key whose value is what the key would otherwise have held,
+ * is this one too. The platform's names land over the shared ones, the way a
+ * nearer layer's do. What that costs is a variable called `macos`, which is
+ * refused rather than read: a line that could mean either has to mean one.
+ *
+ * The list form has no room for a platform and does not get one — its whole
+ * point is that it is the lines a shell prints, and a shell prints no tables.
  */
-function envAt(file: string, section: string, table: Record<string, unknown>): readonly HookEnv[] {
+function envAt(
+  file: string,
+  section: string,
+  table: Record<string, unknown>,
+  platform: NodeJS.Platform,
+): readonly HookEnv[] {
   const value = table.env;
 
   if (isTable(value)) {
-    return Object.entries(value).map(([name, each]) => ({
-      name: checkedEnvName(file, section, name, JSON.stringify(name)),
-      value: scalar(file, section, each, name),
-    }));
+    const label = `${section}.env`;
+    const shared: HookEnv[] = [];
+    const own: HookEnv[] = [];
+    const target = platformKeyFor(platform);
+
+    for (const [name, each] of Object.entries(value)) {
+      if (!(PLATFORM_KEYS as readonly string[]).includes(name)) {
+        shared.push({
+          name: checkedEnvName(file, label, name, JSON.stringify(name)),
+          value: scalar(file, label, each, name),
+        });
+        continue;
+      }
+
+      if (!isTable(each)) {
+        throw new GroveError(
+          "usage",
+          `${file}: ${label}.${name} must be a table of variables for that platform`,
+          { hint: `for example: ${name} = { DOCKER_HOST = "unix:///var/run/docker.sock" }` },
+        );
+      }
+
+      // Every platform's names are checked, and one platform's are kept: a
+      // name a shell would refuse is wrong in whichever table it sits.
+      const names = Object.entries(each).map(([inner, value]) => ({
+        name: checkedEnvName(file, `${label}.${name}`, inner, JSON.stringify(inner)),
+        value: scalar(file, `${label}.${name}`, value, inner),
+      }));
+      if (name === target) own.push(...names);
+    }
+
+    const overridden = new Set(own.map((each) => each.name));
+
+    return [...shared.filter((each) => !overridden.has(each.name)), ...own];
   }
 
-  return stringsAt(file, section, table, "env").map((line) => {
+  return listAt(file, section, table, "env", EXAMPLES.env).map((line) => {
     const at = line.indexOf("=");
 
     return {
-      name: checkedEnvName(file, section, at === -1 ? "" : line.slice(0, at), JSON.stringify(line)),
+      name: checkedEnvName(
+        file,
+        `${section}.env`,
+        at === -1 ? "" : line.slice(0, at),
+        JSON.stringify(line),
+      ),
       value: line.slice(at + 1),
     };
   });
@@ -567,8 +734,17 @@ function envAt(file: string, section: string, table: Record<string, unknown>): r
  * An unknown key is an error rather than something ignored. `cpoy = [".env"]`
  * that quietly does nothing is the exact failure this file exists to prevent —
  * somebody would find out weeks later, from a worktree that would not build.
+ *
+ * Read for one platform, which is the one this is running on unless a caller
+ * says otherwise. The lists come back already decided — see `Hooks.copy` — and
+ * the platform is taken here, once, so that every question downstream about
+ * what is copied, what waits for trust, and what runs is about the same lines.
  */
-export function parseHooks(text: string, file: string = HOOKS_FILE): Hooks {
+export function parseHooks(
+  text: string,
+  file: string = HOOKS_FILE,
+  platform: NodeJS.Platform = process.platform,
+): Hooks {
   let parsed: unknown;
   try {
     parsed = Bun.TOML.parse(text);
@@ -583,20 +759,32 @@ export function parseHooks(text: string, file: string = HOOKS_FILE): Hooks {
   const setup = tableAt(file, root, "setup", KNOWN);
   const teardown = tableAt(file, root, "teardown", KNOWN_TEARDOWN);
 
+  const copy = perPlatformListAt(file, "setup", setup, "copy", platform);
+  const link = perPlatformListAt(file, "setup", setup, "link", platform);
+  const run = perPlatformListAt(file, "setup", setup, "run", platform);
+
+  // The other platforms' paths are checked here and their result thrown away,
+  // because this is the only place that still has them: `readHooks` checks the
+  // lists that will be used, and a `..` written for Windows would otherwise be
+  // a file that is fine on every machine but the one it was aimed at.
+  for (const value of copy.other) checkedPath("copy", value);
+  for (const value of link.other) checkedPath("link", value);
+
   // Read apart rather than one gating the other: a repository whose worktrees
   // need nothing on the way in and a `docker compose down` on the way out is an
   // ordinary repository, and returning nothing for it because `[setup]` was
   // absent would be the silent no-op this file's unknown-key check exists to
   // prevent, arrived at from the other side.
   return {
-    copy: stringsAt(file, "setup", setup, "copy"),
-    link: stringsAt(file, "setup", setup, "link"),
-    env: envAt(file, "setup", setup),
-    commands: stringsAt(file, "setup", setup, "run"),
+    copy: copy.here,
+    link: link.here,
+    env: envAt(file, "setup", setup, platform),
+    commands: run.here,
     open: openAt(file, setup),
+    elsewhere: copy.other.length + link.other.length + run.other.length,
     teardown: {
-      env: envAt(file, "teardown", teardown),
-      commands: stringsAt(file, "teardown", teardown, "run"),
+      env: envAt(file, "teardown", teardown, platform),
+      commands: perPlatformListAt(file, "teardown", teardown, "run", platform).here,
     },
     // What was read, and not where from: a text alone has no path and answers
     // to no trust record. `readLayer` is what knows both, and it is the only
@@ -638,12 +826,16 @@ function tableAt(
  * matters one level up, where a layer that exists and asks for nothing is still
  * a layer whose contents the trust record covers.
  */
-async function readLayer(path: string, gated: boolean): Promise<Hooks | undefined> {
+async function readLayer(
+  path: string,
+  gated: boolean,
+  platform?: NodeJS.Platform,
+): Promise<Hooks | undefined> {
   const file = Bun.file(path);
   if (!(await file.exists())) return undefined;
 
   const text = await file.text();
-  const hooks = parseHooks(text, basename(path));
+  const hooks = parseHooks(text, basename(path), platform);
 
   return {
     ...hooks,
@@ -652,16 +844,16 @@ async function readLayer(path: string, gated: boolean): Promise<Hooks | undefine
       ? {
           commands: hooks.commands.length,
           teardown: hooks.teardown.commands.length,
-          open: mapTargets((target) => hooks.open[target] !== ""),
+          open: mapPlatforms((target) => hooks.open[target] !== ""),
         }
       : NOTHING_GATED,
   };
 }
 
 /** The same answer for each platform, which is what half the merging here is. */
-function mapTargets<T>(of: (target: OpenTarget) => T): Readonly<Record<OpenTarget, T>> {
-  return Object.fromEntries(OPEN_TARGETS.map((target) => [target, of(target)])) as Record<
-    OpenTarget,
+function mapPlatforms<T>(of: (target: PlatformKey) => T): Readonly<Record<PlatformKey, T>> {
+  return Object.fromEntries(PLATFORM_KEYS.map((target) => [target, of(target)])) as Record<
+    PlatformKey,
     T
   >;
 }
@@ -695,6 +887,10 @@ async function gatedLayer(worktree: string, name: string): Promise<boolean> {
  * `open` decides that per platform, since a layer may name only the machine it
  * was written on.
  *
+ * The lists arrive already read for this platform — see `parseHooks` — which
+ * is why they can still simply collect: a layer that wrote its `copy` for
+ * Windows alone contributes nothing here, and there is no slot to decide.
+ *
  * What a higher layer cannot do is un-say something. There is no key for
  * "not that one", and adding one would make the effective configuration a thing
  * you work out rather than read. A `run` line you want gone belongs out of the
@@ -703,14 +899,15 @@ async function gatedLayer(worktree: string, name: string): Promise<boolean> {
 export function mergeHooks(base: Hooks, over: Hooks): Hooks {
   const names = new Set(over.env.map((each) => each.name));
   const teardownNames = new Set(over.teardown.env.map((each) => each.name));
-  const takes = (target: OpenTarget) => over.open[target] !== "";
+  const takes = (target: PlatformKey) => over.open[target] !== "";
 
   return {
     copy: union(base.copy, over.copy),
     link: union(base.link, over.link),
     env: [...base.env.filter((each) => !names.has(each.name)), ...over.env],
     commands: [...base.commands, ...over.commands],
-    open: mapTargets((target) => (takes(target) ? over.open[target] : base.open[target])),
+    open: mapPlatforms((target) => (takes(target) ? over.open[target] : base.open[target])),
+    elsewhere: base.elsewhere + over.elsewhere,
     teardown: {
       env: [
         ...base.teardown.env.filter((each) => !teardownNames.has(each.name)),
@@ -724,7 +921,7 @@ export function mergeHooks(base: Hooks, over: Hooks): Hooks {
       teardown: base.gated.teardown + over.gated.teardown,
       // The line that would run is the one whose gating counts, so this follows
       // `open` above exactly: whoever supplied the line supplies the answer.
-      open: mapTargets((target) =>
+      open: mapPlatforms((target) =>
         takes(target) ? over.gated.open[target] : base.gated.open[target],
       ),
     },
@@ -757,10 +954,15 @@ function fingerprintOfLayers(layers: readonly HookLayer[]): string | undefined {
   return fingerprintOf(gated.map((layer) => `${basename(layer.path)}\0${layer.text}`).join("\0"));
 }
 
-/** Where the machine-wide layer is read from, and who is allowed to say otherwise. */
+/**
+ * Where the machine-wide layer is read from, and who is allowed to say
+ * otherwise — and which platform the files are read for, for the same reason:
+ * a test on a Mac can ask what a Windows machine would be given.
+ */
 export type HooksOptions = {
   readonly env?: NodeJS.ProcessEnv;
   readonly home?: string;
+  readonly platform?: NodeJS.Platform;
 };
 
 /**
@@ -810,12 +1012,12 @@ export async function readHooks(worktree: string, options: HooksOptions = {}): P
   // and not three calls with a comment each.
   const local = join(worktree, LOCAL_HOOKS_FILE);
   const found = [
-    await readLayer(globalHooksPath(options.env, options.home), false),
-    await readLayer(join(worktree, HOOKS_FILE), true),
+    await readLayer(globalHooksPath(options.env, options.home), false, options.platform),
+    await readLayer(join(worktree, HOOKS_FILE), true, options.platform),
     // Asked of git only once there is a file to ask about: the tracked check is
     // a process, and the repository that has no local layer is every repository.
     (await Bun.file(local).exists())
-      ? await readLayer(local, await gatedLayer(worktree, LOCAL_HOOKS_FILE))
+      ? await readLayer(local, await gatedLayer(worktree, LOCAL_HOOKS_FILE), options.platform)
       : undefined,
   ].filter((layer): layer is Hooks => layer !== undefined);
 
@@ -836,7 +1038,11 @@ export async function readHooks(worktree: string, options: HooksOptions = {}): P
  * other.
  */
 export async function globalHooks(options: HooksOptions = {}): Promise<Hooks> {
-  const global = await readLayer(globalHooksPath(options.env, options.home), false);
+  const global = await readLayer(
+    globalHooksPath(options.env, options.home),
+    false,
+    options.platform,
+  );
 
   return global ?? NO_HOOKS;
 }

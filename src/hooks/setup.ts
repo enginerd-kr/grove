@@ -8,7 +8,7 @@ import { plural } from "../core/text.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
 import { type HookFailure, type HookTarget, runCommands, setupGate } from "./command.ts";
-import { HOOKS_FILE, type Hooks, plannedCount } from "./config.ts";
+import { configuredFiles, HOOKS_FILE, type Hooks, plannedCount, platformKeyFor } from "./config.ts";
 import { openWhatItAsksFor } from "./open.ts";
 import { repoHooks, sourceWorktree } from "./source.ts";
 import { trust } from "./trust.ts";
@@ -378,6 +378,17 @@ export async function runSetup(
     ...hooks.copy.map((path) => ({ kind: "copy" as const, path })),
     ...hooks.link.map((path) => ({ kind: "link" as const, path })),
   ];
+
+  // The one exception to that silence: a file that asks for nothing here and
+  // something on another kind of machine. Said once, for the reason `open.ts`
+  // gives — a `[setup.copy]` written for the rest of the team is a thing to
+  // find out from the run that took nothing, not from asking why afterwards.
+  // `open` is not part of this question; it has its own sentence there.
+  if (wanted.length === 0 && hooks.commands.length === 0 && hooks.elsewhere > 0) {
+    reporter.info(
+      `nothing in ${configuredFiles(hooks).join(" and ")} is for ${platformKeyFor(process.platform)}`,
+    );
+  }
 
   if (wanted.length > 0) {
     const source = await sourceWorktree(repo, target.path);

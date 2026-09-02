@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { entryExists } from "../core/fs.ts";
 import { seedGit } from "../core/test-utils.ts";
-import { HOOKS_FILE } from "./config.ts";
+import { HOOKS_FILE, platformKeyFor } from "./config.ts";
 import { trustAndRun } from "./setup.ts";
 import { runTeardown } from "./teardown.ts";
 import { type Fixture, withRepo } from "./test-utils.ts";
@@ -48,6 +48,31 @@ describe("runTeardown", () => {
       expect(await Bun.file(join(fixture.worktree, "gone.txt")).text()).toBe(
         `cleanup|${fixture.worktree}`,
       );
+    });
+  });
+
+  test("runs the platform's own [teardown.run] lines, with its own variables", async () => {
+    await withRepo(async (fixture) => {
+      const here = platformKeyFor(process.platform);
+      const elsewhere = here === "macos" ? "linux" : "macos";
+      const text = [
+        "[teardown.env]",
+        `${here} = { WHO = "${here}" }`,
+        "",
+        "[teardown.run]",
+        `${here} = ['printf "%s" "$WHO" > here.txt']`,
+        `${elsewhere} = ['touch elsewhere.txt']`,
+      ].join("\n");
+      await fixture.configure(`${text}\n`);
+      await trust(fixture.repo.gitDir, fingerprintOf(`${text}\n`));
+
+      const result = await teardown(fixture);
+
+      expect(result.planned).toBe(1);
+      expect(result.failed).toBeUndefined();
+      expect(await Bun.file(join(fixture.worktree, "here.txt")).text()).toBe(here);
+      // The other machine's line was read and checked, and not run.
+      expect(await entryExists(join(fixture.worktree, "elsewhere.txt"))).toBe(false);
     });
   });
 

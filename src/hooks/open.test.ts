@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { failureFor, pendingCommands } from "./command.ts";
-import { HOOKS_FILE, openTargetFor } from "./config.ts";
+import { HOOKS_FILE, platformKeyFor } from "./config.ts";
 import { pendingOpen } from "./open.ts";
 import { describeSetup, runSetup, trustAndRun } from "./setup.ts";
 import { repoHooks } from "./source.ts";
@@ -224,14 +224,14 @@ describe("open", () => {
       // Not silence: finding out from the run beats finding out from asking
       // why everyone else's editor opened and yours did not.
       expect(fixture.log.infos.join("\n")).toContain(
-        `nothing in ${HOOKS_FILE} opens on ${openTargetFor(process.platform)}`,
+        `nothing in ${HOOKS_FILE} opens on ${platformKeyFor(process.platform)}`,
       );
     });
   });
 
   test("the platform's own line is the one that is offered and the one that runs", async () => {
     await withRepo(async (fixture) => {
-      const here = openTargetFor(process.platform);
+      const here = platformKeyFor(process.platform);
       const elsewhere = here === "macos" ? "linux" : "macos";
       await fixture.configure(
         `[setup.open]\n${here} = "touch mine.txt"\n${elsewhere} = "touch theirs.txt"\n`,
