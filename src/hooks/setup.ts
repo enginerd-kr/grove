@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { GroveError, isGroveError } from "../core/errors.ts";
 import { entryExists, isDirectoryEntry } from "../core/fs.ts";
 import { runGit } from "../core/git.ts";
-import type { RepoPaths } from "../core/layout.ts";
+import { BARE_DIR, type RepoPaths } from "../core/layout.ts";
 import { plural } from "../core/text.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
@@ -331,6 +331,45 @@ async function takeOne(
   return "linked";
 }
 
+/** The characters that make a `copy` or `link` line a pattern rather than a path. */
+const PATTERN = /[*?[\]{}]/;
+
+/**
+ * The paths a pattern names in the trunk's worktree, or none.
+ *
+ * `packages/*\/.env` is the line a monorepo wants to write, and writing the
+ * packages out one by one is the list that is wrong the week after a package
+ * is added. A pattern is matched against what the trunk actually has, so the
+ * list is right on the day it runs; what it matched is what the run reports,
+ * path by path, because "copied `packages/*\/.env`" says nothing about
+ * whether `packages/new/.env` was there yet.
+ *
+ * Directories match too, so `link = ["packages/*\/node_modules"]` links every
+ * one of them. `.git` and `.bare` are stepped over the way `checkedPath`
+ * refuses them spelled out: a `**` reaching into either would be taking the
+ * repository itself, and in a plain clone the trunk's `.git` is the repository.
+ *
+ * Sorted, so the run reads the same on every machine and every filesystem —
+ * what a scan yields is in whatever order the directory gives it.
+ */
+async function matchPattern(pattern: string, source: string): Promise<readonly string[]> {
+  const found: string[] = [];
+  const scan = new Bun.Glob(pattern).scan({
+    cwd: source,
+    dot: true,
+    onlyFiles: false,
+    followSymlinks: false,
+  });
+
+  for await (const match of scan) {
+    const segments = match.split(/[/\\]/);
+    if (segments.some((segment) => segment === ".git" || segment === BARE_DIR)) continue;
+    found.push(segments.join("/"));
+  }
+
+  return found.toSorted();
+}
+
 /**
  * Fills in a worktree, and runs what was configured to run in it.
  *
@@ -403,8 +442,25 @@ export async function runSetup(
       const step = reporter.step(`filling in ${dir}`);
       try {
         for (const { kind, path } of wanted) {
-          const outcome = await takeOne(kind, path, source.path, target.path, written, overwritten);
-          buckets[outcome].push(path);
+          // A pattern that matches nothing is reported under its own spelling:
+          // "not in main: packages/*/.env" is the sentence that says the
+          // trunk has no packages with one, which is what happened.
+          const paths = PATTERN.test(path) ? await matchPattern(path, source.path) : [path];
+          if (paths.length === 0) {
+            missing.push(path);
+            continue;
+          }
+          for (const each of paths) {
+            const outcome = await takeOne(
+              kind,
+              each,
+              source.path,
+              target.path,
+              written,
+              overwritten,
+            );
+            buckets[outcome].push(each);
+          }
         }
       } catch (error) {
         step.fail(`could not fill in ${dir}`);
