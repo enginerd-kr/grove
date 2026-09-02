@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { render } from "ink-testing-library";
-import { plain } from "../test-utils.ts";
+import { plain, waitFor } from "../test-utils.ts";
 import { Banner, bannerRows } from "./Banner.tsx";
 
 /**
@@ -70,4 +70,85 @@ test("the height does not move with the terminal once the card is drawn", () => 
   // A constant rather than a calculation on purpose: a card that changed height
   // with what it had to say would bounce the list underneath it.
   expect(bannerRows(200, 60)).toBe(bannerRows(52, 28));
+});
+
+/** The line under the "Tips for getting started" heading, or `undefined` before the card has drawn. */
+function tipLine(frame: string | undefined): string | undefined {
+  const lines = plain(frame).split("\n");
+  const heading = lines.findIndex((line) => line.includes("Tips for getting started"));
+
+  return heading === -1 ? undefined : lines[heading + 1];
+}
+
+test("the list screen's tip turns over while the card is up, and never to itself", async () => {
+  // The refresh clock re-renders the card every minute; a tip that changed on
+  // every render would flicker, and one that never changed would be read once
+  // and never again. So it is drawn once, and turned on its own clock.
+  const instance = render(
+    <Banner
+      repoRoot="/work/repo"
+      worktrees={3}
+      here="main"
+      columns={120}
+      rows={40}
+      tipRotateMs={20}
+    />,
+  );
+
+  try {
+    const first = tipLine(instance.lastFrame());
+    expect(first).toBeDefined();
+
+    const second = await waitFor(
+      () => instance.lastFrame(),
+      (frame) => tipLine(frame) !== first,
+    );
+    expect(tipLine(second)).not.toBe(first);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("a folder with one thing left to do says that one thing, and keeps saying it", async () => {
+  // No worktrees is waiting for `a` and nothing else: there is no pool to
+  // draw from, so there is nothing to turn to, and the clock stays off.
+  const instance = render(
+    <Banner repoRoot="/work/repo" worktrees={0} columns={120} rows={40} tipRotateMs={5} />,
+  );
+
+  try {
+    const first = tipLine(instance.lastFrame());
+    expect(first).toContain("press a to plant your first worktree");
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(tipLine(instance.lastFrame())).toBe(first);
+  } finally {
+    instance.unmount();
+  }
+});
+
+test("a list that arrives after the card is up gets a fair draw, not the first tip", () => {
+  // The list is empty until the first read lands, so the card is drawn while
+  // "no worktrees yet" has one tip to give — and a draw made against a pool
+  // of one is 0 in any pool, which put the same first tip on every open.
+  const seen = new Set<string>();
+
+  for (let i = 0; i < 20; i++) {
+    const instance = render(<Banner repoRoot="/work/repo" worktrees={0} columns={120} rows={40} />);
+
+    try {
+      instance.rerender(
+        <Banner repoRoot="/work/repo" worktrees={3} here="main" columns={120} rows={40} />,
+      );
+      const tip = tipLine(instance.lastFrame());
+      expect(tip).toBeDefined();
+      seen.add(tip ?? "");
+    } finally {
+      instance.unmount();
+    }
+  }
+
+  // Twenty draws from ten tips all landing on one is a chance in 10^19, not
+  // a flake: if this fails, the draw is being made against the wrong pool.
+  expect(seen.size).toBeGreaterThan(1);
 });

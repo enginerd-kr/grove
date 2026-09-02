@@ -1,7 +1,9 @@
 import { Box, Text } from "ink";
+import { useState } from "react";
 import { version } from "../../../package.json";
 import { BIN_NAME } from "../../cli/help.ts";
 import { plural } from "../../core/text.ts";
+import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { latestChange } from "./changelog.ts";
 
@@ -13,8 +15,9 @@ import { latestChange } from "./changelog.ts";
  * way — which build this is, and which folder it opened. The app takes the
  * alternate buffer, so the command that started it is no longer on screen to
  * read the `-C` back off. The right half is the part that earns the card its
- * size: one tip matched to the state of the folder, and what changed in the
- * release you are looking at.
+ * size: a tip for the state of the folder — drawn at random from what that
+ * state has to say, and turned over while the screen is up — and what changed
+ * in the release you are looking at.
  *
  * It costs rows, so it gives them back when there are none to spare: below a
  * short or narrow terminal the card goes and the same facts are drawn as one
@@ -113,18 +116,65 @@ function greeting(): string {
 }
 
 /**
- * One tip, picked by what the folder is waiting for. The same four states
- * `describeFolder` reads, answered with the key that moves each one along.
+ * How long a tip stays before the next one. Standing advice, not a spinner:
+ * long enough to read and act on before it turns, and the same cadence the
+ * message slot under the list turns its own tips on.
  */
-function tipFor(worktrees?: number, repos?: number): string {
+const TIP_ROTATE_MS = 60_000;
+
+/**
+ * What the screen with a list on it has to say, one line each and none wider
+ * than the column at its narrowest (42 cells at `TIPS_COLUMNS`) — a tip that
+ * truncated would be advice with the key cut off the end.
+ *
+ * Every key and every `/` command here is one the list screen actually has;
+ * a tip for a key that does nothing is worse than no tip.
+ */
+const LIST_TIPS: readonly string[] = [
+  "press a to add, s to sync, r to remove",
+  "enter copies the path under the cursor",
+  "/ holds every command without a key",
+  "h shuts a folder, l opens it back up",
+  "x discards a dirty row's changes",
+  "r on a folder removes everything under it",
+  "/ log shows the commits under the list",
+  "/ prune clears rows marked merged or gone",
+  "/ review checks out an open pull request",
+  "q quits and puts the shell back as it was",
+];
+
+/**
+ * The tips for what the folder is waiting for. The same four states
+ * `describeFolder` reads, answered with the key that moves each one along.
+ *
+ * Three of them have exactly one thing to say — a folder with no repository
+ * is waiting for a URL and nothing else — so they say it, every time. The
+ * list screen has many keys, and a card that named the same three on every
+ * open would be read once and never again, so it draws from `LIST_TIPS`.
+ */
+function tipsFor(worktrees?: number, repos?: number): readonly string[] {
   if (worktrees === undefined) {
     return repos === undefined
-      ? `run ${BIN_NAME} clone <url> to plant a repository here`
-      : "press enter to open the one you meant";
+      ? [`run ${BIN_NAME} clone <url> to plant a repository here`]
+      : ["press enter to open the one you meant"];
   }
-  if (worktrees === 0) return "press a to plant your first worktree";
+  if (worktrees === 0) return ["press a to plant your first worktree"];
 
-  return "press a to add, s to sync, r to remove";
+  return LIST_TIPS;
+}
+
+/** Where a draw of `pick` (in `[0, 1)`) lands in a pool of `length`. */
+function indexOf(pick: number, length: number): number {
+  return Math.floor(pick * length);
+}
+
+/** A new draw that lands somewhere other than `pick` does in a pool of `length`, or `pick` when there is nowhere else. */
+function anotherPick(pick: number, length: number): number {
+  if (length < 2) return pick;
+
+  let next = pick;
+  while (indexOf(next, length) === indexOf(pick, length)) next = Math.random();
+  return next;
 }
 
 type Props = {
@@ -142,11 +192,38 @@ type Props = {
   readonly repos?: number;
   readonly columns: number;
   readonly rows: number;
+  /** How often the tip turns to another, in ms. Defaults to `TIP_ROTATE_MS`; tests drive it faster. */
+  readonly tipRotateMs?: number;
 };
 
-export function Banner({ repoRoot, worktrees, here, repos, columns, rows }: Props) {
+export function Banner({
+  repoRoot,
+  worktrees,
+  here,
+  repos,
+  columns,
+  rows,
+  tipRotateMs = TIP_ROTATE_MS,
+}: Props) {
   const folder = describeFolder(worktrees, here, repos);
   const release = ` v${version}`;
+
+  // Which tip is up, drawn once at mount rather than on every render — the
+  // refresh clock re-renders this card every minute, and a tip that re-rolled
+  // with each one would flicker through the pool instead of turning through
+  // it. What is held is the draw, a number in `[0, 1)`, not the index it
+  // lands on: the pool changes size under the card (the list is empty until
+  // the first read lands, and the first `a` turns "no worktrees yet" into a
+  // list), and an index drawn against a pool of one is always 0 — which made
+  // every open land on the same first tip. A draw is fair in whatever pool is
+  // current.
+  const tips = tipsFor(worktrees, repos);
+  const [pick, setPick] = useState(Math.random);
+  const tip = tips[indexOf(pick, tips.length)] ?? "";
+  useInterval(
+    () => setPick((current) => anotherPick(current, tips.length)),
+    tips.length > 1 ? tipRotateMs : null,
+  );
 
   if (!roomy(columns, rows)) {
     // One line, and the path is what yields: the name and the version are short
@@ -242,7 +319,7 @@ export function Banner({ repoRoot, worktrees, here, repos, columns, rows }: Prop
             <Text bold color={theme.accent} wrap="truncate">
               Tips for getting started
             </Text>
-            <Text wrap="truncate">{tipFor(worktrees, repos)}</Text>
+            <Text wrap="truncate">{tip}</Text>
             {news !== undefined && (
               <>
                 <Text color={theme.muted} wrap="truncate">
