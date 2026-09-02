@@ -6,6 +6,7 @@ import { createStoreReporter, LineStore } from "../../src/report/lines.ts";
 import { App } from "../../src/ui/app/App.tsx";
 import { createWorktreeService } from "../../src/ui/app/service.ts";
 import { keys } from "../../src/ui/test-utils.ts";
+import { resetDice } from "./dice.ts";
 import { buildFixture, type Fixture } from "./fixture.ts";
 import { open, type Session } from "./screen.tsx";
 import { toSvg } from "./svg.ts";
@@ -106,6 +107,9 @@ function check(shot: Shot, frame: string, root: string): void {
 }
 
 async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
+  // Every shot's banner draws its tip on mount; the same first face for each.
+  resetDice();
+
   const store = new LineStore();
   const reporter = createStoreReporter(store, (text) => {
     for (const line of text.trimEnd().split("\n")) store.addNote("info", line);
