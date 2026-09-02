@@ -19,6 +19,7 @@ app/Banner.tsx    the welcome: name, version, folder — and how many rows it to
 app/Log.tsx       the commits under the list, for the row the cursor is on
 app/Files.tsx     the uncommitted files beside the list, as the tree they sit in
 app/PullRequests.tsx  the open pull requests, as a list to pick one out of
+app/Bases.tsx     `/rebase`: the bases a worktree can go onto, as a list to pick one out of
 app/Menu.tsx      `/`: the commands with no key of their own, as a list to type at
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
@@ -235,7 +236,8 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   Anything clipped is counted on a leading row rather than dropped, since a line going missing off
   the top without the screen admitting it is what started this.
 - **One `useInput`, one `mode`.** Every key goes through a single handler that switches on
-  `list | add | confirm | pick | menu | busy`, rather than each component claiming its own input.
+  `list | add | confirm | pick | onto | menu | busy`, rather than each component claiming its own
+  input.
   The failure that prevents: `a` opening the branch prompt and the next keypress being read as a
   command. While `busy`, keys are dropped — except Ctrl-C, which stops the git child before
   unmounting.

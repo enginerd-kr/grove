@@ -3,11 +3,11 @@
 <rect x="1" y="30" width="975" height="882" fill="#141619"/>
 <circle cx="20" cy="15" r="5.5" fill="#ff5f57"/><circle cx="37" cy="15" r="5.5" fill="#febc2e"/><circle cx="54" cy="15" r="5.5" fill="#28c840"/>
 <text x="488.5" y="19" fill="#8b8f98" font-size="12" text-anchor="middle">grove — / opens the command menu</text>
-<rect x="43.2" y="671.0" width="8.4" height="19" fill="#e4e6ea"/>
+<rect x="43.2" y="652.0" width="8.4" height="19" fill="#e4e6ea"/>
 <path fill="#98c379" opacity="1" d="M156.60 148.50h4.20v9.50h-4.20zM160.80 148.50h8.40v9.50h-8.40zM169.20 148.50h4.20v9.50h-4.20zM190.20 148.50h4.20v9.50h-4.20zM194.40 148.50h8.40v9.50h-8.40zM202.80 148.50h4.20v9.50h-4.20zM156.60 158.00h4.20v9.50h-4.20zM160.80 158.00h4.20v9.50h-4.20zM165.00 158.00h4.20v9.50h-4.20zM165.00 167.50h4.20v9.50h-4.20zM169.20 158.00h8.40v19.00h-8.40zM177.60 167.50h8.40v9.50h-8.40zM186.00 158.00h8.40v19.00h-8.40zM194.40 158.00h4.20v9.50h-4.20zM198.60 158.00h4.20v9.50h-4.20zM194.40 167.50h4.20v9.50h-4.20zM202.80 158.00h4.20v9.50h-4.20zM181.80 177.00h4.20v19.00h-4.20zM186.00 177.00h4.20v19.00h-4.20z"/>
 <path fill="none" stroke="#5c6370" stroke-width="1.3" opacity="1" d="M22.20 82.00V75.50Q22.20 72.50 25.20 72.50H26.40M26.40 72.50H34.80M152.40 72.50H950.40M954.60 82.00V75.50Q954.60 72.50 951.60 72.50H950.40M22.20 82.00V101.00M954.60 82.00V101.00M22.20 101.00V120.00M333.00 101.00V120.00M954.60 101.00V120.00M22.20 120.00V139.00M333.00 120.00V139.00M954.60 120.00V139.00M22.20 139.00V158.00M333.00 139.00V158.00M354.00 148.50H942.00M954.60 139.00V158.00M22.20 158.00V177.00M333.00 158.00V177.00M954.60 158.00V177.00M22.20 177.00V196.00M333.00 177.00V196.00M954.60 177.00V196.00M22.20 196.00V215.00M333.00 196.00V215.00M954.60 196.00V215.00M22.20 215.00V234.00M333.00 215.00V234.00M954.60 215.00V234.00M22.20 234.00V253.00M333.00 234.00V253.00M954.60 234.00V253.00M22.20 253.00V259.50Q22.20 262.50 25.20 262.50H26.40M26.40 262.50H950.40M954.60 253.00V259.50Q954.60 262.50 951.60 262.50H950.40"/>
-<path fill="none" stroke="#e4e6ea" stroke-width="1.3" opacity="0.6" d="M18.00 319.50H958.80M18.00 547.50H34.80M228.00 547.50H958.80M18.00 870.50H958.80"/>
-<path fill="none" stroke="#56b6c2" stroke-width="1.3" opacity="1" d="M22.20 671.00V664.50Q22.20 661.50 25.20 661.50H26.40M26.40 661.50H950.40M954.60 671.00V664.50Q954.60 661.50 951.60 661.50H950.40M22.20 671.00V690.00M954.60 671.00V690.00M22.20 690.00V709.00M954.60 690.00V709.00M22.20 709.00V728.00M954.60 709.00V728.00M22.20 728.00V747.00M954.60 728.00V747.00M22.20 747.00V766.00M954.60 747.00V766.00M22.20 766.00V785.00M954.60 766.00V785.00M22.20 785.00V804.00M954.60 785.00V804.00M22.20 804.00V823.00M954.60 804.00V823.00M22.20 823.00V829.50Q22.20 832.50 25.20 832.50H26.40M26.40 832.50H950.40M954.60 823.00V829.50Q954.60 832.50 951.60 832.50H950.40"/>
+<path fill="none" stroke="#e4e6ea" stroke-width="1.3" opacity="0.6" d="M18.00 319.50H958.80M18.00 528.50H34.80M228.00 528.50H958.80M18.00 870.50H958.80"/>
+<path fill="none" stroke="#56b6c2" stroke-width="1.3" opacity="1" d="M22.20 652.00V645.50Q22.20 642.50 25.20 642.50H26.40M26.40 642.50H950.40M954.60 652.00V645.50Q954.60 642.50 951.60 642.50H950.40M22.20 652.00V671.00M954.60 652.00V671.00M22.20 671.00V690.00M954.60 671.00V690.00M22.20 690.00V709.00M954.60 690.00V709.00M22.20 709.00V728.00M954.60 709.00V728.00M22.20 728.00V747.00M954.60 728.00V747.00M22.20 747.00V766.00M954.60 747.00V766.00M22.20 766.00V785.00M954.60 766.00V785.00M22.20 785.00V804.00M954.60 785.00V804.00M22.20 804.00V823.00M954.60 804.00V823.00M22.20 823.00V829.50Q22.20 832.50 25.20 832.50H26.40M26.40 832.50H950.40M954.60 823.00V829.50Q954.60 832.50 951.60 832.50H950.40"/>
 <text x="43.2" y="77.0" fill="#56b6c2" font-weight="600" textLength="42.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">grove</text>
 <text x="85.2" y="77.0" fill="#5c6370" textLength="67.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> v0.4.4 </text>
 <text x="118.8" y="115.0" fill="#e4e6ea" font-weight="600" textLength="109.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Welcome back!</text>
@@ -55,29 +55,31 @@
 <text x="261.6" y="476.0" fill="#e5c07b" textLength="16.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">↓2</text>
 <text x="312.0" y="476.0" fill="#e4e6ea" opacity="0.6" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">○</text>
 <text x="387.6" y="476.0" fill="#e4e6ea" opacity="0.6" textLength="50.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2d ago</text>
-<text x="34.8" y="552.0" fill="#e4e6ea" opacity="0.6" textLength="193.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> commits in feat/login </text>
-<text x="34.8" y="571.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">359a72c</text>
-<text x="110.4" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2h ago          </text>
-<text x="261.6" y="571.0" fill="#56b6c2" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(HEAD -&gt; feat/login) </text>
-<text x="438.0" y="571.0" fill="#e4e6ea" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Cover the form</text>
-<text x="34.8" y="590.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">76ae225</text>
-<text x="110.4" y="590.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3h ago          </text>
-<text x="244.8" y="590.0" fill="#e4e6ea" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add the form</text>
-<text x="34.8" y="609.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">d0c5935</text>
-<text x="110.4" y="609.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2h ago          </text>
-<text x="261.6" y="609.0" fill="#56b6c2" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(origin/feat/login) </text>
-<text x="429.6" y="609.0" fill="#e4e6ea" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Start feat/login</text>
-<text x="34.8" y="628.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">e2d44d2</text>
-<text x="110.4" y="628.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-08 13:00</text>
-<text x="244.8" y="628.0" fill="#e4e6ea" textLength="243.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Set worktrees up on arrival</text>
-<text x="34.8" y="647.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3c03a3d</text>
-<text x="110.4" y="647.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-08 03:00</text>
-<text x="244.8" y="647.0" fill="#e4e6ea" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add the entry point</text>
-<text x="34.8" y="685.0" fill="#56b6c2" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/</text>
-<text x="34.8" y="704.0" fill="#56b6c2" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▸ /open    </text>
-<text x="144.0" y="704.0" fill="#e4e6ea" opacity="0.6" textLength="546.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">open the row under the cursor with what .grove.toml's `open` says</text>
-<text x="51.6" y="723.0" fill="#e4e6ea" opacity="0.6" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/setup   </text>
-<text x="144.0" y="723.0" fill="#e4e6ea" opacity="0.6" textLength="462.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">fill the row under the cursor in from .grove.toml again</text>
+<text x="34.8" y="533.0" fill="#e4e6ea" opacity="0.6" textLength="193.2" lengthAdjust="spacingAndGlyphs" xml:space="preserve"> commits in feat/login </text>
+<text x="34.8" y="552.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">359a72c</text>
+<text x="110.4" y="552.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2h ago          </text>
+<text x="261.6" y="552.0" fill="#56b6c2" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(HEAD -&gt; feat/login) </text>
+<text x="438.0" y="552.0" fill="#e4e6ea" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Cover the form</text>
+<text x="34.8" y="571.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">76ae225</text>
+<text x="110.4" y="571.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3h ago          </text>
+<text x="244.8" y="571.0" fill="#e4e6ea" textLength="117.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add the form</text>
+<text x="34.8" y="590.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">d0c5935</text>
+<text x="110.4" y="590.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2h ago          </text>
+<text x="261.6" y="590.0" fill="#56b6c2" textLength="168.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">(origin/feat/login) </text>
+<text x="429.6" y="590.0" fill="#e4e6ea" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">Start feat/login</text>
+<text x="34.8" y="609.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">e2d44d2</text>
+<text x="110.4" y="609.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-08 13:00</text>
+<text x="244.8" y="609.0" fill="#e4e6ea" textLength="243.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Set worktrees up on arrival</text>
+<text x="34.8" y="628.0" fill="#e5c07b" textLength="58.8" lengthAdjust="spacingAndGlyphs" xml:space="preserve">3c03a3d</text>
+<text x="110.4" y="628.0" fill="#e4e6ea" opacity="0.6" textLength="134.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">2026-08-08 03:00</text>
+<text x="244.8" y="628.0" fill="#e4e6ea" textLength="176.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">  Add the entry point</text>
+<text x="34.8" y="666.0" fill="#56b6c2" textLength="8.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/</text>
+<text x="34.8" y="685.0" fill="#56b6c2" textLength="92.4" lengthAdjust="spacingAndGlyphs" xml:space="preserve">▸ /open    </text>
+<text x="144.0" y="685.0" fill="#e4e6ea" opacity="0.6" textLength="546.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">open the row under the cursor with what .grove.toml's `open` says</text>
+<text x="51.6" y="704.0" fill="#e4e6ea" opacity="0.6" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/setup   </text>
+<text x="144.0" y="704.0" fill="#e4e6ea" opacity="0.6" textLength="462.0" lengthAdjust="spacingAndGlyphs" xml:space="preserve">fill the row under the cursor in from .grove.toml again</text>
+<text x="51.6" y="723.0" fill="#e4e6ea" opacity="0.6" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/rebase  </text>
+<text x="144.0" y="723.0" fill="#e4e6ea" opacity="0.6" textLength="579.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">rebase the row under the cursor onto a base you pick, changes carried</text>
 <text x="51.6" y="742.0" fill="#e4e6ea" opacity="0.6" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/sync-all</text>
 <text x="144.0" y="742.0" fill="#e4e6ea" opacity="0.6" textLength="453.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">sync every worktree, not just the row under the cursor</text>
 <text x="51.6" y="761.0" fill="#e4e6ea" opacity="0.6" textLength="75.6" lengthAdjust="spacingAndGlyphs" xml:space="preserve">/prune   </text>

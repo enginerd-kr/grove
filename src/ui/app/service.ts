@@ -6,6 +6,13 @@ import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands
 import { openWorktree } from "../../core/commands/open.ts";
 import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
 import { describePrune, type PruneResult, pruneWorktrees } from "../../core/commands/prune.ts";
+import {
+  type RebaseBase,
+  type RebaseChoice,
+  rebaseChoices,
+  failureFor as rebaseFailureFor,
+  rebaseWorktree,
+} from "../../core/commands/rebase.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { setUpWorktrees, failureFor as setupFailureFor } from "../../core/commands/setup.ts";
@@ -201,6 +208,27 @@ export type WorktreeService = {
    * the outcome was carrying is the one thing that would not reach the eye.
    */
   readonly sync: (target?: string, options?: SyncAsked) => Promise<string>;
+  /**
+   * The bases `/rebase` can offer for one worktree, read before the popup opens.
+   *
+   * Its own remote, the parent it was stacked on, the trunk, and the other
+   * worktrees' branches — the same rows, in the same order, that `grove
+   * rebase` lists at a terminal when no flag named one. Never empty: the trunk
+   * is always among them. Any ref not on the list is `--onto <ref>`, which is
+   * where a name gets typed.
+   */
+  readonly rebaseChoices: (target: string) => Promise<readonly RebaseChoice[]>;
+  /**
+   * `grove rebase <target>` onto the base that was picked, and nothing pushed.
+   *
+   * Uncommitted changes are carried through rather than refused, which is the
+   * one thing here that touches a dirty worktree without a `y` first — and it
+   * can, because the command promises the worktree ends up either rebased with
+   * the changes back in it or exactly as it was. What the command line exits 5
+   * for — a conflict, on either side of the rebase — is raised, the way
+   * `sync`'s is: a red line, since the rebase did not stand.
+   */
+  readonly rebase: (target: string, base: RebaseBase) => Promise<string>;
   /**
    * What `grove prune` would remove, and what it would leave — removing nothing.
    *
@@ -578,6 +606,31 @@ export function createWorktreeService(
       if (failure) throw failure;
 
       return `${describeSync(outcomes)}${describeUnpublished(outcomes)}`;
+    },
+
+    rebaseChoices: async (target) => (await rebaseChoices(repo, cwd, target)).choices,
+
+    rebase: async (target, base) => {
+      // The command line's defaults, exactly: fetch first, carry the changes,
+      // and undo the whole thing on a conflict. `--no-abort` and `--no-stash`
+      // stay spellings that have to be typed.
+      const result = await rebaseWorktree(
+        repo,
+        cwd,
+        { target, base, fetch: true, abortOnConflict: true, carry: true },
+        reporter,
+      );
+
+      const failure = rebaseFailureFor(result);
+      if (failure) throw failure;
+
+      // Said on the line, because it is the part somebody would otherwise go
+      // and check: the edit they had open is back where it was.
+      const carried =
+        result.carried === undefined ? "" : `, ${plural(result.carried.changes, "change")} carried`;
+      if (result.kind === "up-to-date") return `${result.dir} already on ${result.onto}${carried}`;
+
+      return `${result.dir} rebased onto ${result.onto}${carried}`;
     },
   };
 }

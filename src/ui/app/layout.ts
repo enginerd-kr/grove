@@ -7,6 +7,7 @@ import {
 import type { Line } from "../../report/lines.ts";
 import { type Hint, statusBarRows } from "../components/StatusBar.tsx";
 import { bannerRows } from "./Banner.tsx";
+import { baseRows } from "./Bases.tsx";
 import { menuRows } from "./Menu.tsx";
 import { type Message, messageRows } from "./message.ts";
 import { pullRequestRows } from "./PullRequests.tsx";
@@ -70,17 +71,27 @@ const LOG_MIN_ROWS = 2;
 const PR_ROWS = 8;
 
 /**
+ * The most bases the rebase popup draws at once.
+ *
+ * The pull-request popup's number, for the pull-request popup's reason: the
+ * list is as long as the repository has worktrees, which is not ours to pin,
+ * and past eight it scrolls. `--onto <ref>` on the command line is where a
+ * name gets typed when the list is longer than a glance.
+ */
+const BASE_ROWS = 8;
+
+/**
  * The most commands the slash menu draws at once.
  *
- * Smaller than the pull-request popup's eight, because the two lists grow for
- * different reasons: how many pull requests are open is the forge's business,
- * while how many commands there are is ours. It is pinned to exactly how many
- * there are, so the menu is a list you read and never one you scroll — and
- * adding a command means raising this on purpose, having decided the list is
- * still short enough to be read whole. Past eight or so it is not, and the
- * answer to that is fewer commands rather than a taller popup.
+ * The same as the pull-request popup's eight now, but for a different reason:
+ * how many pull requests are open is the forge's business, while how many
+ * commands there are is ours. It is pinned to exactly how many there are, so
+ * the menu is a list you read and never one you scroll — and adding a command
+ * means raising this on purpose, having decided the list is still short enough
+ * to be read whole. `rebase` made it eight, which is the edge of it; the next
+ * one is an argument for fewer commands rather than a taller popup.
  */
-const MENU_ROWS = 7;
+const MENU_ROWS = 8;
 
 /**
  * The rows the list keeps whatever else wants them.
@@ -119,6 +130,8 @@ export type LayoutMode =
   | { readonly kind: "add" }
   | { readonly kind: "confirm" }
   | { readonly kind: "pick"; readonly prs: { readonly length: number } }
+  /** `/rebase`'s popup: the bases offered for the row under the cursor. */
+  | { readonly kind: "onto"; readonly choices: { readonly length: number } }
   /** `matches` is what the query narrowed to, which is what the popup draws. */
   | { readonly kind: "menu"; readonly matches: number };
 
@@ -148,6 +161,11 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
   pick: [
     { keys: "↑↓", action: "move" },
     { keys: "enter", action: "check out" },
+    { keys: "esc", action: "cancel" },
+  ],
+  onto: [
+    { keys: "↑↓", action: "move" },
+    { keys: "enter", action: "rebase" },
     { keys: "esc", action: "cancel" },
   ],
   // No `type to narrow` hint: the prompt is on screen with a caret blinking in
@@ -271,6 +289,8 @@ export type Regions = {
   readonly detailRows: number;
   /** How many pull requests the popup may draw. */
   readonly prBody: number;
+  /** How many bases the rebase popup may draw. */
+  readonly baseBody: number;
   /** How many commands the slash menu may draw. */
   readonly menuBody: number;
   /** Lines the activity area could not fit, said rather than silently dropped. */
@@ -345,11 +365,13 @@ export function regionsFor({
    */
   const popupBody = Math.max(1, terminalRows - headerRows - footerRows - 3 - MIN_LIST_ROWS);
   const prBody = Math.min(PR_ROWS, popupBody);
+  const baseBody = Math.min(BASE_ROWS, popupBody);
   const menuBody = Math.min(MENU_ROWS, popupBody);
 
   const detailRows =
     (mode.kind === "add" ? 3 : 0) +
     (mode.kind === "pick" ? pullRequestRows(mode.prs.length, prBody) : 0) +
+    (mode.kind === "onto" ? baseRows(mode.choices.length, baseBody) : 0) +
     (mode.kind === "menu" ? menuRows(mode.matches, menuBody) : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     // `busy` takes the message row rather than leaving it empty: it is one
@@ -412,6 +434,7 @@ export function regionsFor({
     footerRows,
     detailRows,
     prBody,
+    baseBody,
     menuBody,
     clipped,
     activity,

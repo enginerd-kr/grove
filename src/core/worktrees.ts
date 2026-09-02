@@ -183,6 +183,19 @@ async function rebaseState(path: string): Promise<{ branch?: string } | undefine
 }
 
 /**
+ * Whether a rebase is stopped part-way in this worktree, right now.
+ *
+ * `listWorktrees` answers the same question for every worktree at once, off a
+ * list read before anything ran. This is for the command that has just run
+ * `git rebase` and has to know whether a nonzero exit left one behind — a
+ * conflict to abort or leave — or refused before it began, with nothing to
+ * abort at all.
+ */
+export async function isMidRebase(path: string): Promise<boolean> {
+  return (await rebaseState(path)) !== undefined;
+}
+
+/**
  * Every worktree the repository has, without the bare entry nobody visits.
  *
  * Detached records are checked for an interrupted rebase, so callers see the

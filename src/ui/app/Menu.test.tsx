@@ -29,8 +29,12 @@ describe("matching", () => {
     expect(matching(COMMANDS, "zzz")).toEqual([]);
   });
 
-  test("`re` keeps both the commands that hold it, in their declared order", () => {
-    expect(matching(COMMANDS, "re").map((command) => command.name)).toEqual(["review", "refresh"]);
+  test("`re` keeps every command that holds it, in their declared order", () => {
+    expect(matching(COMMANDS, "re").map((command) => command.name)).toEqual([
+      "rebase",
+      "review",
+      "refresh",
+    ]);
   });
 });
 

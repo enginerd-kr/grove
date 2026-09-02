@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { version } from "../../package.json";
+import type { RebaseBase } from "../core/commands/rebase.ts";
 import type { FlagSpec, SubcommandSpec } from "./help.ts";
 import {
   findSubcommand,
@@ -114,6 +115,20 @@ export type GroveCommand =
       readonly abortOnConflict: boolean;
       readonly push: boolean;
       readonly publish: boolean;
+    }
+  | {
+      readonly name: "rebase";
+      readonly target?: string;
+      /**
+       * Where the branch goes, when a flag said. Absent means nobody said,
+       * which `run.ts` turns into a question at a terminal and a usage error
+       * everywhere else — the parser cannot tell which of those it is.
+       */
+      readonly base?: RebaseBase;
+      readonly fetch: boolean;
+      readonly abortOnConflict: boolean;
+      /** `--no-stash` off: carry uncommitted changes through the rebase. */
+      readonly carry: boolean;
     };
 
 export type CliCommand =
@@ -307,6 +322,30 @@ function buildCommand(
         push: !bool(values, "no-push"),
         publish: bool(values, "publish"),
       };
+    case "rebase": {
+      const onto = str(values, "onto");
+      const bases: RebaseBase[] = [
+        ...(onto === undefined ? [] : [{ kind: "ref", ref: onto } as const]),
+        ...(bool(values, "upstream") ? [{ kind: "upstream" } as const] : []),
+        ...(bool(values, "trunk") ? [{ kind: "trunk" } as const] : []),
+      ];
+      // Refused rather than ranked, the way `add` refuses `--on` beside
+      // `--from`: two bases is two answers to the one question the command
+      // asks, and picking either would move the branch somewhere the other
+      // flag was typed to send it away from.
+      if (bases.length > 1) {
+        return usageError(spec, "--onto, --upstream and --trunk each name the base; pass one");
+      }
+
+      return {
+        name: "rebase",
+        target: first,
+        base: bases[0],
+        fetch: !bool(values, "no-fetch"),
+        abortOnConflict: !bool(values, "no-abort"),
+        carry: !bool(values, "no-stash"),
+      };
+    }
     default:
       // Unreachable while `SUBCOMMANDS` and this switch agree; a new entry in
       // the table without a case here surfaces as a usage error, not a crash.

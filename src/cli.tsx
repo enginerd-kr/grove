@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { parseCliArgs } from "./cli/args.ts";
-import { terminalAsker } from "./cli/ask.ts";
+import { terminalAsker, terminalChooser } from "./cli/ask.ts";
 import { ExitCode, errorToExitCode } from "./cli/exit-codes.ts";
 import { runCommand } from "./cli/run.ts";
 import { isGroveError } from "./core/errors.ts";
@@ -156,6 +156,7 @@ try {
     global: command.global,
     reporter,
     ask: attended ? terminalAsker(reporter) : undefined,
+    choose: attended ? terminalChooser(reporter) : undefined,
   });
   await reporter.close();
 
