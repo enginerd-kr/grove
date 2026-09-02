@@ -1231,7 +1231,7 @@ export function App({
           {"    "}
           {padTo("worktree", widths.tree)}
           {GAP}
-          {widths.remote > 0 ? `${padTo("origin", widths.remote)}${GAP}` : ""}
+          {widths.remote > 0 ? `${padTo("remote", widths.remote)}${GAP}` : ""}
           {/* Named after the branch it compares against, since `master` and
               `trunk` are both things people call it. */}
           {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}${GAP}` : ""}

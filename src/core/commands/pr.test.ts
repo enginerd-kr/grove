@@ -18,6 +18,7 @@ import {
 import { checkoutPullRequest, listPullRequests, type PrResult } from "./pr.ts";
 import { removeWorktree } from "./remove.ts";
 import { resetWorktree } from "./reset.ts";
+import { syncWorktrees } from "./sync.ts";
 
 /**
  * `grove pr` against a real repository and a fake forge.
@@ -365,6 +366,43 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
       expect(narrated).toContain("git push there sends it back to octocat:fix/crash");
       // Nothing about the pull request went to stdout: the result is the result.
       expect(outcome.log.out).toEqual([]);
+    });
+  }, 90_000);
+
+  test("`grove sync` in that worktree goes back to the pull request too, whatever pushDefault says", async () => {
+    await withForge(async (forge) => {
+      await forge.answer();
+      await forge.propose("fix/crash", "one\n", "Fix the crash");
+      const result = await pr(forge, "42");
+
+      // The fork workflow's global setting: "push everything to my fork".
+      // `origin` here is acme's repository — where a `pr/42` branch would be
+      // a new branch nobody asked for, and the pull request left untouched.
+      await seedGit(forge.repo.gitDir, ["config", "remote.pushDefault", "origin"]);
+
+      await Bun.write(join(result.path, "crash.txt"), "two\n");
+      await seedGit(result.path, ["add", "-A"]);
+      await seedGit(result.path, ["-c", "commit.gpgsign=false", "commit", "-m", "Review fix"]);
+
+      const outcomes = await attempt((reporter) =>
+        syncWorktrees(
+          forge.repo,
+          forge.repo.root,
+          { target: "pr/42", all: false, abortOnConflict: true, push: true, publish: false },
+          reporter,
+        ),
+      );
+      const [outcome] = succeeded(outcomes);
+
+      expect(outcome).toMatchObject({ branch: "pr/42", kind: "up-to-date", pushed: true });
+      expect(outcomes.log.err.join("")).toContain("pushed pr/42 to pr-42/fix/crash");
+
+      // The fork's `fix/crash` is now the review commit, and acme's repository
+      // has no `pr/42`.
+      const forkTip = (await probeGit(forge.fork, ["rev-parse", "fix/crash"])).stdout.trim();
+      expect(forkTip).toBe(await headOf(result.path));
+      const onBase = await probeGit(forge.base, ["rev-parse", "--verify", "--quiet", "pr/42"]);
+      expect(onBase.code).not.toBe(0);
     });
   }, 90_000);
 

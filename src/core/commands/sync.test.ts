@@ -579,6 +579,87 @@ describe("grove sync", () => {
  * asserted; leaving it on would only add the `--force-with-lease` machinery to
  * a test about which commit a rebase lands on.
  */
+describe("grove sync in a fork", () => {
+  /** A commit on `branch` of the bare repository at `remotePath`, from outside. */
+  async function commitOn(
+    temp: TempRepo,
+    remotePath: string,
+    branch: string,
+    file: string,
+  ): Promise<void> {
+    scratchCount += 1;
+    const scratch = join(temp.root, `elsewhere-${scratchCount}`);
+    await seedGit(temp.root, ["clone", "--branch", branch, remotePath, scratch]);
+    await Bun.write(join(scratch, file), `${file}\n`);
+    await seedGit(scratch, ["add", "-A"]);
+    await seedGit(scratch, ["-c", "commit.gpgsign=false", "commit", "-m", `Add ${file}`]);
+    await seedGit(scratch, ["push", "origin", `HEAD:${branch}`]);
+    await rm(scratch, { recursive: true, force: true });
+  }
+
+  async function hasBranch(remotePath: string, branch: string): Promise<boolean> {
+    const probe = await probeGit(remotePath, ["rev-parse", "--verify", "--quiet", branch]);
+
+    return probe.code === 0;
+  }
+
+  test("measures the trunk against what it tracks, and pushes where git push would", async () => {
+    await withTempRepo(async (temp) => {
+      // `origin` is the fork — what `grove clone` of your own fork makes — and
+      // the repository it was forked from is a second remote, set up the way
+      // every forking guide says to: add it, and tell `main` to follow it.
+      // `remote.pushDefault` is git's own word for "and push to the fork".
+      const repo = await managedRepo(temp);
+      const canonical = join(temp.root, "canonical.git");
+      await seedGit(temp.root, ["clone", "--bare", temp.originPath, canonical]);
+      await seedGit(repo.gitDir, ["remote", "add", "upstream", `file://${canonical}`]);
+      await seedGit(repo.gitDir, ["fetch", "upstream"]);
+      await seedGit(repo.gitDir, ["branch", "--set-upstream-to=upstream/main", "main"]);
+      await seedGit(repo.gitDir, ["config", "remote.pushDefault", "origin"]);
+
+      // The canonical trunk moves; the fork's copy does not.
+      await commitOn(temp, canonical, "main", "canon.txt");
+
+      // A new branch is cut from the trunk that moved, not the fork's stale one.
+      const added = await seedWorktree(repo, "feat/x");
+      expect(await Bun.file(join(added.path, "canon.txt")).exists()).toBe(true);
+      expect(added.upstream).toBeUndefined();
+
+      await commitIn(added.path, "x.txt", "x\n");
+      const published = succeeded(await attemptSync(repo, { target: "feat/x", publish: true }));
+
+      expect(published).toEqual([
+        {
+          path: added.path,
+          dir: "feat/x",
+          branch: "feat/x",
+          kind: "up-to-date",
+          onto: "upstream/main",
+          pushed: true,
+        },
+      ]);
+      // To the fork, by `pushDefault`, and not to the repository it follows.
+      expect(await hasBranch(temp.originPath, "feat/x")).toBe(true);
+      expect(await hasBranch(canonical, "feat/x")).toBe(false);
+      expect(await head(added.path, "origin/feat/x")).toBe(await head(added.path));
+
+      // The trunk fast-forwards to what it tracks. Nothing is pushed: a
+      // fast-forward publishes nothing, and the fork's `main` stays where the
+      // fork left it, which is its owner's business and not this command's.
+      await commitOn(temp, canonical, "main", "canon-two.txt");
+      const main = join(repo.root, "main");
+      const forwarded = succeeded(await attemptSync(repo, { target: "main" }));
+
+      expect(forwarded).toEqual([
+        { path: main, dir: "main", branch: "main", kind: "fast-forwarded", onto: "upstream/main" },
+      ]);
+      expect(await Bun.file(join(main, "canon-two.txt")).exists()).toBe(true);
+      expect(await head(main)).toBe(await head(main, "upstream/main"));
+      expect(await head(main, "origin/main")).not.toBe(await head(main));
+    });
+  });
+});
+
 describe("grove sync over a stack", () => {
   /** `feat/a` off the trunk, `feat/b` on top of it, each with a commit of its own. */
   async function twoDeep(repo: RepoPaths): Promise<{ a: string; b: string }> {

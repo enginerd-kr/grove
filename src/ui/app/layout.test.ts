@@ -286,7 +286,7 @@ describe("columnWidths", () => {
     for (const trunkName of ["main", "master", "development-trunk"]) {
       const widths = columnWidths(TREE, 120, trunkName, NOW);
 
-      expect(widths.remote).toBeGreaterThanOrEqual("origin".length);
+      expect(widths.remote).toBeGreaterThanOrEqual("remote".length);
       expect(widths.trunk).toBeGreaterThanOrEqual(trunkName.length);
       expect(widths.state).toBeGreaterThanOrEqual("state".length);
     }

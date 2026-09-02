@@ -72,7 +72,7 @@ describe("what the shell is left with", () => {
       expect(warned.exitCode).toBe(ExitCode.ok);
       expect(warned.stdout).toContain("! 1 directory left behind by a pruned worktree");
       // Exit 0 and a finding at once, which is the whole of the severity rule.
-      expect(warned.stdout).toContain("1 warning, out of 8 checks");
+      expect(warned.stdout).toContain("1 warning, out of 9 checks");
 
       // Now an error beside it: `git fetch` exiting 0 having updated nothing.
       await seedGit(repo.gitDir, ["config", "--unset", "remote.origin.fetch"]);
@@ -85,7 +85,7 @@ describe("what the shell is left with", () => {
       // build script still gets the report it went there for.
       expect(failed.stdout).toContain("✗ origin has no fetch refspec");
       expect(failed.stdout).toContain(`    → git -C ${repo.gitDir} config remote.origin.fetch`);
-      expect(failed.stdout).toContain("1 problem and 1 warning, out of 8 checks");
+      expect(failed.stdout).toContain("1 problem and 1 warning, out of 9 checks");
       // And the sentence for the person is on the other stream, so nothing a
       // `jq` or a `grep` reads on stdout is the failure rather than a finding.
       expect(failed.stderr).toContain("the repository has 1 problem");

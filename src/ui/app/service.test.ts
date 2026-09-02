@@ -153,6 +153,7 @@ describe("createWorktreeService", () => {
           changed: 0,
           untracked: 0,
           files: [],
+          publishRemote: "origin",
           isDefault: true,
           // `cwd` is what tells the screen which row is the one you are standing in.
           current: true,

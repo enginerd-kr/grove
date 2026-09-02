@@ -9,8 +9,11 @@ import {
   fetchRemotes,
   localBranchExists,
   localBranches,
+  publishRemote,
+  publishRemotes,
   remoteBranchExists,
   remoteRef,
+  trunkOf,
   updateRemoteHead,
 } from "./branches.ts";
 import { type GroveError, isGroveError } from "./errors.ts";
@@ -103,6 +106,73 @@ describe("defaultBranch", () => {
       ]);
 
       expect(await defaultBranch(bare)).toBe("feat/login");
+    });
+  });
+});
+
+describe("where the trunk lives, and where a branch is pushed", () => {
+  test("trunkOf follows what the local trunk tracks, and falls back to origin", async () => {
+    await withTempRepo(async (repo) => {
+      const bare = await bareClone(repo);
+
+      expect(await trunkOf(bare)).toEqual({ branch: "main", remote: "origin", ref: "origin/main" });
+
+      // A second remote, the way a fork is set up by hand, and the one line
+      // that says the trunk follows it rather than the fork's own copy.
+      await seedGit(bare, ["remote", "add", "upstream", repo.originUrl]);
+      await seedGit(bare, ["fetch", "upstream"]);
+      await seedGit(bare, ["branch", "--set-upstream-to=upstream/main", "main"]);
+
+      expect(await trunkOf(bare)).toEqual({
+        branch: "main",
+        remote: "upstream",
+        ref: "upstream/main",
+      });
+
+      // The name is still origin/HEAD's, whatever the branch tracks: `ref`
+      // spells the remote's name for it, which need not be the local one.
+      await seedGit(bare, ["branch", "--set-upstream-to=upstream/feat/login", "main"]);
+      expect(await trunkOf(bare)).toEqual({
+        branch: "main",
+        remote: "upstream",
+        ref: "upstream/feat/login",
+      });
+
+      // A local branch tracking another local branch is nobody's copy of anything.
+      await seedGit(bare, ["branch", "--set-upstream-to=feat/login", "main"]);
+      expect((await trunkOf(bare)).ref).toBe("origin/main");
+    });
+  });
+
+  test("publishRemote reads git's own precedence, and publishRemotes agrees from one read", async () => {
+    await withTempRepo(async (repo) => {
+      const bare = await bareClone(repo);
+      await seedGit(bare, ["remote", "add", "upstream", repo.originUrl]);
+      await seedGit(bare, ["fetch", "upstream"]);
+
+      // Nothing said: origin.
+      expect(await publishRemote(bare, "feat/login")).toBe("origin");
+
+      // The remote the branch tracks, once it tracks one.
+      await seedGit(bare, ["branch", "--set-upstream-to=upstream/feat/login", "feat/login"]);
+      expect(await publishRemote(bare, "feat/login")).toBe("upstream");
+
+      // `remote.pushDefault` — the fork workflow's one setting — over that.
+      await seedGit(bare, ["config", "remote.pushDefault", "fork"]);
+      expect(await publishRemote(bare, "feat/login")).toBe("fork");
+      expect(await publishRemote(bare, "main")).toBe("fork");
+
+      // And a branch's own `pushRemote` over everything.
+      await seedGit(bare, ["config", "branch.feat/login.pushRemote", "elsewhere"]);
+      expect(await publishRemote(bare, "feat/login")).toBe("elsewhere");
+
+      const lookup = await publishRemotes(bare);
+      expect(lookup("feat/login")).toBe("elsewhere");
+      expect(lookup("main")).toBe("fork");
+      expect(lookup("never-heard-of")).toBe("fork");
+
+      await seedGit(bare, ["config", "--unset", "remote.pushDefault"]);
+      expect((await publishRemotes(bare))("main")).toBe("origin");
     });
   });
 });
@@ -245,7 +315,7 @@ describe("branchStates", () => {
         "Merge topic",
       ]);
 
-      const states = await branchStates(bare, "main");
+      const states = await branchStates(bare, { branch: "main", remote: "origin", ref: "main" });
 
       expect(states.get("topic")?.merged).toBe(true);
       // Its own tip is trivially reachable from itself.
@@ -271,7 +341,7 @@ describe("branchStates", () => {
       await seedGit(wt, ["merge", "--squash", "squashed"]);
       await seedGit(wt, ["-c", "commit.gpgsign=false", "commit", "-m", "Squash squashed"]);
 
-      const states = await branchStates(bare, "main");
+      const states = await branchStates(bare, { branch: "main", remote: "origin", ref: "main" });
 
       expect(states.get("squashed")?.merged).toBe(true);
     });
@@ -282,7 +352,11 @@ describe("branchStates", () => {
       const bare = await bareClone(repo);
       await seedGit(bare, ["branch", "--set-upstream-to=origin/feat/login", "feat/login"]);
 
-      const tracked = await branchStates(bare, "origin/main");
+      const tracked = await branchStates(bare, {
+        branch: "main",
+        remote: "origin",
+        ref: "origin/main",
+      });
       expect(tracked.get("feat/login")?.upstream).toBe("origin/feat/login");
       expect(tracked.get("feat/login")?.gone).toBe(false);
 
@@ -291,12 +365,20 @@ describe("branchStates", () => {
 
       // This is the subtlety worth pinning: `gone` is read off the local
       // tracking ref, so until a prune removes it the branch still looks fine.
-      const stale = await branchStates(bare, "origin/main");
+      const stale = await branchStates(bare, {
+        branch: "main",
+        remote: "origin",
+        ref: "origin/main",
+      });
       expect(stale.get("feat/login")?.gone).toBe(false);
 
       expect(await fetchRemotes(bare)).toEqual({ fetched: true, staleTags: [] });
 
-      const pruned = await branchStates(bare, "origin/main");
+      const pruned = await branchStates(bare, {
+        branch: "main",
+        remote: "origin",
+        ref: "origin/main",
+      });
       expect(pruned.get("feat/login")?.gone).toBe(true);
       // The upstream it was configured to track is still reported, which is what
       // tells "its remote went" apart from "it never had one".

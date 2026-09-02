@@ -19,6 +19,7 @@ This guide covers the screen first, then the commands.
 - [Keys](#keys)
 - [Layout on disk](#layout-on-disk)
 - [Worktree setup: .grove.toml](#worktree-setup-grovetoml)
+- [Remotes and forks](#remotes-and-forks)
 - [CLI reference](#cli-reference)
 - [Scripting and agents](#scripting-and-agents)
 - [Troubleshooting](#troubleshooting)
@@ -50,7 +51,7 @@ the worktree you ran `grove` from. `▸` is the cursor.
 
 | column | meaning |
 | --- | --- |
-| origin | commits ahead / behind the branch's remote |
+| remote | commits ahead / behind the branch's upstream |
 | main | commits ahead / behind the trunk |
 | state | `●` has uncommitted changes, `○` clean, then the age of the last commit |
 
@@ -86,7 +87,8 @@ and keeps the branch. On a folder row, `r` removes every worktree in it.
 names them, and the branches stay.
 
 **Review a pull request.** `/review`, pick one, `enter`. It checks out as
-`pr/<number>`. Pushing from there updates the PR. Requires `gh`.
+`pr/<number>`. `git push` from there updates the PR, and so does `s`.
+Requires `gh`.
 
 Every destructive action asks first. `y` confirms. Any other key cancels.
 
@@ -237,6 +239,39 @@ command.
 `run`, `teardown`, and `exec` commands receive `GROVE_ROOT`, `GROVE_WORKTREE`,
 and `GROVE_BRANCH`.
 
+## Remotes and forks
+
+grove never asks which remote to use. It reads what git already knows, so a
+repository that works with `git push` and `git pull` works with grove the
+same way.
+
+**The trunk** is the branch `origin/HEAD` names, usually `main`. Which copy
+of it counts is whatever the local `main` tracks: `origin/main` in a plain
+clone, and `upstream/main` once you have said so. Everything is measured
+against that copy: the `main` column, the `merged` badge, the base `a` cuts
+a branch from, and what `s` rebases onto.
+
+**A branch is pushed** where `git push` would send it: the branch's own
+`pushRemote`, else `remote.pushDefault`, else the remote it tracks, else
+`origin`. `--push`, `--publish`, and every push `s` makes follow this.
+`grove add` looks for an existing branch on that same remote.
+
+So a fork is three lines, all git's:
+
+```bash
+grove clone git@github.com:you/repo.git      # origin is your fork
+git -C main remote add upstream git@github.com:them/repo.git
+git -C main fetch upstream
+git -C main branch -u upstream/main main     # the trunk follows theirs
+git -C main config remote.pushDefault origin # your branches go to yours
+```
+
+From then on `a` cuts from `upstream/main`, `s` rebases onto it and pushes
+to your fork, and `merged` means merged into theirs. `grove pr` fetches the
+pull request from the trunk's remote, and a `pr/<n>` worktree always pushes
+back to the pull request, whatever `pushDefault` says. `doctor` reports a
+trunk that tracks a remote nothing has been fetched from.
+
 ## CLI reference
 
 Every command has `--help`, generated from the parser's own table.
@@ -298,8 +333,9 @@ unless `--no-abort`. `--no-push` keeps the result local.
 
 A branch on no remote yet (`grove add` without `--push`) is rebased and then
 reported with exit code 4: nothing was pushed, and nothing was refused.
-`--publish` pushes it to origin and tracks it. `--no-push` says it is meant
-to stay local, and reports nothing.
+`--publish` pushes it where `git push` would and tracks it. `--no-push` says
+it is meant to stay local, and reports nothing. See
+[Remotes and forks](#remotes-and-forks) for which remote that is.
 
 The screen confirms before a force-push and before a first push. The CLI does
 neither.
@@ -446,9 +482,10 @@ grove doctor
 ```
 
 Reports problems and the command that fixes each. Writes nothing. Checks for:
-a bare clone with no fetch refspec, worktrees git lists that are missing on
-disk, leftover directories, a root `.git` pointing at the wrong place, and
-broken symlinks. Exits `6` on a problem, `0` on warnings only.
+a bare clone with no fetch refspec, a trunk tracking a remote nothing has
+been fetched from, worktrees git lists that are missing on disk, leftover
+directories, a root `.git` pointing at the wrong place, and broken symlinks.
+Exits `6` on a problem, `0` on warnings only.
 
 One of the missing-on-disk cases hides from git itself: a worktree that was
 locked and then deleted. A coding agent locks the worktree it works in, its

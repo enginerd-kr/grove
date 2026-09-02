@@ -258,7 +258,8 @@ async function landedAsPatches(bare: string, base: string, branch: string): Prom
  * merge base, so it is deliberately never asked about a branch the ancestry
  * pass already accepted.
  */
-async function mergedInto(bare: string, base: string): Promise<ReadonlySet<string>> {
+async function mergedInto(bare: string, trunk: Trunk): Promise<ReadonlySet<string>> {
+  const base = trunk.ref;
   const [reachable, rewritten] = await Promise.all([
     runGit(["for-each-ref", "--format=%(refname:short)", "--merged", base, "refs/heads/"], {
       cwd: bare,
@@ -278,8 +279,7 @@ async function mergedInto(bare: string, base: string): Promise<ReadonlySet<strin
   // The trunk is never asked. Measured against its own remote-tracking ref it is
   // precisely the branch whose local commits somebody squashed upstream, and
   // "the trunk is finished with" is the one answer nothing here may give.
-  const trunk = base.replace(new RegExp(`^${REMOTE}/`), "");
-  const candidates = refNames(rewritten.stdout).filter((branch) => branch !== trunk);
+  const candidates = refNames(rewritten.stdout).filter((branch) => branch !== trunk.branch);
   const landed = await Promise.all(candidates.map((branch) => landedAsPatches(bare, base, branch)));
 
   for (const [index, branch] of candidates.entries()) {
@@ -292,16 +292,17 @@ async function mergedInto(bare: string, base: string): Promise<ReadonlySet<strin
 /**
  * Both answers for every branch, in two calls rather than two per branch.
  *
- * `base` should be the *remote's* trunk, not the local one. The question being
- * asked is "has this work landed", and it lands on the remote — a local `main`
- * that has not been pulled since Tuesday would answer "not yet" for every
- * branch merged since, which is the week in which somebody most wants to know.
+ * Measured against `trunk.ref` — the *remote's* trunk, not the local one. The
+ * question being asked is "has this work landed", and it lands on the remote —
+ * a local `main` that has not been pulled since Tuesday would answer "not yet"
+ * for every branch merged since, which is the week in which somebody most
+ * wants to know.
  */
 export async function branchStates(
   bare: string,
-  base: string,
+  trunk: Trunk,
 ): Promise<ReadonlyMap<string, BranchState>> {
-  const [states, merged] = await Promise.all([upstreamStates(bare), mergedInto(bare, base)]);
+  const [states, merged] = await Promise.all([upstreamStates(bare), mergedInto(bare, trunk)]);
 
   for (const [branch, state] of states) {
     if (merged.has(branch)) states.set(branch, { ...state, merged: true });
@@ -347,12 +348,17 @@ export async function commitTimes(
 }
 
 /**
- * The branch everything else is measured against.
+ * The name of the branch everything else is measured against.
  *
  * Read from `refs/remotes/origin/HEAD` rather than from the bare repo's own
  * HEAD, because HEAD here tracks whichever branch got the first worktree —
  * which the user may have chosen with `--branch` and which says nothing about
  * what the remote considers its trunk.
+ *
+ * The name only. Where that branch lives — which remote's copy of it the
+ * repository follows — is `trunkOf`'s question, and the two come apart in a
+ * fork: `origin/HEAD` says the trunk is called `main`, and `main` may well be
+ * following `upstream/main` rather than the fork's own stale copy.
  */
 export async function defaultBranch(bare: string): Promise<string> {
   const result = await runGit(["symbolic-ref", "--short", `refs/remotes/${REMOTE}/HEAD`], {
@@ -367,6 +373,121 @@ export async function defaultBranch(bare: string): Promise<string> {
 
   // Comes back as `origin/main`; callers want the branch, not the remote-tracking ref.
   return result.stdout.trim().replace(new RegExp(`^${REMOTE}/`), "");
+}
+
+/**
+ * The trunk: what it is called here, and which remote's copy of it is the one
+ * that counts.
+ *
+ * `ref` is what everything is measured against and rebased onto — the base a
+ * new branch is cut from, what `merged` compares against, what `sync` moves
+ * the trunk worktree to. It used to be `origin/<branch>`, always, and in a
+ * fork that is the wrong copy: somebody who cloned their fork has an `origin`
+ * whose `main` moves only when they push to it, so every drift column, every
+ * `merged` badge and every rebase was measured against a trunk that stood
+ * still while the real one moved.
+ *
+ * The answer is git's own, and nothing of grove's. A local `main` that has
+ * been told `git branch -u upstream/main` is a branch whose owner has said
+ * which copy it follows, and `branch.main.remote` / `branch.main.merge` is
+ * where git wrote it down. That is read first; `origin/<branch>` is what it
+ * falls back to, which is what every repository `grove clone` makes has.
+ * `.` as a remote — a local branch tracking another local branch — is not a
+ * remote's copy of anything and falls back the same way.
+ *
+ * `merge` is the branch's name *on that remote*, which is nearly always the
+ * local name and is kept apart from it because it need not be: `ref` is
+ * spelled from it, `branch` is what the worktree is on.
+ */
+export type Trunk = {
+  /** The local name — `main` — and the branch the trunk worktree is on. */
+  readonly branch: string;
+  /** The remote whose copy of it counts: `origin`, or what the branch tracks. */
+  readonly remote: string;
+  /** The remote-tracking ref everything is measured against: `origin/main`, `upstream/main`. */
+  readonly ref: string;
+};
+
+export async function trunkOf(bare: string): Promise<Trunk> {
+  const branch = await defaultBranch(bare);
+  const [remote, merge] = await Promise.all([
+    runGit(["config", "--get", `branch.${branch}.remote`], { cwd: bare }),
+    runGit(["config", "--get", `branch.${branch}.merge`], { cwd: bare }),
+  ]);
+  const tracked = remote.code === 0 ? remote.stdout.trim() : "";
+  const target = merge.code === 0 ? merge.stdout.trim().replace(/^refs\/heads\//, "") : "";
+
+  if (tracked.length === 0 || tracked === "." || target.length === 0) {
+    return { branch, remote: REMOTE, ref: `${REMOTE}/${branch}` };
+  }
+
+  return { branch, remote: tracked, ref: `${tracked}/${target}` };
+}
+
+/**
+ * Where a branch is pushed — git's own rule for `git push` with nothing after
+ * it, read the way git reads it.
+ *
+ * Four answers in order, and the order is git's: `branch.<name>.pushRemote`
+ * says it for one branch, `remote.pushDefault` says it for every branch in
+ * the repository — the setting git made for exactly the fork workflow, where
+ * everything is pulled from one remote and pushed to another — then the
+ * remote the branch already tracks, and `origin` when nothing has been said.
+ *
+ * Read through `git config` rather than the file, so a `remote.pushDefault`
+ * in `~/.gitconfig` counts the way it counts for `git push`. Asked from the
+ * worktree or the bare repository alike: branch config is shared.
+ *
+ * The one place grove chooses nothing: a branch goes where `git push` would
+ * have sent it, which is the only rule a person can predict from what they
+ * already know.
+ */
+export async function publishRemote(cwd: string, branch: string): Promise<string> {
+  for (const key of [
+    `branch.${branch}.pushRemote`,
+    "remote.pushDefault",
+    `branch.${branch}.remote`,
+  ]) {
+    const result = await runGit(["config", "--get", key], { cwd });
+    const value = result.stdout.trim();
+    if (result.code === 0 && value.length > 0 && value !== ".") return value;
+  }
+
+  return REMOTE;
+}
+
+/**
+ * `publishRemote` for every branch at once, from one read of the config.
+ *
+ * For the list, which redraws on a timer: three `git config` processes per
+ * row would be the cost `driftFrom` was written to avoid, and `--get-regexp`
+ * hands over every line the rule reads in one answer.
+ */
+export async function publishRemotes(bare: string): Promise<(branch: string) => string> {
+  const result = await runGit(
+    ["config", "--get-regexp", "^(branch\\..*\\.(pushremote|remote)|remote\\.pushdefault)$"],
+    { cwd: bare },
+  );
+  const values = new Map<string, string>();
+  // `--get-regexp` prints the key in lower case, so a `branch.Feat/X.pushRemote`
+  // arrives as `branch.feat/x.pushremote`; the branch part keeps its case.
+  for (const line of result.code === 0 ? result.stdout.split("\n") : []) {
+    const space = line.indexOf(" ");
+    if (space === -1) continue;
+    values.set(line.slice(0, space), line.slice(space + 1).trim());
+  }
+
+  const lookup = (key: string): string | undefined => {
+    const value = values.get(key);
+
+    return value === undefined || value.length === 0 || value === "." ? undefined : value;
+  };
+
+  return (branch) =>
+    lookup(`branch.${branch}.pushremote`) ??
+    lookup("remote.pushdefault") ??
+    lookup(`branch.${branch}.remote`) ??
+    REMOTE;
 }
 
 /**
@@ -398,28 +519,35 @@ export async function updateRemoteHead(bare: string): Promise<boolean> {
 }
 
 /**
- * Pushes a worktree's HEAD to `origin` and sets it as the branch's upstream.
+ * Pushes a worktree's HEAD where `git push` would send it, and sets that as
+ * the branch's upstream.
  *
  * The push is always the tail of a larger operation that has already landed, so
  * the failure line belongs to the caller: what did happen is the part only the
  * caller knows, and an error that says nothing about it reads as though the
  * whole command came to nothing. The error is still rethrown — a branch that
  * was meant to be on the remote and is not is not a success to report quietly.
+ *
+ * Answers with the remote it pushed to, which is what a message afterwards
+ * wants to name — see `publishRemote` for why it is not always `origin`.
  */
 export async function pushUpstream(
   path: string,
   branch: string,
   reporter: Reporter,
   failure: string,
-): Promise<void> {
+): Promise<string> {
+  const remote = await publishRemote(path, branch);
   await withStep(
     reporter,
-    { start: `pushing ${branch}`, done: `pushed ${branch}`, failed: failure },
-    () => runGitOrThrow(["push", "-u", REMOTE, "HEAD"], { cwd: path }),
+    { start: `pushing ${branch}`, done: `pushed ${branch} to ${remote}`, failed: failure },
+    () => runGitOrThrow(["push", "-u", remote, "HEAD"], { cwd: path }),
   );
+
+  return remote;
 }
 
-/** The remote-tracking ref for a branch — what `branchStates` measures against. */
+/** The remote-tracking ref for a branch on `origin` — what `clone` sets a first worktree to track. */
 export function remoteRef(branch: string): string {
   return `${REMOTE}/${branch}`;
 }
@@ -428,8 +556,12 @@ export async function localBranchExists(bare: string, branch: string): Promise<b
   return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: bare });
 }
 
-export async function remoteBranchExists(bare: string, branch: string): Promise<boolean> {
-  return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/remotes/${REMOTE}/${branch}`], {
+export async function remoteBranchExists(
+  bare: string,
+  branch: string,
+  remote: string = REMOTE,
+): Promise<boolean> {
+  return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], {
     cwd: bare,
   });
 }

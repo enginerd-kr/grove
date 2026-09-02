@@ -366,7 +366,7 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       {
         name: "publish",
         type: "boolean",
-        summary: "push a branch that is on no remote yet to origin, and track it",
+        summary: "push a branch that is on no remote yet where git push would, and track it",
       },
       {
         name: "no-push",

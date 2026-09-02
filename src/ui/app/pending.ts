@@ -177,10 +177,10 @@ export function describePending(target: Pending): {
   // branch stops being only yours, and the name on the far end is the part
   // worth reading before answering.
   if (target.kind === "publish") {
-    const { dir, branch } = target.summary;
+    const { dir, branch, publishRemote } = target.summary;
 
     return {
-      text: `sync ${dir}? it is on no remote yet, so this pushes it to origin/${branch}`,
+      text: `sync ${dir}? it is on no remote yet, so this pushes it to ${publishRemote}/${branch}`,
       colour: theme.warn,
     };
   }

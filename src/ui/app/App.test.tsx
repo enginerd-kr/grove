@@ -67,6 +67,7 @@ function summary(overrides: Partial<WorktreeSummary> & { readonly dir: string })
     locked: false,
     rebasing: false,
     isDefault: false,
+    publishRemote: "origin",
     current: false,
     ...overrides,
   };

@@ -75,6 +75,7 @@ describe("what the table says", () => {
           locked: false,
           rebasing: false,
           finished: undefined,
+          publishRemote: "origin",
           isDefault: true,
           current: false,
         }),
@@ -97,6 +98,7 @@ describe("what the table says", () => {
           // Pushed and merged are both false here, so no badge — a branch with
           // work still on it is not something to offer to clear away.
           finished: undefined,
+          publishRemote: "origin",
           isDefault: false,
           current: false,
         }),
@@ -132,6 +134,7 @@ describe("what the table says", () => {
           locked: false,
           rebasing: false,
           finished: undefined,
+          publishRemote: "origin",
           isDefault: false,
           // `*` marks where you are standing, which is what people open this
           // command to answer — and it is decided by the cwd passed in, so a

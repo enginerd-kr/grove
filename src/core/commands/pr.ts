@@ -1,6 +1,6 @@
 import type { SetupResult } from "../../hooks/index.ts";
 import { type Reporter, withStep } from "../../report/reporter.ts";
-import { localBranchExists, REMOTE } from "../branches.ts";
+import { localBranchExists, REMOTE, trunkOf } from "../branches.ts";
 import { GroveError, stderrDetails } from "../errors.ts";
 import { gitOutput, runGit, runGitOrThrow, runTool } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
@@ -471,7 +471,11 @@ async function fetchHead(repo: RepoPaths, detail: PrDetail, reporter: Reporter):
   }
 
   await runGit(["remote", "remove", remote], { cwd: repo.gitDir });
-  await runGitOrThrow(["fetch", REMOTE, `refs/pull/${detail.number}/head`], { cwd: repo.gitDir });
+  // `refs/pull/<n>/head` lives on the repository the pull request was opened
+  // against, which is the trunk's remote — in a fork that is `upstream`, and
+  // origin's `refs/pull/42/head` is a different pull request or none.
+  const base = (await trunkOf(repo.gitDir)).remote;
+  await runGitOrThrow(["fetch", base, `refs/pull/${detail.number}/head`], { cwd: repo.gitDir });
   const sha = await gitOutput(["rev-parse", "FETCH_HEAD"], { cwd: repo.gitDir });
   step.succeed(`fetched pull request ${detail.number}`);
 
@@ -614,6 +618,13 @@ export async function checkoutPullRequest(
       ["branch", `--set-upstream-to=${head.remote}/${detail.headRefName}`, branch],
       { cwd: repo.gitDir },
     );
+    // Pinned per branch, so a `remote.pushDefault` set for the fork workflow —
+    // "everything I push goes to my fork" — does not catch this one: a pull
+    // request's branch goes back to the pull request, whatever else is true
+    // of the repository. `publishRemote` reads this before anything else.
+    await runGitOrThrow(["config", `branch.${branch}.pushRemote`, head.remote], {
+      cwd: repo.gitDir,
+    });
   }
   await runGitOrThrow(
     ["config", "--replace-all", `branch.${branch}.description`, `${detail.title}\n\n${detail.url}`],

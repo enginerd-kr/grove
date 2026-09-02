@@ -2,7 +2,7 @@ import { lstat, readlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { version } from "../../../package.json";
 import { HOOKS_FILE, type Hooks, repoHooks } from "../../hooks/index.ts";
-import { FETCH_REFSPEC, REMOTE } from "../branches.ts";
+import { FETCH_REFSPEC, REMOTE, trunkOf } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { childDirectories, pathExists } from "../fs.ts";
 import { gitSucceeds, runGit } from "../git.ts";
@@ -180,6 +180,46 @@ async function checkOriginHead({
       "`grove list`, `grove add` and `grove sync` all stop on this",
     ],
     fix: [`git -C ${repo.gitDir} remote set-head ${REMOTE} --auto`],
+  };
+}
+
+/**
+ * The copy of the trunk everything is measured against, when it is not origin's.
+ *
+ * `git branch -u upstream/main main` is how somebody says their trunk follows
+ * the repository they forked, and `trunkOf` takes them at their word: from
+ * then on drift, `merged`, the base of every new branch and every rebase are
+ * against `upstream/main`. Which is a ref that exists only once `upstream`
+ * has been fetched — and a remote added by hand and never fetched, or one
+ * whose URL was mistyped, leaves the word given and the ref absent. Every
+ * command then fails against a name that reads like a typo of `origin/main`.
+ */
+async function checkTrunkTracking({
+  repo,
+  hasOrigin,
+  hasFetchRefspec,
+  hasRemoteTracking,
+}: Context): Promise<Finding | undefined> {
+  if (!hasOrigin || !hasFetchRefspec || !hasRemoteTracking) return undefined;
+
+  const trunk = await trunkOf(repo.gitDir).catch(() => undefined);
+  if (trunk === undefined || trunk.remote === REMOTE) return undefined;
+
+  const resolves = await gitSucceeds(
+    ["rev-parse", "--verify", "--quiet", `refs/remotes/${trunk.ref}`],
+    { cwd: repo.gitDir },
+  );
+  if (resolves) return undefined;
+
+  return {
+    check: "trunk-tracking",
+    severity: "error",
+    summary: `${trunk.branch} tracks ${trunk.ref}, and that ref is not there`,
+    details: [
+      `the trunk is measured against ${trunk.remote}'s copy because ${trunk.branch} was told to`,
+      `track it — and nothing has been fetched from ${trunk.remote} into refs/remotes/${trunk.remote}/`,
+    ],
+    fix: [`git -C ${repo.gitDir} fetch ${trunk.remote} --prune --tags`],
   };
 }
 
@@ -439,6 +479,7 @@ const CHECKS: readonly Check[] = [
   checkFetchRefspec,
   checkRemoteTracking,
   checkOriginHead,
+  checkTrunkTracking,
   checkGitFile,
   checkPrunable,
   checkLockedPhantoms,
