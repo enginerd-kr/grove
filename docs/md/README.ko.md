@@ -17,7 +17,7 @@ grove는 프로젝트가 정의한 셋업을 갖춘 Git 워크트리 관리자�
 
 [설치](#설치) · [빠른 시작](#빠른-시작) · [프로젝트 셋업](#프로젝트-셋업-grovetoml) · [개발](#개발)
 
-[English](../../README.md) · [사용 가이드 (한국어)](USAGE.ko.md)
+[English](../../README.md) · [한국어](README.ko.md)
 
 </div>
 

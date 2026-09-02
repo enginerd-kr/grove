@@ -1,6 +1,10 @@
 # grove 사용하기
 
-> [English](../../USAGE.md) · [README (한국어)](README.ko.md)
+<div align="center">
+
+[English](../../USAGE.md) · [한국어](USAGE.ko.md)
+
+</div>
 
 grove는 git 워크트리를 관리합니다. `grove`를 실행하면 대화형 화면이 뜹니다.
 워크트리마다 한 줄, 동작마다 키 하나입니다. 모든 동작은 스크립트, 에이전트,

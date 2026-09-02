@@ -1,6 +1,10 @@
 # Using grove
 
-> [한국어](docs/md/USAGE.ko.md)
+<div align="center">
+
+[English](USAGE.md) · [한국어](docs/md/USAGE.ko.md)
+
+</div>
 
 grove manages git worktrees. Run `grove` and you get an interactive screen:
 one row per worktree, one key per action. Every action is also a CLI command
