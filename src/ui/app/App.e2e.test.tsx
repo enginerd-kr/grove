@@ -113,7 +113,12 @@ const MENU_TOTAL = commandsFor(false).length;
 async function open(cwd: string, cols = 100, rows = 30): Promise<UiSession> {
   const ui = startUi({ cwd, cols, rows });
   await ui.waitForFrame((frame) => frame.includes("worktree") && !frame.includes(FIRST_READ), WAIT);
-  await ui.pressUntil("/", (frame) => frame.includes("/refresh"), WAIT);
+  // `/sync-all` and not the last row: the popup takes only the rows the list
+  // can spare, and on the thirty rows this opens with that is fewer than the
+  // menu holds — the tail scrolls out of the window, and a wait on it would
+  // be a wait on a row that is never drawn. The fourth row is inside the
+  // window at every size the card is drawn on.
+  await ui.pressUntil("/", (frame) => frame.includes("/sync-all"), WAIT);
   // Not through `press`: its `clear()` is the barrier the later waits need, and
   // it takes the bytes the session has seen so far with it — including the
   // alternate-screen sequence one test below asserts the app opened with.
