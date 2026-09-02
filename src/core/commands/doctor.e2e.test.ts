@@ -53,7 +53,7 @@ describe("what the shell is left with", () => {
 
       expect(result.exitCode).toBe(ExitCode.ok);
       expect(result.stdout).toContain(`${repo.root}  (managed)`);
-      expect(result.stdout).toContain("nothing to report — 7 checks, all clean");
+      expect(result.stdout).toContain("nothing to report — 10 checks, all clean");
     });
   }, 60_000);
 
@@ -111,7 +111,7 @@ describe("what the shell is left with", () => {
         root: repo.root,
         gitDir: repo.gitDir,
         kind: "managed",
-        checked: 7,
+        checked: 10,
       });
       expect(diagnosis.grove).toMatch(/^\d+\./);
       expect(diagnosis.git).toMatch(/^\d+\.\d+/);

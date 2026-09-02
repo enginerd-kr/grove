@@ -85,7 +85,7 @@ describe("a repository with nothing wrong", () => {
           `${root}  (managed)`,
           `grove ${version} · git ${diagnosis.git}`,
           "",
-          "nothing to report — 7 checks, all clean",
+          "nothing to report — 10 checks, all clean",
         ].join("\n"),
       );
     });

@@ -318,6 +318,19 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     expect(log.err).toContain("· main is already on origin/main\n");
   },
 
+  upstream: async ({ root, run }) => {
+    // The origin itself, standing in for the repository this was forked
+    // from: the point is which implementation answered, and only
+    // `followUpstream` says this on stdout.
+    const url = (
+      await probeGit(join(root, ".bare"), ["remote", "get-url", "origin"])
+    ).stdout.trim();
+    const log = await run({ name: "upstream", url, force: false });
+
+    expect(log.out).toEqual(["main\tupstream/main\n"]);
+    expect(log.err.join("")).toContain("main now follows upstream/main");
+  },
+
   setup: async ({ root, run }) => {
     const log = await run(
       { name: "setup", target: undefined, all: false, trust: false },

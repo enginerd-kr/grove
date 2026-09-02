@@ -88,10 +88,11 @@ const BASE_ROWS = 8;
  * commands there are is ours. It is pinned to exactly how many there are, so
  * the menu is a list you read and never one you scroll — and adding a command
  * means raising this on purpose, having decided the list is still short enough
- * to be read whole. `rebase` made it eight, which is the edge of it; the next
- * one is an argument for fewer commands rather than a taller popup.
+ * to be read whole. `rebase` made it eight and `upstream` nine, and nine is
+ * where it stops: the next one is an argument for fewer commands rather than
+ * a taller popup.
  */
-const MENU_ROWS = 8;
+const MENU_ROWS = 9;
 
 /**
  * The rows the list keeps whatever else wants them.

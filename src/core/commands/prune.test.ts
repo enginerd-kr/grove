@@ -551,6 +551,10 @@ describe.if(POSIX)("grove prune --closed", () => {
       const repo = await managedRepo(temp);
       const goneDir = await proposed(repo, "shipped", "shipped.txt");
       await deleteOnOrigin(temp, "shipped");
+      // A branch git has no answer for, so there is something to ask the
+      // forge about: a `gone` row alone is never asked, and a run with no
+      // question to put would not need gh at all.
+      await proposed(repo, "alive", "alive.txt");
 
       await withFakeGh(temp, async (forge) => {
         const failure = await forge.withoutGh(async () =>

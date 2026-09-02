@@ -512,7 +512,7 @@ async function publish(
   const result = await runGit(
     [
       "push",
-      ...(force ? ["--force-with-lease", "--force-if-includes"] : []),
+      ...(force ? forceArgs(target, remote.code === 0 ? remote.stdout.trim() : undefined) : []),
       target.remote,
       target.refspec,
     ],
@@ -543,7 +543,42 @@ type PushTarget = {
   readonly refspec: string;
   /** The remote-tracking ref the push updates, for the lease and for "already there". */
   readonly tracking: string;
+  /**
+   * The destination's full name on the remote, when it is not the branch's
+   * own — `refs/heads/feat-x` for `pr/42`. Set only then, because it is
+   * only then that the lease has to be spelled out; see `forceArgs`.
+   */
+  readonly renamed?: string;
 };
+
+/**
+ * The force spelling for a rewritten branch, and the one case it has to
+ * change shape.
+ *
+ * `--force-with-lease --force-if-includes` is the pair everywhere the branch
+ * lands on the remote under its own name: the lease refuses if the remote
+ * moved since the last fetch, and if-includes refuses if it moved *before*
+ * that fetch and the rebase never took the new commits in. The second check
+ * is done by walking the reflog of the local branch the destination is named
+ * after — and git finds that branch by the destination's name. So for
+ * `pr/42` going to `fix/crash` it reads the reflog of a `fix/crash` that
+ * does not exist here, and refuses every push with "remote ref updated
+ * since checkout". Confirmed against git 2.54: the same push passes the
+ * moment the local branch is renamed to match.
+ *
+ * What if-includes was standing in for is known here exactly. `syncOne`
+ * rebased onto the upstream a moment ago, so the upstream's tip as it is
+ * now is by construction integrated — and a lease spelled with that sha is
+ * the same promise with no reflog to consult: the remote must still be
+ * where the rebase took it from. Where the tracking ref cannot be read the
+ * lease has nothing to lean on and falls back to the bare form.
+ */
+function forceArgs(target: PushTarget, integrated: string | undefined): readonly string[] {
+  if (target.renamed === undefined) return ["--force-with-lease", "--force-if-includes"];
+  if (integrated === undefined) return ["--force-with-lease"];
+
+  return [`--force-with-lease=${target.renamed}:${integrated}`];
+}
 
 /**
  * What `git push` would do from this worktree, worked out rather than assumed.
@@ -573,7 +608,14 @@ async function pushTarget(path: string, branch: string, upstream: string): Promi
   const mergeRef = merge.code === 0 ? merge.stdout.trim() : "";
 
   if (remote === upstreamRemote && mergeRef.length > 0) {
-    return { remote, refspec: `${branch}:${mergeRef}`, tracking: upstream };
+    const sameName = mergeRef === `refs/heads/${branch}`;
+
+    return {
+      remote,
+      refspec: `${branch}:${mergeRef}`,
+      tracking: upstream,
+      ...(sameName ? {} : { renamed: mergeRef }),
+    };
   }
 
   return { remote, refspec: `${branch}:refs/heads/${branch}`, tracking: `${remote}/${branch}` };
