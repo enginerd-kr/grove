@@ -103,6 +103,7 @@ type Calls = {
   readonly synced: (string | undefined)[];
   /** The targets `sync` was told to publish, apart from the syncs themselves. */
   readonly published: string[];
+  pruned: number;
   readonly opened: { target: string; trust: boolean }[];
   readonly filledIn: string[];
   readonly trusted: string[];
@@ -123,6 +124,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     checkedOut: [],
     synced: [],
     published: [],
+    pruned: 0,
     opened: [],
     filledIn: [],
     trusted: [],
@@ -200,6 +202,13 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       trustAndRun: async (branch) => {
         calls.trusted.push(branch);
         return `1 run in ${branch}`;
+      },
+      // Nothing finished by default, so `/prune` runs and says so without a
+      // question; the test about the question hands over entries of its own.
+      pendingPrune: async () => ({ entries: [], dryRun: true }),
+      prune: async () => {
+        calls.pruned += 1;
+        return "nothing is finished with";
       },
       ...overrides,
     },
@@ -466,6 +475,38 @@ describe("describePending", () => {
       text: "sync feat/login? it is on no remote yet, so this pushes it to origin/feat/login",
       colour: theme.warn,
     });
+  });
+
+  test("`/prune` names what goes and counts what stays, in amber", () => {
+    const entry = (dir: string, skipped?: string) => ({
+      path: `/repo/${dir}`,
+      dir,
+      branch: dir,
+      reason: "merged" as const,
+      branchDeleted: false,
+      ...(skipped === undefined ? {} : { skipped }),
+    });
+
+    expect(
+      describePending({
+        kind: "prune",
+        result: { dryRun: true, entries: [entry("feat/login"), entry("pr/42")] },
+      }),
+    ).toEqual({
+      text: "remove 2 finished worktrees — feat/login, pr/42? the branches stay",
+      colour: theme.warn,
+    });
+    // Amber and not red: prune never takes a dirty worktree, so nothing
+    // uncommitted goes, and what it declined is counted on the same line.
+    expect(
+      describePending({
+        kind: "prune",
+        result: {
+          dryRun: true,
+          entries: [entry("feat/login"), entry("feat/search", "holds 2 changes")],
+        },
+      }).text,
+    ).toBe("remove 1 finished worktree — feat/login? the branches stay, 1 left alone");
   });
 
   test("`/sync-all` asks once, counting the branches rather than the worktrees", () => {
@@ -1184,6 +1225,50 @@ describe("the keys", () => {
     expect(calls.published).toEqual(["/repo/feat/login"]);
   });
 
+  /**
+   * The list badges `merged` and `gone`, and until now clearing them meant `r`
+   * on each row or a terminal for `grove prune`. `/prune` is that command
+   * behind the slash, with the dry run as the question.
+   */
+  test("`/prune` asks with the directories named, and `y` runs the prune", async () => {
+    const finished = {
+      path: "/repo/feat/search",
+      dir: "feat/search",
+      branch: "feat/search",
+      reason: "merged" as const,
+      branchDeleted: false,
+    };
+    const { service, calls } = stub({
+      pendingPrune: async () => ({ entries: [finished], dryRun: true }),
+      prune: async () => {
+        calls.pruned += 1;
+        return "removed 1";
+      },
+    });
+    const ui = await opened_with(service);
+
+    await run(ui, "prune");
+    await settled(ui, (frame) => frame.includes("remove 1 finished worktree — feat/search?"));
+    ui.stdin.write("n");
+    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("finished worktree"));
+    expect(calls.pruned).toBe(0);
+
+    await run(ui, "prune");
+    await settled(ui, (frame) => frame.includes("remove 1 finished worktree — feat/search?"));
+    ui.stdin.write("y");
+    await settled(ui, (frame) => IN_LIST(frame) && frame.includes("removed 1"));
+    expect(calls.pruned).toBe(1);
+  });
+
+  test("`/prune` with nothing finished says so, without a question", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await run(ui, "prune");
+    await settled(ui, (frame) => IN_LIST(frame) && frame.includes("nothing is finished with"));
+    expect(calls.pruned).toBe(1);
+  });
+
   test("`/open` opens the row under the cursor, and does nothing on a folder", async () => {
     const { service, calls } = stub();
     const ui = await opened_with(service);
@@ -1637,11 +1722,8 @@ describe("the keys", () => {
     // Up from the top row is clamped rather than wrapped, the same as the
     // picker's — and then down past the last row, which clamps the other way.
     await press(ui, keys.up);
-    await press(ui, keys.down);
-    await press(ui, keys.down);
-    await press(ui, keys.down);
-    await press(ui, keys.down);
-    await press(ui, keys.down);
+    // One more than there are rows, so the last press is the one that clamps.
+    for (let step = 0; step < MENU_TOTAL; step += 1) await press(ui, keys.down);
     await settled(ui, (frame) => /▸ +\/log/.test(frame));
 
     // And `enter` runs the row the marker is on, which is the last one.

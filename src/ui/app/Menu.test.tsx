@@ -75,7 +75,14 @@ describe("menuRows", () => {
 describe("Menu", () => {
   function draw(props: Partial<Parameters<typeof Menu>[0]> = {}) {
     const instance = render(
-      <Menu commands={COMMANDS} index={0} query="" total={COMMANDS.length} rows={6} {...props} />,
+      <Menu
+        commands={COMMANDS}
+        index={0}
+        query=""
+        total={COMMANDS.length}
+        rows={COMMANDS.length}
+        {...props}
+      />,
     );
 
     return plain(instance.lastFrame());

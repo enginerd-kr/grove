@@ -387,6 +387,11 @@ describe("hintsFor", () => {
       "sync",
       "leave it",
     ]);
+    // The same pair `r` uses: it is a removal, of however many.
+    expect(hintsFor("confirm", leaf, "prune").map((hint) => hint.action)).toEqual([
+      "remove",
+      "keep",
+    ]);
     // `push`, because that is the half of the sync the question was about.
     expect(hintsFor("confirm", leaf, "publish").map((hint) => hint.action)).toEqual([
       "push",

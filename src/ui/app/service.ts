@@ -5,6 +5,7 @@ import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { openWorktree } from "../../core/commands/open.ts";
 import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
+import { describePrune, type PruneResult, pruneWorktrees } from "../../core/commands/prune.ts";
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { setUpWorktrees, failureFor as setupFailureFor } from "../../core/commands/setup.ts";
@@ -32,7 +33,7 @@ import type { Reporter } from "../../report/reporter.ts";
  * Passed straight through, so the screen holds the answer without reaching past
  * this module for the shape of it — the same way it takes `WorktreeSummary`.
  */
-export type { PendingOpen };
+export type { PendingOpen, PruneResult };
 
 /**
  * What the screen is allowed to do: make a worktree, sync one, remove one, and
@@ -200,6 +201,24 @@ export type WorktreeService = {
    * the outcome was carrying is the one thing that would not reach the eye.
    */
   readonly sync: (target?: string, options?: SyncAsked) => Promise<string>;
+  /**
+   * What `grove prune` would remove, and what it would leave — removing nothing.
+   *
+   * The list already badges the rows `merged` and `gone`; this is that answer
+   * gathered up for the question `/prune` asks, so the prompt can name the
+   * directories before anyone presses `y`. It fetches first, because `gone` is
+   * only ever true after a fetch that pruned.
+   */
+  readonly pendingPrune: () => Promise<PruneResult>;
+  /**
+   * The removal `pendingPrune` described: `grove prune`, branches kept.
+   *
+   * Kept rather than deleted for the reason `r` keeps them: a branch is what
+   * brings a worktree back, and `--delete-branch` is the spelling that stays on
+   * the command line. The refusals are `prune`'s own — dirty, mid-rebase,
+   * locked, or the one you are standing in are left alone and counted.
+   */
+  readonly prune: () => Promise<string>;
   /**
    * The commands a worktree was just denied, if any.
    *
@@ -494,6 +513,20 @@ export function createWorktreeService(
     },
 
     pendingCommands: () => pendingCommands(repo),
+
+    pendingPrune: () =>
+      pruneWorktrees(repo, cwd, { dryRun: true, deleteBranch: false, fetch: true }, reporter),
+
+    prune: async () => {
+      const result = await pruneWorktrees(
+        repo,
+        cwd,
+        { dryRun: false, deleteBranch: false, fetch: true },
+        reporter,
+      );
+
+      return describePrune(result);
+    },
 
     trustAndRun: async (branch) => {
       // Resolved rather than assembled: the directory a branch lives in is

@@ -15,7 +15,7 @@ import { windowOf } from "./window.ts";
  * A key stays on the bar when it acts on the row under the cursor and is
  * reached often enough to be muscle memory — move, `enter`, `a`, `r`, `s`, and
  * `x` on the rows that have something to discard. A command comes here when it
- * is aimed at the repository rather than at a row (`sync-all`, `review`), when
+ * is aimed at the repository rather than at a row (`sync-all`, `prune`, `review`), when
  * it is a preference set once and then left (`log`, `refresh`), or when it does
  * act on the row and is still reached rarely — `open`, which is a thing you do
  * to a worktree on the day you come back to it. Those are the ones a letter
@@ -35,7 +35,7 @@ import { windowOf } from "./window.ts";
  * a branch to run it is a type error rather than a row that does nothing when
  * you press enter on it.
  */
-export type CommandName = "open" | "setup" | "sync-all" | "review" | "refresh" | "log";
+export type CommandName = "open" | "setup" | "sync-all" | "prune" | "review" | "refresh" | "log";
 
 export type MenuCommand = {
   /** Without the slash; it is drawn with one and typed without. */
@@ -61,6 +61,7 @@ export function commandsFor(logOn: boolean): readonly MenuCommand[] {
       summary: "fill the row under the cursor in from .grove.toml again",
     },
     { name: "sync-all", summary: "sync every worktree, not just the row under the cursor" },
+    { name: "prune", summary: "remove every worktree marked merged or gone, after asking" },
     { name: "review", summary: "pick one of the open pull requests and check it out" },
     { name: "refresh", summary: "re-read the worktrees now, without waiting for the clock" },
     {

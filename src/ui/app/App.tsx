@@ -438,6 +438,30 @@ export function App({
   );
 
   /**
+   * `/prune`: find out what is finished with, then ask about it by name.
+   *
+   * The dry run is the question. The list already badges these rows, but a
+   * badge is not a list of what one key is about to remove, and the whole
+   * argument for `r` confirming is that the directory is named before it goes.
+   * Nothing finished is not a question — it falls through to the run, which
+   * says so in `prune`'s own words rather than in a second copy of them here.
+   */
+  const beginPrune = useCallback(
+    () =>
+      askThen(
+        "looking for finished worktrees",
+        async () => {
+          const result = await service.pendingPrune();
+          const going = result.entries.some((entry) => entry.skipped === undefined);
+
+          return going ? { kind: "prune", result } : undefined;
+        },
+        () => void perform("pruning finished worktrees", () => service.prune()),
+      ),
+    [askThen, perform, service],
+  );
+
+  /**
    * `/open`: find out whether the line has been read here, then run it or show
    * it to be read.
    *
@@ -747,6 +771,8 @@ export function App({
           return void perform(`filling in ${selected.dir}`, () => service.setup(selected.path));
         case "sync-all":
           return void beginSyncAll();
+        case "prune":
+          return void beginPrune();
         case "review":
           return void openPrs();
         case "refresh":
@@ -757,7 +783,7 @@ export function App({
           return setLogOn((on) => !on);
       }
     },
-    [perform, beginOpen, beginSyncAll, openPrs, selected, service],
+    [perform, beginOpen, beginSyncAll, beginPrune, openPrs, selected, service],
   );
 
   useInput((input, key) => {

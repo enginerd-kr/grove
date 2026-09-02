@@ -397,6 +397,38 @@ describe("createWorktreeService", () => {
   );
 
   test(
+    "prune answers with what it would remove, and removes it when asked",
+    async () => {
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { service } = serviceAt(paths);
+
+        // What a merged pull request with the delete box ticked leaves behind:
+        // the branch is gone from the origin, and the worktree is still here.
+        await service.add("feat/login");
+        await seedGit(temp.originPath, ["branch", "-D", "feat/login"]);
+
+        const pending = await service.pendingPrune();
+        expect(pending.dryRun).toBe(true);
+        expect(pending.entries.map((entry) => [entry.dir, entry.reason, entry.skipped])).toEqual([
+          ["feat/login", "gone", undefined],
+        ]);
+        expect(await pathExists(join(paths.root, "feat", "login"))).toBe(true);
+
+        expect(await service.prune()).toBe("removed 1");
+        expect(await pathExists(join(paths.root, "feat", "login"))).toBe(false);
+        // The branch stays, the way `r` leaves it.
+        expect((await probeGit(paths.gitDir, ["rev-parse", "--verify", "feat/login"])).code).toBe(
+          0,
+        );
+
+        expect(await service.prune()).toBe("nothing is finished with");
+      });
+    },
+    SLOW,
+  );
+
+  test(
     "a branch on no remote is said on the line rather than raised, and published when asked",
     async () => {
       await withTempRepo(async (temp) => {

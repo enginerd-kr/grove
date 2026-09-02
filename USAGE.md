@@ -70,6 +70,8 @@ are on no remote.
 
 **Remove.** `r`. The prompt lists what would be lost. `y` removes the worktree
 and keeps the branch. On a folder row, `r` removes every worktree in it.
+`/prune` removes every worktree badged `merged` or `gone` at once: the prompt
+names them, and the branches stay.
 
 **Review a pull request.** `/review`, pick one, `enter`. It checks out as
 `pr/<number>`. Pushing from there updates the PR. Requires `gh`.
@@ -103,6 +105,7 @@ Every destructive action asks first. `y` confirms. Any other key cancels.
 | `/open` | open the selection in the editor |
 | `/setup` | re-apply `.grove.toml` to the selection |
 | `/sync-all` | sync every worktree |
+| `/prune` | remove the worktrees badged `merged` or `gone` |
 | `/review` | check out an open pull request |
 | `/refresh` | re-read worktrees now |
 | `/log` | toggle the commit panel |
@@ -231,7 +234,7 @@ grove sync [target | --all]       # s, /sync-all
 grove pr <number | url | branch>  # /review
 grove reset <target>              # x
 grove remove <target>             # r
-grove prune                       # remove finished worktrees
+grove prune                       # /prune
 grove rename <target> <name>      # move branch and directory together
 grove exec -- <command>           # run in every worktree
 grove doctor                      # diagnose

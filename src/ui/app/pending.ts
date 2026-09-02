@@ -2,7 +2,7 @@ import type { WorktreeSummary } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import { plural } from "../../core/text.ts";
 import { theme } from "../theme.ts";
-import type { PendingOpen, WorktreeService } from "./service.ts";
+import type { PendingOpen, PruneResult, WorktreeService } from "./service.ts";
 
 /**
  * What a key is about to do that nobody should be able to do by accident, held
@@ -35,6 +35,8 @@ export type Pending =
   | { readonly kind: "publish"; readonly summary: WorktreeSummary }
   /** `/sync-all`, where `count` of the worktrees would. */
   | { readonly kind: "sync-all"; readonly count: number }
+  /** `/prune`: every finished worktree, as the dry run described them. */
+  | { readonly kind: "prune"; readonly result: PruneResult }
   /**
    * `/open`, where the line that would open it is one nobody here has read.
    *
@@ -192,6 +194,23 @@ export function describePending(target: Pending): {
     };
   }
 
+  // Named, not counted: `remove 3 finished worktrees?` is a question about a
+  // number, and the person answering is weighing directories. What stays is
+  // said too — the branches, and the worktrees prune declines to touch —
+  // because "left alone" is the half that makes this amber rather than red:
+  // nothing uncommitted goes, since prune never removes a dirty worktree.
+  if (target.kind === "prune") {
+    const going = target.result.entries.filter((entry) => entry.skipped === undefined);
+    const staying = target.result.entries.length - going.length;
+    const named = going.map((entry) => entry.dir).join(", ");
+    const kept = staying > 0 ? `, ${staying} left alone` : "";
+
+    return {
+      text: `remove ${plural(going.length, "finished worktree")} — ${named}? the branches stay${kept}`,
+      colour: theme.warn,
+    };
+  }
+
   // The one question here that takes nothing away, and the only one that has to
   // quote something: what `y` agrees to is this exact text, so the text is the
   // prompt. Amber and not red, which is the distinction the two colours are
@@ -248,6 +267,13 @@ export function commitPending(
   if (target.kind === "sync-all") {
     return { label: "syncing every worktree", run: () => service.sync() };
   }
+  // The real run, not the dry one's entries replayed: `grove prune` decides
+  // what is finished at the moment it runs, and a branch merged between the
+  // question and the answer is one it should find.
+  if (target.kind === "prune") {
+    return { label: "pruning finished worktrees", run: () => service.prune() };
+  }
+
   // `y` is the `--publish` the command line would have been given.
   if (target.kind === "publish") {
     return {

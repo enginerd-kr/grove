@@ -74,11 +74,13 @@ const PR_ROWS = 8;
  *
  * Smaller than the pull-request popup's eight, because the two lists grow for
  * different reasons: how many pull requests are open is the forge's business,
- * while how many commands there are is ours. Past six the menu has stopped
- * being a list you read and started being one you scroll, and the answer to
- * that is fewer commands rather than a taller popup.
+ * while how many commands there are is ours. It is pinned to exactly how many
+ * there are, so the menu is a list you read and never one you scroll — and
+ * adding a command means raising this on purpose, having decided the list is
+ * still short enough to be read whole. Past eight or so it is not, and the
+ * answer to that is fewer commands rather than a taller popup.
  */
-const MENU_ROWS = 6;
+const MENU_ROWS = 7;
 
 /**
  * The rows the list keeps whatever else wants them.
@@ -189,6 +191,10 @@ const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
   "sync-all": [
     { keys: "y", action: "sync" },
     { keys: "n", action: "leave it" },
+  ],
+  prune: [
+    { keys: "y", action: "remove" },
+    { keys: "n", action: "keep" },
   ],
   // `y` is the push, since that is the half of the sync the question is about.
   publish: [
