@@ -249,6 +249,7 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     const log = await run({
       name: "prune",
       only: undefined,
+      closed: false,
       dryRun: true,
       deleteBranch: false,
       fetch: false,

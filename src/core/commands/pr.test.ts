@@ -738,8 +738,10 @@ describe.skipIf(!POSIX)("when gh cannot answer", () => {
       // The one exit code nothing else in grove reports, because `gh` is the
       // one tool nothing else in grove needs.
       expect(errorToExitCode(error.code)).toBe(ExitCode.gh);
-      expect(error.message).toBe("reviewing a pull request needs `gh`, which is not installed");
-      expect(error.hint).toBe("https://cli.github.com — nothing else in grove uses it");
+      expect(error.message).toBe("this needs `gh`, which is not installed");
+      expect(error.hint).toBe(
+        "https://cli.github.com — only `grove pr` and `grove prune --closed` use it",
+      );
       // Missing is not the same as failing: there is no exit code to quote and
       // no stderr to carry, so `details` is empty rather than a guess.
       expect(error.details).toEqual([]);

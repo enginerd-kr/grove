@@ -263,6 +263,14 @@ describe("flags land where the command expects them", () => {
     // Both halves is the whole question, which is the default.
     expect(run(["prune", "--gone", "--merged"]).command).toMatchObject({ only: undefined });
     expect(run(["prune", "-n"]).command).toMatchObject({ dryRun: true });
+    // `--closed` widens rather than narrows: it is asked of gh on top of
+    // whichever of the two free answers were asked for.
+    expect(run(["prune"]).command).toMatchObject({ closed: false });
+    expect(run(["prune", "--closed"]).command).toMatchObject({ only: undefined, closed: true });
+    expect(run(["prune", "--gone", "--closed"]).command).toMatchObject({
+      only: "gone",
+      closed: true,
+    });
   });
 
   test("the rest of the mutating commands", () => {

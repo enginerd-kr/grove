@@ -75,6 +75,8 @@ export type GroveCommand =
       readonly name: "prune";
       /** `--gone`/`--merged`; absent means both. */
       readonly only?: "gone" | "merged";
+      /** `--closed`: also ask `gh` for pull requests closed without merging. */
+      readonly closed: boolean;
       readonly dryRun: boolean;
       readonly deleteBranch: boolean;
       readonly fetch: boolean;
@@ -273,6 +275,7 @@ function buildCommand(
         // halves of one question, and asking for both halves is asking the
         // question.
         only: gone === merged ? undefined : gone ? "gone" : "merged",
+        closed: bool(values, "closed"),
         dryRun: bool(values, "dry-run"),
         deleteBranch: bool(values, "delete-branch"),
         fetch: !bool(values, "no-fetch"),

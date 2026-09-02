@@ -543,13 +543,18 @@ export function createWorktreeService(
     pendingCommands: () => pendingCommands(repo),
 
     pendingPrune: () =>
-      pruneWorktrees(repo, cwd, { dryRun: true, deleteBranch: false, fetch: true }, reporter),
+      pruneWorktrees(
+        repo,
+        cwd,
+        { closed: false, dryRun: true, deleteBranch: false, fetch: true },
+        reporter,
+      ),
 
     prune: async () => {
       const result = await pruneWorktrees(
         repo,
         cwd,
-        { dryRun: false, deleteBranch: false, fetch: true },
+        { closed: false, dryRun: false, deleteBranch: false, fetch: true },
         reporter,
       );
 
