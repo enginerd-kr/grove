@@ -1727,12 +1727,13 @@ describe("the keys", () => {
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
 
-    // `re` is in three of the names, which is what makes this a filter rather
+    // `re` is in four of the names, which is what makes this a filter rather
     // than a lookup.
     await press(ui, "re");
-    let frame = await settled(ui, (each) => each.includes(`3 of ${MENU_TOTAL}`));
+    let frame = await settled(ui, (each) => each.includes(`4 of ${MENU_TOTAL}`));
     expect(frame).toContain("/rebase");
     expect(frame).toContain("/review");
+    expect(frame).toContain("/upstream");
     expect(frame).toContain("/refresh");
     expect(frame).not.toContain("/sync-all");
 
@@ -1742,7 +1743,7 @@ describe("the keys", () => {
     expect(frame).not.toContain("/refresh");
 
     ui.stdin.write(keys.backspace);
-    frame = await settled(ui, (each) => each.includes(`3 of ${MENU_TOTAL}`));
+    frame = await settled(ui, (each) => each.includes(`4 of ${MENU_TOTAL}`));
     expect(frame).toContain("/refresh");
   });
 
@@ -1773,10 +1774,10 @@ describe("the keys", () => {
 
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
-    // `s` is in `setup`, `rebase`, `sync-all` and `refresh`, which is the whole
-    // of what a filter over a handful of short names can narrow to.
+    // `s` is in `setup`, `rebase`, `sync-all`, `upstream` and `refresh`, which
+    // is the whole of what a filter over a handful of short names can narrow to.
     await press(ui, "s");
-    await settled(ui, (frame) => frame.includes(`4 of ${MENU_TOTAL}`));
+    await settled(ui, (frame) => frame.includes(`5 of ${MENU_TOTAL}`));
 
     await press(ui, keys.backspace);
     ui.stdin.write(keys.backspace);
