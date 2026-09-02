@@ -196,8 +196,11 @@ and each `env` variable take the last value set.
 `copy` and `link` run immediately. `run` and `open` do not until you approve
 them, since a `git pull` could otherwise deliver arbitrary commands.
 
-On the screen, grove shows the commands and asks. `y` approves. On the CLI,
-pass `--trust`. Without approval the commands are printed and skipped.
+grove shows the commands and asks. `y` approves. On the screen that is the
+prompt after `a`; on the CLI it is the same question under `grove add`,
+`grove pr`, `grove setup`, and `grove open`, whenever a terminal is attached.
+`--trust` answers it in advance. In a pipe, with `--headless`, or with
+`--json`, nothing is asked: the commands are printed and skipped.
 
 Approval is a hash of the file, stored in the bare repository's git config
 (local, never pushed). Editing the file revokes it. `config.toml` and an
@@ -352,8 +355,9 @@ broken symlinks. Exits `6` on a problem, `0` on warnings only.
 
 Not bugs:
 
-- **Nothing was copied or installed.** `run` needs trust. `copy` / `link`
-  read from the trunk worktree, not your branch.
+- **Nothing was installed.** `run` needs trust: answer `y` when asked, or
+  pass `--trust`. A pipe is never asked. `copy` / `link` read from the trunk
+  worktree, not your branch.
 - **`grove` printed usage instead of the screen.** No TTY, or `--headless`.
 - **`grove exec` consumed my flags.** Put `--` before the command.
 - **`grove <command>` refused to pick a repository.** The folder holds several.

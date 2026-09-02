@@ -37,6 +37,8 @@ type RunOptions = {
   readonly global?: Partial<GlobalOptions>;
   /** Where the command is invoked from. Defaults to the repository root. */
   readonly cwd?: string;
+  /** Somebody at the terminal, answering every question this way. Absent: nobody. */
+  readonly ask?: (question: string) => Promise<boolean>;
 };
 
 type Fixture = {
@@ -59,11 +61,16 @@ async function withFixture(body: (fixture: Fixture) => Promise<void>): Promise<v
     const elsewhere = join(temp.root, "elsewhere");
     await mkdir(elsewhere, { recursive: true });
 
-    const attempt: Fixture["attempt"] = async (command, { global = {}, cwd = root } = {}) => {
+    const attempt: Fixture["attempt"] = async (command, { global = {}, cwd = root, ask } = {}) => {
       const log = recorder();
 
       try {
-        await runCommand(command, { cwd, global: { ...BASE, ...global }, reporter: log.reporter });
+        await runCommand(command, {
+          cwd,
+          global: { ...BASE, ...global },
+          reporter: log.reporter,
+          ask,
+        });
         return { log, error: undefined };
       } catch (error) {
         return { log, error };
@@ -588,6 +595,114 @@ describe("what a failure costs", () => {
       expect(error).toBeInstanceOf(Error);
       // Not a bare stack: the sentence names the thing that is missing.
       expect((error as Error).message).toContain("git");
+    });
+  }, 60_000);
+});
+
+/**
+ * The question the command line could not ask until it had somebody to ask.
+ *
+ * Every probe above runs with no `ask`, which is the pipe, `--headless` and
+ * `--json` case, and pins that nothing is asked there. These are the terminal:
+ * the commands `.grove.toml` is holding back are shown, one key answers, and
+ * `y` is `--trust` — the same record, so the next `add` does not ask again.
+ */
+describe("asking about .grove.toml", () => {
+  const add = (branch: string): GroveCommand => ({
+    name: "add",
+    branch,
+    from: undefined,
+    fetch: false,
+    push: false,
+    setup: true,
+    trust: false,
+    take: false,
+  });
+
+  test("add shows the commands it was denied and runs them on `y`, once for the file", async () => {
+    await withFixture(async ({ root, run }) => {
+      await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nrun = ["echo ran > ran.txt"]\n');
+      const asked: string[] = [];
+      const ask = async (question: string) => {
+        asked.push(question);
+        return true;
+      };
+
+      const log = await run(add("feat/login"), { ask });
+
+      // The lines above the question are what `y` agrees to.
+      expect(log.err.join("")).toContain("  echo ran > ran.txt\n");
+      expect(asked).toEqual(["run 1 command from .grove.toml? y trusts the file"]);
+      expect(await Bun.file(join(root, "feat", "login", "ran.txt")).text()).toBe("ran\n");
+      // The worktree is still the result, after the question rather than before it.
+      expect(log.out).toEqual(["feat/login\tfeat/login\n"]);
+
+      // `y` recorded the file, so the second worktree runs without asking.
+      const again = await run(add("feat/signup"), { ask });
+      expect(asked).toHaveLength(1);
+      expect(again.err.join("")).not.toContain("not been trusted");
+      expect(await Bun.file(join(root, "feat", "signup", "ran.txt")).text()).toBe("ran\n");
+    });
+  }, 60_000);
+
+  test("`n` leaves the commands waiting, and says what runs them later", async () => {
+    await withFixture(async ({ root, run }) => {
+      await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nrun = ["echo ran > ran.txt"]\n');
+
+      const log = await run(add("feat/login"), { ask: async () => false });
+
+      expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(false);
+      expect(log.err.join("")).toContain("grove setup feat/login --trust");
+      expect(log.out).toEqual(["feat/login\tfeat/login\n"]);
+    });
+  }, 60_000);
+
+  test("nobody at the terminal is the answer the commands always had", async () => {
+    await withFixture(async ({ root, run }) => {
+      await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nrun = ["echo ran > ran.txt"]\n');
+
+      const log = await run(add("feat/login"));
+
+      expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(false);
+      expect(log.err.join("")).toContain("not been trusted");
+      expect(log.err.join("")).not.toContain("[y/N]");
+    });
+  }, 60_000);
+
+  test("setup asks once for every worktree it was denied in", async () => {
+    await withFixture(async ({ root, run }) => {
+      await run(add("feat/login"));
+      await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nrun = ["echo ran > ran.txt"]\n');
+      let asked = 0;
+      const ask = async () => {
+        asked += 1;
+        return true;
+      };
+
+      const log = await run({ name: "setup", target: undefined, all: true, trust: false }, { ask });
+
+      expect(asked).toBe(1);
+      expect(await Bun.file(join(root, "main", "ran.txt")).text()).toBe("ran\n");
+      expect(await Bun.file(join(root, "feat", "login", "ran.txt")).text()).toBe("ran\n");
+      // The rows are the second run's, which is the one that ran anything.
+      expect(log.out.join("")).toContain("1 run");
+    });
+  }, 60_000);
+
+  test("open quotes the line, and `y` opens with it", async () => {
+    await withFixture(async ({ root, run }) => {
+      await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nopen = "true"\n');
+      const asked: string[] = [];
+      const ask = async (question: string) => {
+        asked.push(question);
+        return true;
+      };
+
+      const log = await run({ name: "open", target: "main", trust: false }, { ask });
+
+      expect(asked).toEqual(["open main with `true`? nobody here has read main/.grove.toml"]);
+      // Reached the hook with trust, whether or not there was a terminal to open into.
+      expect(log.err.join("")).toMatch(/opening true|did not open/);
     });
   }, 60_000);
 });

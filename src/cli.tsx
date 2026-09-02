@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { parseCliArgs } from "./cli/args.ts";
+import { terminalAsker } from "./cli/ask.ts";
 import { ExitCode, errorToExitCode } from "./cli/exit-codes.ts";
 import { runCommand } from "./cli/run.ts";
 import { isGroveError } from "./core/errors.ts";
@@ -137,11 +138,24 @@ process.on("SIGINT", () => {
   killRunningGit();
 });
 
+/**
+ * Whether there is somebody to ask, which is a stricter question than `canOpen`
+ * in `run.ts`: an editor can be opened for a person who is merely watching, but
+ * a question needs a keyboard, and both `--headless` and `--json` are the
+ * spellings of a run that is a script whatever it is attached to.
+ */
+const attended =
+  process.stdin.isTTY === true &&
+  process.stderr.isTTY === true &&
+  !command.global.headless &&
+  !command.global.json;
+
 try {
   await runCommand(command.command, {
     cwd: process.cwd(),
     global: command.global,
     reporter,
+    ask: attended ? terminalAsker(reporter) : undefined,
   });
   await reporter.close();
 

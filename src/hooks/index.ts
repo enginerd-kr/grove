@@ -29,7 +29,7 @@
  * themselves reach for the module they mean.
  */
 
-export { commandEnvFor, failureFor, pendingCommands } from "./command.ts";
+export { commandEnvFor, failureFor, type HookTarget, pendingCommands } from "./command.ts";
 export { HOOKS_FILE, type Hooks } from "./config.ts";
 export { type PendingOpen, pendingOpen } from "./open.ts";
 export { describeSetup, runSetup, type SetupResult, trustAndRun } from "./setup.ts";

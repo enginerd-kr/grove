@@ -324,18 +324,29 @@ async function setUpWorktree(
     hooks === undefined
       ? await trustAndRun(repo, target, reporter, { open })
       : await runSetup(repo, target, { hooks, open }, reporter);
-  const failure = failureFor(result);
-
-  if (failure) {
-    reporter.warn(`${failure.message}; the worktree is there`);
-    // The reason is on `details` — the command's own stderr — and it is the
-    // half worth having: `"open ..." exited 1` alone sends somebody off to run
-    // the thing by hand to read what it already said. One line each, because a
-    // warn takes a line and folding four of them into a sentence reads as one.
-    for (const detail of failure.details) reporter.info(`  ${detail}`);
-  }
+  warnSetupFailure(result, reporter);
 
   return result;
+}
+
+/**
+ * The failed command, said as a warning under a worktree that exists.
+ *
+ * Exported for the one other place that runs `[setup]` on `add`'s behalf: the
+ * command line, when it has asked about the commands `add` was denied and been
+ * told yes. The worktree is just as much there, so the failure is just as much
+ * a warning.
+ */
+export function warnSetupFailure(result: SetupResult, reporter: Reporter): void {
+  const failure = failureFor(result);
+  if (!failure) return;
+
+  reporter.warn(`${failure.message}; the worktree is there`);
+  // The reason is on `details` — the command's own stderr — and it is the
+  // half worth having: `"open ..." exited 1` alone sends somebody off to run
+  // the thing by hand to read what it already said. One line each, because a
+  // warn takes a line and folding four of them into a sentence reads as one.
+  for (const detail of failure.details) reporter.info(`  ${detail}`);
 }
 
 /**

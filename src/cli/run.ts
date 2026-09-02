@@ -1,5 +1,5 @@
 import { relative } from "node:path";
-import { addWorktree } from "../core/commands/add.ts";
+import { addWorktree, warnSetupFailure } from "../core/commands/add.ts";
 import { cloneRepo } from "../core/commands/clone.ts";
 import {
   diagnose,
@@ -24,9 +24,19 @@ import { resetWorktree } from "../core/commands/reset.ts";
 import { setUpWorktrees, failureFor as setupFailure } from "../core/commands/setup.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
-import { describeSetup } from "../hooks/index.ts";
+import type { RepoPaths } from "../core/layout.ts";
+import { plural } from "../core/text.ts";
+import {
+  describeSetup,
+  type HookTarget,
+  pendingCommands,
+  pendingOpen,
+  type SetupResult,
+  trustAndRun,
+} from "../hooks/index.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
+import type { Ask } from "./ask.ts";
 
 /**
  * Everything a command needs that it must not go looking for itself.
@@ -39,7 +49,60 @@ export type CommandContext = {
   readonly cwd: string;
   readonly global: GlobalOptions;
   readonly reporter: Reporter;
+  /**
+   * A question for the person at the terminal, when there is one.
+   *
+   * Absent on every run nobody is watching — piped, `--headless`, `--json` —
+   * and the commands then do what they always did: say what is waiting on
+   * `--trust` and carry on without it. See `ask.ts`.
+   */
+  readonly ask?: Ask;
 };
+
+/**
+ * Shows the commands `[setup]` is holding back, and asks.
+ *
+ * What `--trust` asks for is that somebody read the exact lines before they
+ * run, and a question with the lines above it is that reading — the same
+ * thing the screen does after `a`, from the one surface that could show them.
+ * Nothing is asked where nothing is gated: a file already trusted here, or
+ * commands out of a layer you wrote yourself, ran already.
+ */
+async function askAboutCommands(repo: RepoPaths, ask: Ask, reporter: Reporter): Promise<boolean> {
+  const commands = await pendingCommands(repo);
+  if (commands.length === 0) return false;
+
+  for (const command of commands) reporter.info(`  ${command}`);
+
+  return ask(`run ${plural(commands.length, "command")} from .grove.toml? y trusts the file`);
+}
+
+/**
+ * `add` and `pr` made the worktree and were denied its commands; this asks
+ * and, on `y`, runs them the way `--trust` would have.
+ *
+ * `trustAndRun` is what the screen's `y` calls too, so the record it writes is
+ * the same one: answering here answers for `a` and for every later `add`. A
+ * command that fails is a warning under a worktree that exists, exactly as it
+ * is when `add --trust` runs it.
+ */
+async function offerSetup(
+  repo: RepoPaths,
+  target: HookTarget,
+  ask: Ask,
+  reporter: Reporter,
+  open: boolean,
+): Promise<SetupResult | undefined> {
+  if (!(await askAboutCommands(repo, ask, reporter))) {
+    reporter.info(`skipped — \`grove setup ${target.branch ?? ""} --trust\` runs them later`);
+    return undefined;
+  }
+
+  const result = await trustAndRun(repo, target, reporter, { open });
+  warnSetupFailure(result, reporter);
+
+  return result;
+}
 
 /** Paths are reported relative to where the user is standing, when that is shorter. */
 function display(cwd: string, path: string): string {
@@ -53,7 +116,7 @@ function display(cwd: string, path: string): string {
 }
 
 export async function runCommand(command: GroveCommand, context: CommandContext): Promise<void> {
-  const { cwd, global, reporter } = context;
+  const { cwd, global, reporter, ask } = context;
 
   /**
    * Whether there is a terminal for `[setup] open` to open into.
@@ -96,6 +159,15 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       const repo = await findRepoRoot(cwd, global.repo);
       const result = await addWorktree(repo, cwd, { ...options, open: canOpen }, reporter);
 
+      if (result.setup?.untrusted && ask) {
+        await offerSetup(
+          repo,
+          { path: result.path, branch: result.branch },
+          ask,
+          reporter,
+          canOpen,
+        );
+      }
       if (result.alreadyPresent) reporter.info(`${command.branch} already has a worktree`);
       // Said out loud rather than left to be discovered: `--take` emptied a
       // directory somebody was working in, and the sha is what undoes that.
@@ -114,6 +186,15 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       const repo = await findRepoRoot(cwd, global.repo);
       const result = await checkoutPullRequest(repo, cwd, { ...options, open: canOpen }, reporter);
 
+      if (result.setup?.untrusted && ask) {
+        await offerSetup(
+          repo,
+          { path: result.path, branch: result.branch },
+          ask,
+          reporter,
+          canOpen,
+        );
+      }
       // A worktree that was already there is only "nothing happened" when the
       // branch did not move either; catching up with the pull request is the
       // outcome, and the same line has to say which of the two it was.
@@ -141,7 +222,27 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "open": {
       const { name, ...options } = command;
       const repo = await findRepoRoot(cwd, global.repo);
-      const result = await openWorktree(repo, cwd, { ...options, open: canOpen }, reporter);
+      let result = await openWorktree(repo, cwd, { ...options, open: canOpen }, reporter);
+
+      // The line, then the question, then — on `y` — the same call with the
+      // `--trust` that answer is. `pendingOpen` is what the screen's `/open`
+      // asks, and the sentence is the one it puts on the row.
+      if (result.untrusted && ask) {
+        const waiting = await pendingOpen(repo, { path: result.path, branch: result.branch });
+        if (
+          waiting &&
+          (await ask(
+            `open ${result.dir} with \`${waiting.command}\`? nobody here has read ${waiting.files.join(" or ")}`,
+          ))
+        ) {
+          result = await openWorktree(
+            repo,
+            cwd,
+            { ...options, trust: true, open: canOpen },
+            reporter,
+          );
+        }
+      }
 
       report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.opened ?? ""}`));
       return;
@@ -167,7 +268,18 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "setup": {
       const { name, ...options } = command;
       const repo = await findRepoRoot(cwd, global.repo);
-      const results = await setUpWorktrees(repo, cwd, options, reporter);
+      let results = await setUpWorktrees(repo, cwd, options, reporter);
+
+      // Asked once for however many worktrees: trust is one record for the
+      // trunk's file, so one `y` answers for all of them. The run is repeated
+      // rather than resumed because it is idempotent — `copy` takes the trunk's
+      // version again and `link` leaves what is there — and the commands are
+      // what was waiting.
+      if (results.some((result) => result.untrusted) && ask) {
+        if (await askAboutCommands(repo, ask, reporter)) {
+          results = await setUpWorktrees(repo, cwd, { ...options, trust: true }, reporter);
+        }
+      }
 
       report(results, () =>
         reporter.out(
