@@ -81,6 +81,13 @@ async function head(cwd: string, ref = "HEAD"): Promise<string> {
   return (await probeGit(cwd, ["rev-parse", ref])).stdout.trim();
 }
 
+/** Whether the origin has a branch by this name at all. */
+async function onOrigin(temp: TempRepo, branch: string): Promise<boolean> {
+  const probe = await probeGit(temp.originPath, ["rev-parse", "--verify", "--quiet", branch]);
+
+  return probe.code === 0;
+}
+
 /** True when a rebase is stopped part-way through in this worktree. */
 async function isRebasing(worktree: string): Promise<boolean> {
   const state = await probeGit(worktree, [
@@ -99,16 +106,24 @@ type SyncCall = {
   readonly all?: boolean;
   readonly abortOnConflict?: boolean;
   readonly push?: boolean;
+  readonly publish?: boolean;
   /** Where the sync is asked from. Defaults to the repository root. */
   readonly cwd?: string;
 };
 
 function attemptSync(
   repo: RepoPaths,
-  { target, all = false, abortOnConflict = true, push = true, cwd = repo.root }: SyncCall = {},
+  {
+    target,
+    all = false,
+    abortOnConflict = true,
+    push = true,
+    publish = false,
+    cwd = repo.root,
+  }: SyncCall = {},
 ): Promise<Attempt<readonly SyncOutcome[]>> {
   return attempt((reporter) =>
-    syncWorktrees(repo, cwd, { target, all, abortOnConflict, push }, reporter),
+    syncWorktrees(repo, cwd, { target, all, abortOnConflict, push, publish }, reporter),
   );
 }
 
@@ -356,6 +371,64 @@ describe("grove sync", () => {
       // flag is named after.
       expect(await head(temp.originPath, "feat/login")).toBe(originBefore);
       expect(await head(worktree)).not.toBe(originBefore);
+    });
+  });
+
+  /**
+   * The gap this closes: a branch `add` made without `--push` has no upstream,
+   * and `publish` returned on that before it said anything — so the branch
+   * could be synced any number of times and reach no remote, and a script
+   * that went on to `remove --delete-branch` had deleted the only copy.
+   */
+  test("a branch on no remote is rebased and reported, and --publish puts it on origin", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      // What `grove add feat/local` makes: a branch the origin has never heard of.
+      await seedWorktree(repo, "feat/local");
+      const worktree = join(repo.root, "feat", "local");
+
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+      await commitIn(worktree, "mine.txt", "mine\n");
+
+      const reported = await attemptSync(repo, { target: "feat/local" });
+      const [synced] = succeeded(reported);
+
+      // The rebase happened: it does not need a remote to be worth doing.
+      expect(synced?.kind).toBe("rebased");
+      expect(await Bun.file(join(worktree, "trunk.txt")).text()).toBe("trunk\n");
+      // Its own field, because `pushed` has two answers and this is neither:
+      // no push was attempted, and none was refused.
+      expect(synced?.unpublished).toBe(true);
+      expect(synced?.pushed).toBeUndefined();
+      expect(reported.log.err.join("")).not.toContain("publishing");
+      expect(await onOrigin(temp, "feat/local")).toBe(false);
+
+      // Exit 4 the way a refused push is, with the flag in the hint: the
+      // script about to delete the branch is the one this has to stop.
+      const error = failure(succeeded(reported));
+      expect(errorToExitCode(error.code)).toBe(ExitCode.refused);
+      expect(error.message).toBe("feat/local on no remote yet");
+      expect(error.hint).toContain("--publish");
+
+      // `--no-push` is the spelling for a branch meant to stay local, and it
+      // has nothing to report.
+      const [local] = succeeded(await attemptSync(repo, { target: "feat/local", push: false }));
+      expect(local?.unpublished).toBeUndefined();
+
+      const published = await attemptSync(repo, { target: "feat/local", publish: true });
+      const [pushed] = succeeded(published);
+      expect(pushed?.pushed).toBe(true);
+      expect(pushed?.unpublished).toBeUndefined();
+      expect(published.log.err.join("")).toContain("✓ published feat/local to origin/feat/local");
+      expect(await head(temp.originPath, "feat/local")).toBe(await head(worktree));
+
+      // Tracked, so the next sync takes the ordinary path and has nothing to say.
+      const upstream = await probeGit(worktree, ["rev-parse", "--abbrev-ref", "@{upstream}"]);
+      expect(upstream.stdout.trim()).toBe("origin/feat/local");
+      const [again] = succeeded(await attemptSync(repo, { target: "feat/local" }));
+      expect(again?.kind).toBe("up-to-date");
+      expect(again?.unpublished).toBeUndefined();
+      expect(failureFor(again ? [again] : [])).toBeUndefined();
     });
   });
 

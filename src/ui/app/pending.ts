@@ -31,6 +31,8 @@ export type Pending =
   | { readonly kind: "reset"; readonly summary: WorktreeSummary }
   /** `s`, where the sync it starts would rewrite commits the remote already has. */
   | { readonly kind: "sync"; readonly summary: WorktreeSummary }
+  /** `s`, where the branch is on no remote and `y` puts it on one. */
+  | { readonly kind: "publish"; readonly summary: WorktreeSummary }
   /** `/sync-all`, where `count` of the worktrees would. */
   | { readonly kind: "sync-all"; readonly count: number }
   /**
@@ -70,8 +72,8 @@ export function wouldForcePush(summary: WorktreeSummary): boolean {
   // prompt that teaches people to answer `y` without reading it.
   if (summary.dirty || summary.rebasing) return false;
 
-  // Nothing published is nothing to overwrite. `publish` returns early on
-  // exactly this, which is its own problem and not one a prompt can fix.
+  // Nothing published is nothing to overwrite. It is `wouldPublish`'s question
+  // instead, and the two are asked in that order.
   if (summary.upstream === undefined) return false;
 
   // Absent means git could not answer — 2.41 for `%(ahead-behind:)` — and an
@@ -87,6 +89,25 @@ export function wouldForcePush(summary: WorktreeSummary): boolean {
 }
 
 /**
+ * Whether syncing this worktree would leave a branch on no remote.
+ *
+ * The other question `s` asks before it acts. `sync` rebases such a branch and
+ * then reports that it is nowhere, because a first push is one the remote has
+ * never agreed to and the command line has to be told to make it. The screen
+ * can ask, so it does — and `y` is `--publish`.
+ *
+ * The same states `wouldForcePush` leaves alone are left alone here, for the
+ * same reason: `sync` declines a dirty or mid-rebase worktree before it looks
+ * at the remote, and the trunk always has one.
+ */
+export function wouldPublish(summary: WorktreeSummary): boolean {
+  if (summary.isDefault || summary.branch === undefined) return false;
+  if (summary.dirty || summary.rebasing) return false;
+
+  return summary.upstream === undefined;
+}
+
+/**
  * The question a destructive key asks, and what it costs to answer `y`.
  *
  * Each one says what survives, since that is what the person is actually
@@ -95,7 +116,7 @@ export function wouldForcePush(summary: WorktreeSummary): boolean {
  * it says that rather than something softer.
  *
  * How loudly to ask comes back with the words, because it is the same question
- * asked once: which of the five wordings this is decides the colour too.
+ * asked once: which of the wordings this is decides the colour too.
  */
 export function describePending(target: Pending): {
   readonly text: string;
@@ -145,6 +166,19 @@ export function describePending(target: Pending): {
 
     return {
       text: `sync ${dir}? ${rewritten} rewritten and force-pushed to ${upstream}`,
+      colour: theme.warn,
+    };
+  }
+
+  // The one sync question that takes nothing away: a branch nobody has pushed
+  // gains a remote copy. Amber all the same, because it is the moment the
+  // branch stops being only yours, and the name on the far end is the part
+  // worth reading before answering.
+  if (target.kind === "publish") {
+    const { dir, branch } = target.summary;
+
+    return {
+      text: `sync ${dir}? it is on no remote yet, so this pushes it to origin/${branch}`,
       colour: theme.warn,
     };
   }
@@ -213,6 +247,13 @@ export function commitPending(
   }
   if (target.kind === "sync-all") {
     return { label: "syncing every worktree", run: () => service.sync() };
+  }
+  // `y` is the `--publish` the command line would have been given.
+  if (target.kind === "publish") {
+    return {
+      label: `syncing ${target.summary.dir}`,
+      run: () => service.sync(target.summary.path, { publish: true }),
+    };
   }
 
   // `y` here records having read the line that was on the row, which is what

@@ -289,6 +289,7 @@ describe("flags land where the command expects them", () => {
     expect(run(["sync", "--all", "--no-push", "--no-abort"]).command).toEqual({
       name: "sync",
       target: undefined,
+      publish: false,
       all: true,
       abortOnConflict: false,
       push: false,

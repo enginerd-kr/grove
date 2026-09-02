@@ -271,7 +271,14 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
 
   sync: async ({ root, run }) => {
     const log = await run(
-      { name: "sync", target: undefined, all: false, abortOnConflict: true, push: false },
+      {
+        name: "sync",
+        target: undefined,
+        all: false,
+        abortOnConflict: true,
+        push: false,
+        publish: false,
+      },
       { cwd: join(root, "main") },
     );
 
@@ -491,7 +498,14 @@ describe("stdout is data, stderr is progress", () => {
           take: false,
         }),
         await run(
-          { name: "sync", target: undefined, all: false, abortOnConflict: true, push: false },
+          {
+            name: "sync",
+            target: undefined,
+            all: false,
+            abortOnConflict: true,
+            push: false,
+            publish: false,
+          },
           { cwd: join(root, "main") },
         ),
         await run({
@@ -613,7 +627,14 @@ describe("the context a command is handed", () => {
       // And "." for the directory you are standing in, which an absolute path
       // would bury.
       const sync = await run(
-        { name: "sync", target: undefined, all: false, abortOnConflict: true, push: false },
+        {
+          name: "sync",
+          target: undefined,
+          all: false,
+          abortOnConflict: true,
+          push: false,
+          publish: false,
+        },
         { cwd: join(root, "main") },
       );
       expect(sync.out).toEqual([".\tup-to-date\n"]);

@@ -113,6 +113,7 @@ export type GroveCommand =
       readonly all: boolean;
       readonly abortOnConflict: boolean;
       readonly push: boolean;
+      readonly publish: boolean;
     };
 
 export type CliCommand =
@@ -304,6 +305,7 @@ function buildCommand(
         all: bool(values, "all"),
         abortOnConflict: !bool(values, "no-abort"),
         push: !bool(values, "no-push"),
+        publish: bool(values, "publish"),
       };
     default:
       // Unreachable while `SUBCOMMANDS` and this switch agree; a new entry in

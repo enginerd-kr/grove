@@ -7,6 +7,7 @@ import { pathExists } from "../../core/fs.ts";
 import type { RepoPaths } from "../../core/layout.ts";
 import {
   managedRepo,
+  probeGit,
   seedGit,
   seedWorktree,
   type TempRepo,
@@ -389,6 +390,33 @@ describe("createWorktreeService", () => {
 
         // Every worktree, which is what `S` does — counted by outcome once
         // there is more than one to count.
+        expect(await service.sync()).toBe("2 up-to-date");
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "a branch on no remote is said on the line rather than raised, and published when asked",
+    async () => {
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { service } = serviceAt(paths);
+
+        // `a` never pushes, so this branch is on no remote.
+        await service.add("feat/local");
+        await commitOnOrigin(temp, "main", "newer.txt");
+        expect(await service.sync("main")).toBe("main fast-forwarded");
+
+        // The command line exits 4 here; the screen says so on the line and
+        // stays open, because `s` over the row is the question that fixes it.
+        expect(await service.sync("feat/local")).toBe("feat/local rebased, on no remote yet");
+        expect(await service.sync()).toBe("2 up-to-date — feat/local is on no remote yet");
+
+        // `y` on that question.
+        expect(await service.sync("feat/local", { publish: true })).toBe("feat/local up-to-date");
+        const onOrigin = await probeGit(temp.originPath, ["rev-parse", "--verify", "feat/local"]);
+        expect(onOrigin.code).toBe(0);
         expect(await service.sync()).toBe("2 up-to-date");
       });
     },

@@ -9,7 +9,7 @@ import { keys, nextFrame, plain, waitFor } from "../test-utils.ts";
 import { theme } from "../theme.ts";
 import { App } from "./App.tsx";
 import { commandsFor } from "./Menu.tsx";
-import { describePending, wouldForcePush } from "./pending.ts";
+import { describePending, wouldForcePush, wouldPublish } from "./pending.ts";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, pathOf, type TreeRow } from "./tree.ts";
 
@@ -101,6 +101,8 @@ type Calls = {
   readonly discarded: string[];
   readonly checkedOut: number[];
   readonly synced: (string | undefined)[];
+  /** The targets `sync` was told to publish, apart from the syncs themselves. */
+  readonly published: string[];
   readonly opened: { target: string; trust: boolean }[];
   readonly filledIn: string[];
   readonly trusted: string[];
@@ -120,6 +122,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     discarded: [],
     checkedOut: [],
     synced: [],
+    published: [],
     opened: [],
     filledIn: [],
     trusted: [],
@@ -185,8 +188,9 @@ function stub(overrides: Partial<WorktreeService> = {}): {
         calls.checkedOut.push(number);
         return `added pr/${number} — Change number ${number}`;
       },
-      sync: async (target) => {
+      sync: async (target, options) => {
         calls.synced.push(target);
+        if (options?.publish && target !== undefined) calls.published.push(target);
         return "1 up-to-date";
       },
       // Nothing waiting by default, which is every repository with no
@@ -455,6 +459,15 @@ describe("describePending", () => {
     );
   });
 
+  test("`s` over a branch no remote has says where it would go, in amber", () => {
+    const local = summary({ dir: "feat/login", upstream: undefined });
+
+    expect(describePending({ kind: "publish", summary: local })).toEqual({
+      text: "sync feat/login? it is on no remote yet, so this pushes it to origin/feat/login",
+      colour: theme.warn,
+    });
+  });
+
   test("`/sync-all` asks once, counting the branches rather than the worktrees", () => {
     expect(describePending({ kind: "sync-all", count: 3 })).toEqual({
       text: "sync every worktree? 3 branches are force-pushed",
@@ -540,6 +553,43 @@ describe("wouldForcePush", () => {
     // No trunk drift at all is git too old to have answered. The prompt is the
     // safe direction, and it is the direction with the cheaper mistake.
     expect(wouldForcePush(summary({ dir: "feat/login", ahead: 2 }))).toBe(true);
+  });
+});
+
+/**
+ * The other test `s` runs, after `wouldForcePush` has said no.
+ *
+ * A wrong `true` here is a prompt over a branch that `sync` would have pushed
+ * plainly, and a wrong `false` is a branch rebased and left on no remote with
+ * nothing on the screen having said so — which is the state this exists to end.
+ */
+describe("wouldPublish", () => {
+  test("a branch with no upstream is one nobody has pushed", () => {
+    expect(wouldPublish(summary({ dir: "feat/login", upstream: undefined }))).toBe(true);
+  });
+
+  test("one with an upstream is `wouldForcePush`'s question, not this one", () => {
+    expect(wouldPublish(summary({ dir: "feat/login", trunk: { ahead: 2, behind: 3 } }))).toBe(
+      false,
+    );
+  });
+
+  test("the trunk always has a remote, and a detached HEAD has no branch to push", () => {
+    expect(wouldPublish(summary({ dir: "main", isDefault: true, upstream: undefined }))).toBe(
+      false,
+    );
+    expect(
+      wouldPublish(
+        summary({ dir: "feat/login", branch: undefined, detached: true, upstream: undefined }),
+      ),
+    ).toBe(false);
+  });
+
+  test("the two states `sync` skips are not asked about, because it will decline anyway", () => {
+    const base = { dir: "feat/login", upstream: undefined } as const;
+
+    expect(wouldPublish(summary({ ...base, dirty: true, changed: 1 }))).toBe(false);
+    expect(wouldPublish(summary({ ...base, rebasing: true }))).toBe(false);
   });
 });
 
@@ -1100,6 +1150,38 @@ describe("the keys", () => {
 
     // The one action with no target, which is what `undefined` says here.
     expect(calls.synced).toEqual(["/repo/feat/login", undefined]);
+  });
+
+  /**
+   * The gap this closes: `a` makes a branch on no remote, and `s` over it
+   * synced and said `up-to-date` however many times it was pressed, with the
+   * branch never reaching the origin. The screen can ask, so it does — and the
+   * answer is what `grove sync --publish` spells out.
+   */
+  test("`s` over a branch no remote has asks, and `y` syncs it with the push", async () => {
+    const rows = [
+      summary({ dir: "main", isDefault: true, current: true }),
+      summary({ dir: "feat/login", upstream: undefined }),
+      summary({ dir: "feat/search", trunk: { ahead: 1, behind: 0 } }),
+    ];
+    const { service, calls } = stub({ list: async () => [...rows] });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    ui.stdin.write("s");
+    await settled(ui, (frame) => frame.includes("it is on no remote yet"));
+    // `n` leaves it: nothing runs, and the branch stays where it was.
+    ui.stdin.write("n");
+    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("no remote"));
+    expect(calls.synced).toEqual([]);
+
+    ui.stdin.write("s");
+    await settled(ui, (frame) => frame.includes("it is on no remote yet"));
+    ui.stdin.write("y");
+    await settled(ui, (frame) => IN_LIST(frame) && frame.includes("1 up-to-date"));
+
+    expect(calls.synced).toEqual(["/repo/feat/login"]);
+    expect(calls.published).toEqual(["/repo/feat/login"]);
   });
 
   test("`/open` opens the row under the cursor, and does nothing on a folder", async () => {

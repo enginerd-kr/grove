@@ -348,10 +348,16 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "of its own — rebases them on top and pushes plainly. Every other one is",
       "rebased onto its own remote first and then onto the default branch, and",
       "the result is force-pushed back with --force-with-lease. Stops without",
-      "changing anything if the worktree is dirty.",
+      "changing anything if the worktree is dirty. A branch that is on no remote",
+      "yet is rebased and reported, and pushed only with --publish.",
     ],
     flags: [
       { name: "all", type: "boolean", summary: "sync every worktree instead of one" },
+      {
+        name: "publish",
+        type: "boolean",
+        summary: "push a branch that is on no remote yet to origin, and track it",
+      },
       {
         name: "no-push",
         type: "boolean",

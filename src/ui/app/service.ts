@@ -199,7 +199,7 @@ export type WorktreeService = {
    * `feat/x conflicted` reads exactly like `feat/x rebased`, and the one thing
    * the outcome was carrying is the one thing that would not reach the eye.
    */
-  readonly sync: (target?: string) => Promise<string>;
+  readonly sync: (target?: string, options?: SyncAsked) => Promise<string>;
   /**
    * The commands a worktree was just denied, if any.
    *
@@ -218,6 +218,16 @@ export type WorktreeService = {
    */
   readonly trustAndRun: (branch: string) => Promise<string>;
 };
+
+/**
+ * What `y` agreed to before a sync started, beside the row it was asked over.
+ *
+ * `publish` is the one answer that reaches the remote with something it has
+ * never had: a branch `a` made is on no remote until somebody says so, and the
+ * screen says so here, having asked — the same thing `grove sync --publish`
+ * spells out on the command line.
+ */
+export type SyncAsked = { readonly publish?: boolean };
 
 /**
  * What the setup screen is allowed to do, as one function.
@@ -263,6 +273,23 @@ function describeSync(outcomes: readonly SyncOutcome[]): string {
   for (const outcome of outcomes) counts.set(outcome.kind, (counts.get(outcome.kind) ?? 0) + 1);
 
   return [...counts].map(([kind, count]) => `${count} ${kind}`).join(", ");
+}
+
+/**
+ * A branch no remote has, said on the same line as the rest.
+ *
+ * Not the `rebased` its outcome would read as: the rebase happened, and the
+ * line is still about where the branch is, which is nowhere. `s` on the row
+ * asks and publishes it; this is what `/sync-all` says instead of asking.
+ */
+function describeUnpublished(outcomes: readonly SyncOutcome[]): string {
+  const unpublished = outcomes.filter((outcome) => outcome.unpublished === true);
+  const [first] = unpublished;
+  if (first === undefined) return "";
+  if (outcomes.length === 1) return ", on no remote yet";
+  if (unpublished.length === 1) return ` — ${first.dir} is on no remote yet`;
+
+  return ` — ${unpublished.length} are on no remote yet`;
 }
 
 export function createWorktreeService(
@@ -487,11 +514,11 @@ export function createWorktreeService(
       return `${describeSetup(result)} in ${result.dir}`;
     },
 
-    sync: async (target) => {
+    sync: async (target, { publish = false } = {}) => {
       const outcomes = await syncWorktrees(
         repo,
         cwd,
-        { target, all: target === undefined, abortOnConflict: true, push: true },
+        { target, all: target === undefined, abortOnConflict: true, push: true, publish },
         reporter,
       );
 
@@ -507,10 +534,17 @@ export function createWorktreeService(
       // the screen reports outcomes and stays open. Dropping those from the
       // input rather than reimplementing the test keeps `failureFor` the only
       // place that decides a conflict outranks a refused push.
-      const failure = syncFailureFor(outcomes.filter((outcome) => outcome.kind !== "skipped"));
+      //
+      // A branch on no remote is the other exception, for the same reason: the
+      // command line exits 4 over it because a script would otherwise go on to
+      // delete the branch, but on this screen `s` over the row is the question
+      // that publishes it, and `/sync-all` saying so is enough.
+      const failure = syncFailureFor(
+        outcomes.filter((outcome) => outcome.kind !== "skipped" && outcome.unpublished !== true),
+      );
       if (failure) throw failure;
 
-      return describeSync(outcomes);
+      return `${describeSync(outcomes)}${describeUnpublished(outcomes)}`;
     },
   };
 }

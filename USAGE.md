@@ -63,8 +63,10 @@ the name starts with the folder prefix filled in.
 **Jump to a worktree.** Select it, `enter`. The path is on the clipboard.
 
 **Sync.** `s` fetches, rebases onto the remote and then the trunk, and pushes.
-If the push would rewrite remote history, grove asks first. `/sync-all` does
-every worktree with a single confirmation.
+If the push would rewrite remote history, grove asks first. A branch that is
+on no remote yet is asked about too: `y` pushes it and tracks it. `/sync-all`
+does every worktree with a single confirmation, and only says which branches
+are on no remote.
 
 **Remove.** `r`. The prompt lists what would be lost. `y` removes the worktree
 and keeps the branch. On a folder row, `r` removes every worktree in it.
@@ -269,7 +271,13 @@ Fetches, then:
 A dirty worktree aborts before anything runs. A conflicted rebase is aborted
 unless `--no-abort`. `--no-push` keeps the result local.
 
-The screen confirms before a force-push. The CLI does not.
+A branch on no remote yet (`grove add` without `--push`) is rebased and then
+reported with exit code 4: nothing was pushed, and nothing was refused.
+`--publish` pushes it to origin and tracks it. `--no-push` says it is meant
+to stay local, and reports nothing.
+
+The screen confirms before a force-push and before a first push. The CLI does
+neither.
 
 ### remove / prune
 
@@ -327,7 +335,7 @@ A typical agent loop:
 ```bash
 grove add agents/<task> --trust --json   # create; read the path from stdout
 # ... work in the worktree ...
-grove sync agents/<task>
+grove sync agents/<task> --publish        # first push too; exit 4 without it
 grove remove agents/<task> --delete-branch
 ```
 
