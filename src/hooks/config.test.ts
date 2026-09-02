@@ -12,7 +12,7 @@ import {
   readHooks,
 } from "./config.ts";
 import { repoHooks } from "./source.ts";
-import { refusalFrom, withRepo } from "./test-utils.ts";
+import { lines, refusalFrom, withRepo } from "./test-utils.ts";
 
 /**
  * `.grove.toml` is the one file a repository writes for grove to read, so what
@@ -40,7 +40,7 @@ open = "code ."
     expect(hooks.copy).toEqual([".env", "certs"]);
     expect(hooks.link).toEqual(["node_modules"]);
     expect(hooks.env).toEqual([{ name: "UV_INDEX_USERNAME", value: "PLACE_HOLDER" }]);
-    expect(hooks.commands).toEqual(["bun install", "bun run build"]);
+    expect(lines(hooks.commands)).toEqual(["bun install", "bun run build"]);
     expect(hooks.open).toEqual({ macos: "code .", linux: "code .", windows: "code ." });
     expect(hooks.teardown).toEqual(NO_TEARDOWN);
   });
@@ -73,7 +73,7 @@ linux = "code . --new-window"
     // A platform the file did not mention opens nothing, rather than being
     // guessed at with an application that may not be installed.
     expect(hooks.open.windows).toBe("");
-    expect(hooks.commands).toEqual(["bun install"]);
+    expect(lines(hooks.commands)).toEqual(["bun install"]);
   });
 
   test("[setup.open] refuses a platform it does not have", () => {
@@ -137,12 +137,12 @@ macos = ["docker compose down", "colima stop"]
       expect(linux.copy).toEqual([]);
 
       // A bare string inside the table reads as it does outside it.
-      expect(linux.commands).toEqual(["bun install"]);
-      expect(win.commands).toEqual(["bun install", "npm run win-post"]);
-      expect(mac.commands).toEqual([]);
+      expect(lines(linux.commands)).toEqual(["bun install"]);
+      expect(lines(win.commands)).toEqual(["bun install", "npm run win-post"]);
+      expect(lines(mac.commands)).toEqual([]);
 
-      expect(mac.teardown.commands).toEqual(["docker compose down", "colima stop"]);
-      expect(linux.teardown.commands).toEqual([]);
+      expect(lines(mac.teardown.commands)).toEqual(["docker compose down", "colima stop"]);
+      expect(lines(linux.teardown.commands)).toEqual([]);
     });
 
     test("an inline table is the same table", () => {
@@ -293,7 +293,7 @@ run = "bun install"
 
     expect(hooks.copy).toEqual([".env"]);
     expect(hooks.link).toEqual(["node_modules"]);
-    expect(hooks.commands).toEqual(["bun install"]);
+    expect(lines(hooks.commands)).toEqual(["bun install"]);
   });
 
   test("reads [teardown] on its own, with no [setup] to gate it", () => {
@@ -304,7 +304,7 @@ run = ["docker compose down"]
 `);
 
     expect(hooks).toMatchObject({ copy: [], link: [], env: [], commands: [] });
-    expect(hooks.teardown.commands).toEqual(["docker compose down"]);
+    expect(lines(hooks.teardown.commands)).toEqual(["docker compose down"]);
     expect(hooks.teardown.env).toEqual([{ name: "STACK", value: "test" }]);
   });
 
@@ -644,7 +644,7 @@ describe("repoHooks", () => {
       await Bun.write(join(fixture.worktree, HOOKS_FILE), '[setup]\nrun = ["true"]\n');
       await seedGit(fixture.repo.gitDir, ["worktree", "remove", "--force", fixture.trunk]);
 
-      expect((await repoHooks(fixture.repo, fixture.worktree)).commands).toEqual(["true"]);
+      expect(lines((await repoHooks(fixture.repo, fixture.worktree)).commands)).toEqual(["true"]);
       // Without a fallback there is nothing to read, and that is not an error.
       expect(await repoHooks(fixture.repo)).toEqual(NO_HOOKS);
     });

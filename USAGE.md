@@ -212,8 +212,15 @@ macos = ["docker compose down", "colima stop"]
 | `.grove.toml` | the project. Committed |
 | `.grove.local.toml` | this checkout. Gitignored |
 
-Applied in that order. `copy`, `link`, `run` accumulate across layers. `open`
-and each `env` variable take the last value set.
+Applied in that order. Every key takes the value from the highest layer that
+sets it — `copy`, `link`, `run` and `open` included, and `env` one variable name
+at a time. A higher layer replaces the whole key rather than adding to it, so
+`run = []` in `.grove.local.toml` turns the project's commands off on this
+machine. Commenting a key out is the same as leaving it out: the layer below
+still applies. A key written for another platform is not a value set here.
+
+When more than one layer is in play, each command says which file it came from
+as it runs.
 
 ### Trust
 

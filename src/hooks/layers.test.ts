@@ -5,7 +5,7 @@ import { pendingCommands } from "./command.ts";
 import { HOOKS_FILE, LOCAL_HOOKS_FILE, platformKeyFor } from "./config.ts";
 import { runSetup } from "./setup.ts";
 import { repoHooks } from "./source.ts";
-import { refusalFromRun, setUp, withRepo } from "./test-utils.ts";
+import { lines, refusalFromRun, setUp, withRepo } from "./test-utils.ts";
 import { fingerprintOf, trust } from "./trust.ts";
 
 /**
@@ -21,7 +21,7 @@ import { fingerprintOf, trust } from "./trust.ts";
 const HERE = platformKeyFor(process.platform);
 
 describe("layers", () => {
-  test("each layer adds to the ones under it", async () => {
+  test("the nearest layer that speaks for a key wins the whole of it", async () => {
     await withRepo(async (fixture) => {
       await fixture.configureGlobal('[setup]\ncopy = [".npmrc"]\n');
       await fixture.configure('[setup]\ncopy = [".env"]\nrun = ["true"]\n');
@@ -29,20 +29,42 @@ describe("layers", () => {
 
       const hooks = await repoHooks(fixture.repo);
 
-      // Lowest first, which is also the order the commands run in: the
-      // project's install, and then the step you put on top of it.
-      expect(hooks.copy).toEqual([".npmrc", ".env", "certs"]);
-      expect(hooks.commands).toEqual(["true", "false"]);
+      // Not the three lists appended: the highest file that says anything about
+      // a key is the answer for it, and the ones below are the default it did
+      // not need to write.
+      expect(hooks.copy).toEqual(["certs"]);
+      expect(lines(hooks.commands)).toEqual(["false"]);
       expect(hooks.layers.map((layer) => layer.gated)).toEqual([false, true, false]);
     });
   });
 
-  test("a path named twice is one path", async () => {
+  test("a key nobody above spoke for keeps the one below's answer", async () => {
     await withRepo(async (fixture) => {
-      await fixture.configure('[setup]\nlink = ["node_modules"]\n');
-      await fixture.configureLocal('[setup]\nlink = ["node_modules"]\n');
+      await fixture.configure('[setup]\nlink = ["node_modules"]\nrun = ["true"]\n');
+      // Says something about `link` and nothing about `run`, which leaves the
+      // project's install exactly where it was.
+      await fixture.configureLocal("[setup]\nlink = []\n");
 
-      expect((await repoHooks(fixture.repo)).link).toEqual(["node_modules"]);
+      const hooks = await repoHooks(fixture.repo);
+
+      expect(hooks.link).toEqual([]);
+      expect(lines(hooks.commands)).toEqual(["true"]);
+    });
+  });
+
+  test("an empty list is a thing to say, and it is how a line is turned off", async () => {
+    await withRepo(async (fixture) => {
+      await fixture.configure('[setup]\nrun = ["touch theirs.txt"]\n');
+      // The line you can read, rather than the comment nobody can see: a `run`
+      // commented out in here is a file that said nothing, and the project's
+      // still stands.
+      await fixture.configureLocal('[setup]\n# run = ["touch theirs.txt"]\n');
+
+      expect(lines((await repoHooks(fixture.repo)).commands)).toEqual(["touch theirs.txt"]);
+
+      await fixture.configureLocal("[setup]\nrun = []\n");
+
+      expect((await repoHooks(fixture.repo)).commands).toEqual([]);
     });
   });
 
@@ -76,7 +98,7 @@ describe("layers", () => {
     });
   });
 
-  test("a list written per platform collects with the layers under it, for this platform", async () => {
+  test("a list written for another platform has said nothing here", async () => {
     await withRepo(async (fixture) => {
       const elsewhere = HERE === "macos" ? "linux" : "macos";
       await fixture.configureGlobal(`[setup.copy]\n${HERE} = [".npmrc"]\n`);
@@ -85,10 +107,10 @@ describe("layers", () => {
 
       const hooks = await repoHooks(fixture.repo);
 
-      // The layer that wrote its copy for another machine adds nothing here —
-      // and is still counted as having asked, so the run does not call the
-      // file absent.
-      expect(hooks.copy).toEqual([".npmrc", ".env"]);
+      // The top layer wrote its copy for another machine, so it silences
+      // nothing here and the project's answer stands — and it is still counted
+      // as having asked, so the run does not call the file absent.
+      expect(hooks.copy).toEqual([".env"]);
       expect(hooks.elsewhere).toBe(1);
     });
   });
@@ -101,6 +123,47 @@ describe("layers", () => {
 
       expect(error.message).toContain(LOCAL_HOOKS_FILE);
       expect(error.message).not.toContain(`${HOOKS_FILE}:`);
+    });
+  });
+});
+
+describe("which file a command came from", () => {
+  test("a run says nothing extra when there is only one file it could be", async () => {
+    await withRepo(async (fixture) => {
+      await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
+
+      await setUp(fixture);
+
+      // One file is every ordinary repository, and there the name would be the
+      // answer to a question nobody could ask.
+      expect(fixture.log.succeeded).toContain("ran touch mine.txt");
+    });
+  });
+
+  test("a run names its file once there is more than one", async () => {
+    await withRepo(async (fixture) => {
+      await fixture.configure('[setup]\nrun = ["touch theirs.txt"]\n');
+      await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
+
+      await setUp(fixture);
+
+      // Which file won is the fact the run would otherwise leave somebody to
+      // find by diffing the two.
+      expect(fixture.log.succeeded).toContain(`ran touch mine.txt (${LOCAL_HOOKS_FILE})`);
+    });
+  });
+
+  test("the file is named on the failure too, which is where it is wanted most", async () => {
+    await withRepo(async (fixture) => {
+      await fixture.configureGlobal('[setup]\nrun = ["true"]\n');
+      await fixture.configureLocal('[setup]\nrun = ["exit 3"]\n');
+
+      const result = await setUp(fixture);
+
+      expect(fixture.log.failed.join("\n")).toContain(`exit 3 (${LOCAL_HOOKS_FILE}) exited 3`);
+      // What the caller raises stays the command line alone: the sentence it
+      // makes is about what failed, and the file is on the step above it.
+      expect(result.failed?.command).toBe("exit 3");
     });
   });
 });
@@ -136,19 +199,34 @@ describe("the gate the layers answer to", () => {
     });
   });
 
-  test("your commands wait with the project's, and the run says they are waiting", async () => {
+  test("a run of your own replaces the project's, and the gate goes with it", async () => {
     await withRepo(async (fixture) => {
       await fixture.configure('[setup]\nrun = ["touch theirs.txt"]\n');
       await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
 
       const result = await setUp(fixture);
 
+      // Nothing that a pull could have written is left to run, so there is
+      // nothing to agree to: the project's line is not held back, it is gone.
+      expect(result.untrusted).toBe(false);
+      expect(result.ran).toEqual(["touch mine.txt"]);
+      expect(await entryExists(join(fixture.worktree, "theirs.txt"))).toBe(false);
+      expect(fixture.log.warnings.join("\n")).not.toContain("not been trusted");
+    });
+  });
+
+  test("a run the project still owns waits, whatever else your file says", async () => {
+    await withRepo(async (fixture) => {
+      await fixture.configure('[setup]\nrun = ["touch theirs.txt"]\n');
+      // Speaks for `copy` and not for `run`, so the project's command is still
+      // the one that would run, and still the one to be read first.
+      await fixture.configureLocal("[setup]\ncopy = []\n");
+
+      const result = await setUp(fixture);
+
       expect(result.untrusted).toBe(true);
       expect(result.ran).toEqual([]);
-      expect(await entryExists(join(fixture.worktree, "mine.txt"))).toBe(false);
-      // The count is the gated one — one command, in one file, to go and read.
       expect(fixture.log.warnings.join("\n")).toContain(`1 command in main/${HOOKS_FILE}`);
-      expect(fixture.log.infos.join("\n")).toContain("1 command of your own waited");
     });
   });
 
@@ -174,7 +252,9 @@ describe("the gate the layers answer to", () => {
       await trust(fixture.repo.gitDir, hooks.fingerprint ?? "");
 
       const ran = await setUp(fixture);
-      expect(ran.ran).toEqual(["touch theirs.txt", "touch mine.txt"]);
+      // Both files are gated and both are covered, and the higher one is still
+      // the one that says what runs.
+      expect(ran.ran).toEqual(["touch mine.txt"]);
 
       // What a `git pull` does to the second file rather than the first.
       await fixture.configureLocal('[setup]\nrun = ["touch surprise.txt"]\n');
@@ -198,13 +278,14 @@ describe("the gate the layers answer to", () => {
       await trust(fixture.repo.gitDir, fingerprintOf(text));
 
       // The machine's own layer joins in without disturbing that: it is not
-      // gated, so it is not part of what the record covers.
+      // gated, so it is not part of what the record covers — and it is under
+      // the project's file, which is why its `run` is the one that gives way.
       await fixture.configureGlobal('[setup]\nrun = ["touch mine.txt"]\n');
 
       const result = await setUp(fixture);
 
       expect(result.untrusted).toBe(false);
-      expect(result.ran).toEqual(["touch mine.txt", "touch theirs.txt"]);
+      expect(result.ran).toEqual(["touch theirs.txt"]);
     });
   });
 });

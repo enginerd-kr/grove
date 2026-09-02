@@ -5,7 +5,7 @@ import { entryExists } from "../core/fs.ts";
 import { type RepoPaths, repoPaths } from "../core/layout.ts";
 import { seedGit, type TempRepo, withTempRepo } from "../core/test-utils.ts";
 import type { Reporter, Step } from "../report/reporter.ts";
-import { globalHooksPath, HOOKS_FILE, LOCAL_HOOKS_FILE } from "./config.ts";
+import { globalHooksPath, HOOKS_FILE, type HookCommand, LOCAL_HOOKS_FILE } from "./config.ts";
 import { runSetup, type SetupOptions, type SetupResult } from "./setup.ts";
 
 /**
@@ -16,6 +16,14 @@ import { runSetup, type SetupOptions, type SetupResult } from "./setup.ts";
  * so the fixture is a real repository with two real worktrees rather than a
  * stand-in.
  */
+
+/**
+ * The command lines alone, for a test that is about what runs and not who said
+ * so. Which file a line came from has its own tests, in `layers.test.ts`.
+ */
+export function lines(commands: readonly HookCommand[]): readonly string[] {
+  return commands.map((command) => command.line);
+}
 
 export type Recorder = {
   readonly reporter: Reporter;

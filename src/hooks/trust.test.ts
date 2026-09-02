@@ -86,8 +86,8 @@ describe("trust", () => {
       // The file is fingerprinted whole, so there is one record and not two:
       // the same answer governs the commands on the way in and on the way out.
       const hooks = parseHooks(both);
-      expect(hooks.commands).toEqual(["bun install"]);
-      expect(hooks.teardown.commands).toEqual(["docker compose down"]);
+      expect(hooks.commands.map((each) => each.line)).toEqual(["bun install"]);
+      expect(hooks.teardown.commands.map((each) => each.line)).toEqual(["docker compose down"]);
 
       await trust(bare, fingerprintOf(both));
       expect(await isTrusted(bare, fingerprintOf(both))).toBe(true);

@@ -101,9 +101,14 @@ export const HOOKS_FILE = ".grove.toml";
  * install, and a pull request is not where you put your own.
  *
  * So this one sits beside it, unignored at your peril and never committed:
- * whatever this machine wants that the project has not said. It is read out of
- * the same worktree the committed file is, which keeps one rule about where
- * configuration is read from rather than two.
+ * whatever this machine wants, said instead of what the project said. It is
+ * read out of the same worktree the committed file is, which keeps one rule
+ * about where configuration is read from rather than two.
+ *
+ * Instead, and not as well as: a key written here replaces the project's whole
+ * answer for that key — see `mergeHooks`. That is what makes it a way to say
+ * no. `run = []` is the project's install turned off on this machine, in a line
+ * somebody can read, without an edit to a file that would be pushed.
  *
  * It is not gated on `--trust`, because trust answers a question this file does
  * not raise: a `run` line is dangerous when a `git pull` can change it, and
@@ -143,6 +148,21 @@ export type HookEnv = {
 };
 
 /**
+ * One `run` line, and the file it was written in.
+ *
+ * The file travels with the line because the line alone stopped being enough
+ * once a layer above could replace it: "this is what runs" and "this is who
+ * said so" are one fact, and working the second one out afterwards would mean
+ * reading three files in the right order to explain one command. See
+ * `namesSources` for when it is said out loud.
+ */
+export type HookCommand = {
+  readonly line: string;
+  /** The file it was read from, by the bare name it is written as. */
+  readonly from: string;
+};
+
+/**
  * `[teardown]` — the commands to run in a worktree just before it is removed.
  *
  * See `teardown.ts` for why the section exists at all.
@@ -155,7 +175,7 @@ export type HookEnv = {
  */
 export type TeardownHook = {
   readonly env: readonly HookEnv[];
-  readonly commands: readonly string[];
+  readonly commands: readonly HookCommand[];
 };
 
 /**
@@ -221,7 +241,7 @@ export type Hooks = {
   /** Given to every command, over the environment grove was started in. */
   readonly env: readonly HookEnv[];
   /** Command lines, run in the order the file lists them. */
-  readonly commands: readonly string[];
+  readonly commands: readonly HookCommand[];
   /**
    * What to open the finished worktree with, per platform, as a command line.
    *
@@ -276,6 +296,8 @@ export type Hooks = {
    * and read one.
    */
   readonly layers: readonly HookLayer[];
+  /** Which of the list keys above this spoke for. See `Said` and `mergeHooks`. */
+  readonly said: Said;
   /** How much of the above came from a file git could hand you. See `GatedCounts`. */
   readonly gated: GatedCounts;
   /** The gated layers' contents, hashed — what `trust` records and compares. */
@@ -297,12 +319,36 @@ export type HookLayer = {
 };
 
 /**
+ * Which list keys a file spoke for, which is what decides who wins.
+ *
+ * Not "has anything in it": `run = []` is a file saying that nothing runs here,
+ * and that is a thing to be said. The two questions come apart exactly where
+ * the answer matters — an empty list takes the key from the layer below, and a
+ * missing one leaves it alone — so the merge asks this one and never counts the
+ * list. See `mergeHooks`.
+ *
+ * Read for this platform, like the lists themselves: a file whose `run` names
+ * only Windows has said nothing about what a Mac does, and taking the key there
+ * would be a file silencing another with a line it wrote for a machine it is
+ * not on.
+ */
+export type Said = {
+  readonly copy: boolean;
+  readonly link: boolean;
+  readonly run: boolean;
+  /** `[teardown]`'s own `run`, which answers to the same rule. */
+  readonly teardown: boolean;
+};
+
+export const SAID_NOTHING: Said = { copy: false, link: false, run: false, teardown: false };
+
+/**
  * How much of a merged file came from a layer that answers to `--trust`.
  *
  * Counted per section, and per platform for `open`, because that is the
  * precision the gate needs: a `.grove.toml` that only copies files has nothing
  * for trust to hold back, and holding back the `run` line your own
- * `.grove.local.toml` added on top of it would be asking you to agree to your
+ * `.grove.local.toml` wrote in its place would be asking you to agree to your
  * own file. Zero here means the gate is not in the way at all.
  *
  * `commands` counts the platform's own lines and nothing written for another:
@@ -344,6 +390,23 @@ export function configuredFiles(hooks: Hooks): readonly string[] {
 }
 
 /**
+ * Whether a command should say which file it was written in.
+ *
+ * One file is every ordinary repository, and there the name is noise: there is
+ * nowhere else the line could have come from, and a tool that printed the
+ * answer to a question nobody could ask would have made every `add` longer for
+ * everybody who never wrote a second file.
+ *
+ * More than one, and the name is the whole point. `run` now comes from the
+ * highest file that says anything about it — see `mergeHooks` — so "this ran
+ * and that did not" is a fact about which file won, and a run that did not say
+ * so would leave somebody diffing three files to find out.
+ */
+export function namesSources(hooks: Hooks): boolean {
+  return hooks.layers.length > 1;
+}
+
+/**
  * The gated files, as paths somebody can open.
  *
  * Relative to the repository root, so the answer is `main/.grove.toml` and not
@@ -377,6 +440,7 @@ export const NO_HOOKS: Hooks = {
   elsewhere: 0,
   teardown: NO_TEARDOWN,
   layers: [],
+  said: SAID_NOTHING,
   gated: NOTHING_GATED,
 };
 
@@ -453,6 +517,8 @@ function listAt(
 type PerPlatform = {
   readonly here: readonly string[];
   readonly other: readonly string[];
+  /** Whether the file spoke for this platform's slot at all. See `Said`. */
+  readonly saysHere: boolean;
 };
 
 function perPlatformListAt(
@@ -463,13 +529,13 @@ function perPlatformListAt(
   platform: NodeJS.Platform,
 ): PerPlatform {
   const value = table[key];
-  if (value === undefined) return { here: [], other: [] };
+  if (value === undefined) return { here: [], other: [], saysHere: false };
 
   // A bare list — or a bare string — is the file that is the same everywhere,
   // and stays one line. A table names the platforms apart; `copy = { macos =
   // […] }` is the same TOML as `[setup.copy]` and reads the same.
   if (!isTable(value)) {
-    return { here: listAt(file, section, table, key, EXAMPLES[key]), other: [] };
+    return { here: listAt(file, section, table, key, EXAMPLES[key]), other: [], saysHere: true };
   }
 
   const label = `${section}.${key}`;
@@ -481,6 +547,10 @@ function perPlatformListAt(
   return {
     here: lists[target],
     other: PLATFORM_KEYS.filter((each) => each !== target).flatMap((each) => lists[each]),
+    // Named, not filled: `[setup.run] macos = []` is this machine being told
+    // that nothing runs on it, which is a thing to be said and not the silence
+    // of a table that only knew about Windows.
+    saysHere: Object.hasOwn(value, target),
   };
 }
 
@@ -762,6 +832,7 @@ export function parseHooks(
   const copy = perPlatformListAt(file, "setup", setup, "copy", platform);
   const link = perPlatformListAt(file, "setup", setup, "link", platform);
   const run = perPlatformListAt(file, "setup", setup, "run", platform);
+  const leaving = perPlatformListAt(file, "teardown", teardown, "run", platform);
 
   // The other platforms' paths are checked here and their result thrown away,
   // because this is the only place that still has them: `readHooks` checks the
@@ -775,21 +846,29 @@ export function parseHooks(
   // ordinary repository, and returning nothing for it because `[setup]` was
   // absent would be the silent no-op this file's unknown-key check exists to
   // prevent, arrived at from the other side.
+  const wrote = (lines: readonly string[]) => lines.map((line) => ({ line, from: file }));
+
   return {
     copy: copy.here,
     link: link.here,
     env: envAt(file, "setup", setup, platform),
-    commands: run.here,
+    commands: wrote(run.here),
     open: openAt(file, setup),
     elsewhere: copy.other.length + link.other.length + run.other.length,
     teardown: {
       env: envAt(file, "teardown", teardown, platform),
-      commands: perPlatformListAt(file, "teardown", teardown, "run", platform).here,
+      commands: wrote(leaving.here),
     },
     // What was read, and not where from: a text alone has no path and answers
     // to no trust record. `readLayer` is what knows both, and it is the only
     // caller that can say either honestly.
     layers: [],
+    said: {
+      copy: copy.saysHere,
+      link: link.saysHere,
+      run: run.saysHere,
+      teardown: leaving.saysHere,
+    },
     gated: NOTHING_GATED,
   };
 }
@@ -879,22 +958,29 @@ async function gatedLayer(worktree: string, name: string): Promise<boolean> {
 /**
  * Two layers, folded into the one file the rest of this package reads.
  *
- * **Each layer adds to the ones under it.** `copy` and `link` collect the paths
- * every layer named, and `run` collects the commands in the order the layers are
- * read, so the project's install runs before the step you added on top of it.
- * `open` and each `env` name are the exception, because there is only one editor
- * and one value for a name: the nearest layer that says anything wins, and
- * `open` decides that per platform, since a layer may name only the machine it
- * was written on.
+ * **The nearest layer that speaks for a key wins the whole of it.** One rule for
+ * every key here: `copy`, `link`, `run`, `open` and each `env` name all come
+ * from the highest file that says anything about them, and the files below are
+ * the default that file did not need to write. So the project says what a
+ * worktree of it needs, and the `.grove.local.toml` beside it says what yours
+ * needs instead — which is the whole point of a layer you can write in a
+ * repository you cannot commit to.
  *
- * The lists arrive already read for this platform — see `parseHooks` — which
- * is why they can still simply collect: a layer that wrote its `copy` for
- * Windows alone contributes nothing here, and there is no slot to decide.
+ * Speaking is not the same as filling: `run = []` is a file saying that nothing
+ * runs here, and it takes the key exactly as a list of two would. That is how a
+ * line is turned off without editing the file it is in, and it is a line you can
+ * read rather than a comment nobody can see. See `Said`.
  *
- * What a higher layer cannot do is un-say something. There is no key for
- * "not that one", and adding one would make the effective configuration a thing
- * you work out rather than read. A `run` line you want gone belongs out of the
- * file that has it.
+ * Decided per platform, because a layer may name only the machine it was written
+ * on: `open` does it slot by slot, and the lists arrive already read for this
+ * platform — see `parseHooks` — so a `[setup.run] windows = […]` has said
+ * nothing on a Mac and silences nothing there.
+ *
+ * The cost of this rule is that a higher layer cannot add one step to a lower
+ * one's list; it restates the list it wants. That is the trade taken on purpose.
+ * Collecting made the effective configuration a thing you worked out by reading
+ * three files in order, and left no way at all to say "not that one" — which is
+ * the thing people actually reach for.
  */
 export function mergeHooks(base: Hooks, over: Hooks): Hooks {
   const names = new Set(over.env.map((each) => each.name));
@@ -902,10 +988,10 @@ export function mergeHooks(base: Hooks, over: Hooks): Hooks {
   const takes = (target: PlatformKey) => over.open[target] !== "";
 
   return {
-    copy: union(base.copy, over.copy),
-    link: union(base.link, over.link),
+    copy: over.said.copy ? over.copy : base.copy,
+    link: over.said.link ? over.link : base.link,
     env: [...base.env.filter((each) => !names.has(each.name)), ...over.env],
-    commands: [...base.commands, ...over.commands],
+    commands: over.said.run ? over.commands : base.commands,
     open: mapPlatforms((target) => (takes(target) ? over.open[target] : base.open[target])),
     elsewhere: base.elsewhere + over.elsewhere,
     teardown: {
@@ -913,24 +999,27 @@ export function mergeHooks(base: Hooks, over: Hooks): Hooks {
         ...base.teardown.env.filter((each) => !teardownNames.has(each.name)),
         ...over.teardown.env,
       ],
-      commands: [...base.teardown.commands, ...over.teardown.commands],
+      commands: over.said.teardown ? over.teardown.commands : base.teardown.commands,
     },
     layers: [...base.layers, ...over.layers],
+    said: {
+      copy: base.said.copy || over.said.copy,
+      link: base.said.link || over.said.link,
+      run: base.said.run || over.said.run,
+      teardown: base.said.teardown || over.said.teardown,
+    },
     gated: {
-      commands: base.gated.commands + over.gated.commands,
-      teardown: base.gated.teardown + over.gated.teardown,
-      // The line that would run is the one whose gating counts, so this follows
-      // `open` above exactly: whoever supplied the line supplies the answer.
+      // The lines that would run are the ones whose gating counts, so each of
+      // these follows the key above it exactly: whoever supplied the list
+      // supplied the answer, and a list that was replaced is not held back by a
+      // trust record about the file it is no longer read from.
+      commands: over.said.run ? over.gated.commands : base.gated.commands,
+      teardown: over.said.teardown ? over.gated.teardown : base.gated.teardown,
       open: mapPlatforms((target) =>
         takes(target) ? over.gated.open[target] : base.gated.open[target],
       ),
     },
   };
-}
-
-/** Appended, minus what is already there: a path names the same thing twice. */
-function union(base: readonly string[], over: readonly string[]): readonly string[] {
-  return [...base, ...over.filter((path) => !base.includes(path))];
 }
 
 /**
