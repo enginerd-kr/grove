@@ -923,3 +923,81 @@ describe("createSetupService", () => {
     SLOW,
   );
 });
+
+/**
+ * `/rebase`, against a real repository: the rows the popup lists, the line the
+ * rebase answers with, and the refusal a conflict arrives as.
+ */
+describe("the rebase the screen's /rebase runs", () => {
+  test(
+    "lists the bases, rebases onto the one picked, and says when the changes came back",
+    async () => {
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
+
+        await service.add("feat/login");
+        const worktree = join(root, "feat", "login");
+
+        // The branch tracks the origin's copy, and the fixture has no other
+        // worktree to offer — so the two role rows, and nothing else.
+        const choices = await service.rebaseChoices(worktree);
+        expect(choices.map((choice) => `${choice.label} ${choice.ref}`)).toEqual([
+          "upstream origin/feat/login",
+          "trunk origin/main",
+        ]);
+
+        await commitOnOrigin(temp, "main", "newer.txt");
+        expect(await service.rebase(worktree, { kind: "trunk" })).toBe(
+          "feat/login rebased onto origin/main",
+        );
+        expect(await pathExists(join(worktree, "newer.txt"))).toBe(true);
+        expect(await service.rebase(worktree, { kind: "trunk" })).toBe(
+          "feat/login already on origin/main",
+        );
+
+        // Dirty, and rebased anyway: the edit is back afterwards, and the line
+        // says so, because that is the part somebody would otherwise check.
+        await commitOnOrigin(temp, "main", "later.txt");
+        await Bun.write(join(worktree, "login.txt"), "half-finished\n");
+        expect(await service.rebase(worktree, { kind: "trunk" })).toBe(
+          "feat/login rebased onto origin/main, 1 change carried",
+        );
+        expect(await Bun.file(join(worktree, "login.txt")).text()).toBe("half-finished\n");
+        expect(await pathExists(join(worktree, "later.txt"))).toBe(true);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "a rebase that conflicted is a refusal, and the worktree is left as it was",
+    async () => {
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const root = paths.root;
+        const { service } = serviceAt(paths);
+
+        await service.add("feat/login");
+        const worktree = join(root, "feat", "login");
+        await Bun.write(join(worktree, "clash.txt"), "mine\n");
+        await seedGit(worktree, ["add", "-A"]);
+        await seedGit(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", "Add clash.txt"]);
+        await commitOnOrigin(temp, "main", "clash.txt");
+
+        const refusal = await refusalFrom(service.rebase(worktree, { kind: "trunk" }));
+
+        expect(refusal.code).toBe("rebase-conflict");
+        expect(refusal.message).toBe("feat/login conflicted");
+        expect(refusal.details.join("\n")).toContain("rolled back");
+        expect(refusal.details.join("\n")).toContain("clash.txt");
+
+        const after = (await service.list()).find((summary) => summary.dir === "feat/login");
+        expect(after?.rebasing).toBe(false);
+        expect(await Bun.file(join(worktree, "clash.txt")).text()).toBe("mine\n");
+      });
+    },
+    SLOW,
+  );
+});

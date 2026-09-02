@@ -18,12 +18,19 @@ import { openWorktree } from "../core/commands/open.ts";
 import { worktreePath } from "../core/commands/path.ts";
 import { checkoutPullRequest } from "../core/commands/pr.ts";
 import { describePrune, formatPruneTable, pruneWorktrees } from "../core/commands/prune.ts";
+import {
+  type RebaseBase,
+  rebaseChoices,
+  failureFor as rebaseFailure,
+  rebaseWorktree,
+} from "../core/commands/rebase.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
 import { renameWorktree } from "../core/commands/rename.ts";
 import { resetWorktree } from "../core/commands/reset.ts";
 import { setUpWorktrees, failureFor as setupFailure } from "../core/commands/setup.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { findRepoRoot } from "../core/discover.ts";
+import { GroveError } from "../core/errors.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import { plural } from "../core/text.ts";
 import {
@@ -36,7 +43,7 @@ import {
 } from "../hooks/index.ts";
 import type { Reporter } from "../report/reporter.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
-import type { Ask } from "./ask.ts";
+import type { Ask, Choose } from "./ask.ts";
 
 /**
  * Everything a command needs that it must not go looking for itself.
@@ -57,7 +64,72 @@ export type CommandContext = {
    * `--trust` and carry on without it. See `ask.ts`.
    */
   readonly ask?: Ask;
+  /**
+   * A pick out of a few, for the one command whose question is not yes or no.
+   *
+   * Absent exactly where `ask` is, and `rebase` then needs its base spelled
+   * out on the command line — a script cannot be shown a list.
+   */
+  readonly choose?: Choose;
 };
+
+/**
+ * How many bases the terminal question lists.
+ *
+ * One key is one press, and the digits are the keys — so nine, and anything
+ * past that is named as a count with the flag that reaches it. A repository
+ * with more than nine worktrees to rebase onto is one where the name is worth
+ * typing anyway.
+ */
+const OFFERED = 9;
+
+/**
+ * Asks which base a rebase goes onto, when no flag said.
+ *
+ * `rebaseChoices` is what the screen's `/rebase` lists too, so the two surfaces
+ * offer the same rows in the same order: the branch's own remote, the parent it
+ * was stacked on, the trunk, and the other worktrees' branches. Nobody to ask
+ * is a usage error naming the flags — the same list, printed under it, so the
+ * person reading it in a pipe's log can see what each flag would have meant.
+ *
+ * `undefined` is a key that picked nothing, which the caller reads as "leave it".
+ */
+async function chooseBase(
+  repo: RepoPaths,
+  cwd: string,
+  target: string | undefined,
+  choose: Choose | undefined,
+  reporter: Reporter,
+): Promise<RebaseBase | undefined> {
+  const { dir, choices } = await rebaseChoices(repo, cwd, target);
+
+  if (choose === undefined) {
+    throw new GroveError("usage", `say where ${dir} goes: --upstream, --trunk, or --onto <ref>`, {
+      hint: "nobody is at the terminal to pick one",
+      details: choices.map((choice) => `${choice.label.padEnd(8)}  ${choice.ref}`),
+    });
+  }
+
+  const offered = choices.slice(0, OFFERED);
+  if (choices.length > offered.length) {
+    reporter.info(
+      `${plural(choices.length - offered.length, "more base")} not listed — --onto <ref> reaches any of them`,
+    );
+  }
+
+  const key = await choose(
+    `rebase ${dir} onto which base?`,
+    offered.map((choice, index) => ({
+      key: String(index + 1),
+      label: choice.label,
+      // A worktree's branch is its own label, and saying it twice is noise.
+      detail: choice.ref === choice.label ? undefined : choice.ref,
+    })),
+  );
+  if (key === undefined) return undefined;
+
+  return offered[Number(key) - 1]?.base;
+}
 
 /**
  * Shows the commands `[setup]` is holding back, and asks.
@@ -116,7 +188,7 @@ function display(cwd: string, path: string): string {
 }
 
 export async function runCommand(command: GroveCommand, context: CommandContext): Promise<void> {
-  const { cwd, global, reporter, ask } = context;
+  const { cwd, global, reporter, ask, choose } = context;
 
   /**
    * Whether there is a terminal for `[setup] open` to open into.
@@ -407,6 +479,31 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       // Reported first, then thrown: with --all the successful worktrees are
       // still worth knowing about, and stdout is where that belongs.
       const failure = failureFor(outcomes);
+      if (failure) throw failure;
+
+      return;
+    }
+
+    case "rebase": {
+      const { name, base, ...options } = command;
+      const repo = await findRepoRoot(cwd, global.repo);
+
+      // The flag, or the question, or the usage error — decided here because
+      // this is the layer that knows whether anybody is at the terminal.
+      const onto = base ?? (await chooseBase(repo, cwd, command.target, choose, reporter));
+      if (onto === undefined) {
+        reporter.info("left as it is — nothing was rebased");
+        return;
+      }
+
+      const result = await rebaseWorktree(repo, cwd, { ...options, base: onto }, reporter);
+
+      report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.kind}`));
+
+      // The row first and the error after, the way `sync` does it: the row
+      // says what state the worktree is in, and the exit code is for whatever
+      // is reading it.
+      const failure = rebaseFailure(result);
       if (failure) throw failure;
 
       return;

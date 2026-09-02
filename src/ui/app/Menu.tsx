@@ -35,7 +35,15 @@ import { windowOf } from "./window.ts";
  * a branch to run it is a type error rather than a row that does nothing when
  * you press enter on it.
  */
-export type CommandName = "open" | "setup" | "sync-all" | "prune" | "review" | "refresh" | "log";
+export type CommandName =
+  | "open"
+  | "setup"
+  | "rebase"
+  | "sync-all"
+  | "prune"
+  | "review"
+  | "refresh"
+  | "log";
 
 export type MenuCommand = {
   /** Without the slash; it is drawn with one and typed without. */
@@ -59,6 +67,14 @@ export function commandsFor(logOn: boolean): readonly MenuCommand[] {
     {
       name: "setup",
       summary: "fill the row under the cursor in from .grove.toml again",
+    },
+    // Aimed at the row like the two above, and behind the slash for the
+    // reason `open` is: `s` is the sync you do every morning, and choosing a
+    // base by hand is the one you do the day the branch has to sit somewhere
+    // else for a while.
+    {
+      name: "rebase",
+      summary: "rebase the row under the cursor onto a base you pick, changes carried",
     },
     { name: "sync-all", summary: "sync every worktree, not just the row under the cursor" },
     { name: "prune", summary: "remove every worktree marked merged or gone, after asking" },

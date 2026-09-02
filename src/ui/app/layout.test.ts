@@ -102,6 +102,7 @@ describe("regionsFor", () => {
         { kind: "add" },
         { kind: "confirm" },
         { kind: "pick", prs: { length: 6 } },
+        { kind: "onto", choices: { length: 5 } },
         { kind: "menu", matches: 4 },
         // The query that matched nothing: the popup still draws a body row to
         // say so, and the budget has to have counted it.
@@ -362,6 +363,8 @@ describe("hintsFor", () => {
     expect(hintsFor("busy", leaf).map((hint) => hint.keys)).toEqual(["ctrl+c"]);
     expect(hintsFor("pick", leaf).map((hint) => hint.keys)).toEqual(["↑↓", "enter", "esc"]);
     expect(hintsFor("menu", leaf).map((hint) => hint.keys)).toEqual(["↑↓", "enter", "esc"]);
+    // The picker's keys, and `enter` spelled for what it does here.
+    expect(hintsFor("onto", leaf).map((hint) => hint.action)).toEqual(["move", "rebase", "cancel"]);
     // Deliberately `n keep` though any key but `y` keeps: the bar is what to
     // press, not the whole truth table.
     expect(hintsFor("confirm", leaf).map((hint) => hint.action)).toEqual(["remove", "keep"]);

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { render } from "ink-testing-library";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 import type { PullRequest } from "../../core/commands/pr.ts";
+import type { RebaseBase, RebaseChoice } from "../../core/commands/rebase.ts";
 import { GroveError } from "../../core/errors.ts";
 import type { Commit } from "../../core/history.ts";
 import { LineStore } from "../../report/lines.ts";
@@ -79,6 +80,11 @@ const ROWS: readonly WorktreeSummary[] = [
   summary({ dir: "feat/search", trunk: { ahead: 1, behind: 0 } }),
 ];
 
+/** What `rebaseChoices` answers for a branch on no remote in a repository with no other worktree. */
+const TRUNK_ONLY: readonly RebaseChoice[] = [
+  { base: { kind: "trunk" }, ref: "origin/main", label: "trunk" },
+];
+
 function pullRequest(number: number, overrides: Partial<PullRequest> = {}): PullRequest {
   return {
     number,
@@ -103,6 +109,7 @@ type Calls = {
   readonly synced: (string | undefined)[];
   /** The targets `sync` was told to publish, apart from the syncs themselves. */
   readonly published: string[];
+  readonly rebased: { target: string; base: RebaseBase }[];
   pruned: number;
   readonly opened: { target: string; trust: boolean }[];
   readonly filledIn: string[];
@@ -124,6 +131,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     checkedOut: [],
     synced: [],
     published: [],
+    rebased: [],
     pruned: 0,
     opened: [],
     filledIn: [],
@@ -194,6 +202,13 @@ function stub(overrides: Partial<WorktreeService> = {}): {
         calls.synced.push(target);
         if (options?.publish && target !== undefined) calls.published.push(target);
         return "1 up-to-date";
+      },
+      // The trunk and nothing else by default — the list is never empty, and
+      // the test about the popup hands over rows of its own.
+      rebaseChoices: async () => [...TRUNK_ONLY],
+      rebase: async (target, base) => {
+        calls.rebased.push({ target, base });
+        return `${target} rebased onto origin/main`;
       },
       // Nothing waiting by default, which is every repository with no
       // `.grove.toml` and every one whose file is already trusted: nothing runs
@@ -1637,10 +1652,11 @@ describe("the keys", () => {
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
 
-    // `re` is in two of the names, which is what makes this a filter rather
+    // `re` is in three of the names, which is what makes this a filter rather
     // than a lookup.
     await press(ui, "re");
-    let frame = await settled(ui, (each) => each.includes(`2 of ${MENU_TOTAL}`));
+    let frame = await settled(ui, (each) => each.includes(`3 of ${MENU_TOTAL}`));
+    expect(frame).toContain("/rebase");
     expect(frame).toContain("/review");
     expect(frame).toContain("/refresh");
     expect(frame).not.toContain("/sync-all");
@@ -1651,7 +1667,7 @@ describe("the keys", () => {
     expect(frame).not.toContain("/refresh");
 
     ui.stdin.write(keys.backspace);
-    frame = await settled(ui, (each) => each.includes(`2 of ${MENU_TOTAL}`));
+    frame = await settled(ui, (each) => each.includes(`3 of ${MENU_TOTAL}`));
     expect(frame).toContain("/refresh");
   });
 
@@ -1682,10 +1698,10 @@ describe("the keys", () => {
 
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
-    // `s` is in `setup`, `sync-all` and `refresh`, which is the whole of what a
-    // filter over a handful of short names can narrow to.
+    // `s` is in `setup`, `rebase`, `sync-all` and `refresh`, which is the whole
+    // of what a filter over a handful of short names can narrow to.
     await press(ui, "s");
-    await settled(ui, (frame) => frame.includes(`3 of ${MENU_TOTAL}`));
+    await settled(ui, (frame) => frame.includes(`4 of ${MENU_TOTAL}`));
 
     await press(ui, keys.backspace);
     ui.stdin.write(keys.backspace);
@@ -1887,6 +1903,100 @@ describe("the keys", () => {
     expect(frame).not.toContain("tip:");
     // Still interactive rather than stuck reading: the mode falls back to the
     // list whether the read worked or not.
+    expect(IN_LIST(frame)).toBe(true);
+  });
+});
+
+/**
+ * `/rebase`: the one command whose question has more than two answers, so it
+ * opens a picker rather than a `confirm`. What the bases are is the service's
+ * to say — the stub hands over three — and what `enter` on one does is the
+ * whole of what is pinned here.
+ */
+describe("the rebase picker", () => {
+  const CHOICES: readonly RebaseChoice[] = [
+    { base: { kind: "upstream" }, ref: "origin/feat/login", label: "upstream" },
+    { base: { kind: "trunk" }, ref: "origin/main", label: "trunk" },
+    { base: { kind: "ref", ref: "feat/search" }, ref: "feat/search", label: "feat/search" },
+  ];
+
+  test("`/rebase` lists the bases for the row, esc leaves it, and enter rebases onto the one picked", async () => {
+    const asked: string[] = [];
+    const { service, calls } = stub({
+      rebaseChoices: async (target) => {
+        asked.push(target);
+        return [...CHOICES];
+      },
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "rebase");
+    const frame = await settled(ui, (each) => each.includes("enter rebase"));
+
+    // Read for the row under the cursor, and drawn with the ref beside each
+    // role — the two things that tell the rows apart.
+    expect(asked).toEqual(["/repo/feat/login"]);
+    expect(frame).toContain("rebase feat/login onto");
+    expect(frame).toContain("origin/feat/login");
+    expect(frame).toContain("feat/search");
+    expect(IN_LIST(frame)).toBe(false);
+
+    ui.stdin.write(keys.esc);
+    await settled(ui, (each) => IN_LIST(each) && !each.includes("rebase feat/login onto"));
+    expect(calls.rebased).toEqual([]);
+
+    await run(ui, "rebase");
+    await settled(ui, (each) => each.includes("enter rebase"));
+
+    // Up from the top row clamps, the way the pull-request picker's does; then
+    // one down is the trunk.
+    await press(ui, keys.up);
+    await press(ui, "j");
+    await settled(ui, (each) => /▸ +trunk/.test(each));
+
+    await press(ui, keys.enter);
+    await settled(ui, (each) => IN_LIST(each) && each.includes("rebased onto origin/main"));
+
+    expect(calls.rebased).toEqual([{ target: "/repo/feat/login", base: { kind: "trunk" } }]);
+  });
+
+  test("`/rebase` on a folder has no worktree to ask about, and does nothing", async () => {
+    const asked: string[] = [];
+    const { service, calls } = stub({
+      rebaseChoices: async (target) => {
+        asked.push(target);
+        return [...CHOICES];
+      },
+    });
+    const ui = await opened_with(service);
+
+    // One down from `main` is the `feat/` folder.
+    await press(ui, keys.down);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+
+    await run(ui, "rebase");
+    await settled(ui, (frame) => IN_LIST(frame));
+
+    expect(asked).toEqual([]);
+    expect(calls.rebased).toEqual([]);
+  });
+
+  test("a service that refuses to list bases is a red line, not a dead session", async () => {
+    const { service } = stub({
+      rebaseChoices: async () => {
+        throw new GroveError("git-failed", "cannot tell which branch origin considers default", {
+          hint: "run `git remote set-head origin --auto`",
+        });
+      },
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "rebase");
+    const frame = await settled(ui, (each) => each.includes("considers default"));
+
+    expect(frame).toContain("set-head");
     expect(IN_LIST(frame)).toBe(true);
   });
 });

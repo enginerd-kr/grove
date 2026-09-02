@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { version } from "../../../package.json";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
 import type { PullRequest } from "../../core/commands/pr.ts";
+import type { RebaseChoice } from "../../core/commands/rebase.ts";
 import type { Commit } from "../../core/history.ts";
 import { plural } from "../../core/text.ts";
 import type { LineStore } from "../../report/lines.ts";
@@ -11,6 +12,7 @@ import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner } from "./Banner.tsx";
+import { Bases } from "./Bases.tsx";
 import { Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
 import { columnWidths, GAP, hintsFor, LOG_ROWS, regionsFor } from "./layout.ts";
@@ -65,6 +67,19 @@ type Mode =
    * the cursor would move what `enter` is aimed at.
    */
   | { readonly kind: "pick"; readonly prs: readonly PullRequest[]; readonly index: number }
+  /**
+   * `/rebase`'s popup: the bases for one row, and which the cursor is on.
+   *
+   * The row is carried the way `add` carries its base, and the choices the
+   * way `pick` carries its rows: both were read when the popup opened, and a
+   * list re-read under the cursor would move what `enter` is aimed at.
+   */
+  | {
+      readonly kind: "onto";
+      readonly summary: WorktreeSummary;
+      readonly choices: readonly RebaseChoice[];
+      readonly index: number;
+    }
   /**
    * The slash menu: everything the list can do that has no key of its own.
    *
@@ -550,6 +565,32 @@ export function App({
     setMode({ kind: "list" });
   }, [busy, service]);
 
+  /**
+   * `/rebase`: read the bases for the row, then draw them to pick from.
+   *
+   * `openPrs`'s shape, for `openPrs`'s reason: the answer is a popup, not a
+   * line, and `busy` is the loading state that comes with it. There is no
+   * empty case to say anything about — the trunk is always on the list — so
+   * the only way back to the list without a popup is a refusal.
+   */
+  const beginRebase = useCallback(
+    async (summary: WorktreeSummary) => {
+      busy(`reading bases for ${summary.dir}`);
+
+      try {
+        const choices = await service.rebaseChoices(summary.path);
+        setMode({ kind: "onto", summary, choices, index: 0 });
+
+        return;
+      } catch (error) {
+        setMessage(messageFor(error));
+      }
+
+      setMode({ kind: "list" });
+    },
+    [busy, service],
+  );
+
   // The first read is not an action: it reports no outcome, and going through
   // `perform` would open the screen with an empty message line.
   useEffect(() => {
@@ -769,6 +810,11 @@ export function App({
         case "setup":
           if (!selected) return;
           return void perform(`filling in ${selected.dir}`, () => service.setup(selected.path));
+        // The third row-aimed command, and the one whose question has more
+        // than two answers — so it opens a popup rather than a `confirm`.
+        case "rebase":
+          if (!selected) return;
+          return void beginRebase(selected);
         case "sync-all":
           return void beginSyncAll();
         case "prune":
@@ -783,7 +829,7 @@ export function App({
           return setLogOn((on) => !on);
       }
     },
-    [perform, beginOpen, beginSyncAll, beginPrune, openPrs, selected, service],
+    [perform, beginOpen, beginRebase, beginSyncAll, beginPrune, openPrs, selected, service],
   );
 
   useInput((input, key) => {
@@ -832,6 +878,34 @@ export function App({
         return void perform(`checking out pull request ${pr.number}`, () =>
           service.checkoutPr(pr.number),
         ).then(() => runPendingCommands(`pr/${pr.number}`));
+      }
+
+      return;
+    }
+
+    if (mode.kind === "onto") {
+      // The picker's keys, for the picker's reasons: arrows and enter, clamped
+      // at both ends, and nothing that types.
+      if (key.escape || input === "q") return setMode({ kind: "list" });
+      if (key.upArrow || input === "k") {
+        return setMode((now) =>
+          now.kind === "onto" ? { ...now, index: Math.max(0, now.index - 1) } : now,
+        );
+      }
+      if (key.downArrow || input === "j") {
+        return setMode((now) =>
+          now.kind === "onto"
+            ? { ...now, index: Math.min(now.choices.length - 1, now.index + 1) }
+            : now,
+        );
+      }
+      if (key.return) {
+        const choice = mode.choices[mode.index];
+        if (choice === undefined) return setMode({ kind: "list" });
+
+        return void perform(`rebasing ${mode.summary.dir} onto ${choice.ref}`, () =>
+          service.rebase(mode.summary.path, choice.base),
+        );
       }
 
       return;
@@ -1063,7 +1137,7 @@ export function App({
   const labelled = rows.length > 0;
   // Every section's height, worked out in `layout.ts` — see `regionsFor`, which
   // is where the arithmetic and the reasons for it now live.
-  const { prBody, menuBody, clipped, activity, logBody, logHeight, listHeight, visible } =
+  const { prBody, baseBody, menuBody, clipped, activity, logBody, logHeight, listHeight, visible } =
     regionsFor({
       terminalRows,
       columns,
@@ -1215,6 +1289,10 @@ export function App({
 
       {mode.kind === "pick" ? (
         <PullRequests prs={mode.prs} index={mode.index} rows={prBody} />
+      ) : null}
+
+      {mode.kind === "onto" ? (
+        <Bases dir={mode.summary.dir} choices={mode.choices} index={mode.index} rows={baseBody} />
       ) : null}
 
       {mode.kind === "menu" ? (

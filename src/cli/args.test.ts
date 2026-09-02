@@ -323,3 +323,52 @@ describe("mistyped flags", () => {
     expect(run(["add", "--", "-x"]).command).toMatchObject({ branch: "-x" });
   });
 });
+
+describe("rebase's base", () => {
+  test("each of the three flags lands as the base, and no flag is no base", () => {
+    expect(
+      run([
+        "rebase",
+        "feat/x",
+        "--onto",
+        "origin/develop",
+        "--no-fetch",
+        "--no-abort",
+        "--no-stash",
+      ]).command,
+    ).toEqual({
+      name: "rebase",
+      target: "feat/x",
+      base: { kind: "ref", ref: "origin/develop" },
+      fetch: false,
+      abortOnConflict: false,
+      carry: false,
+    });
+    expect(run(["rebase", "--upstream"]).command).toMatchObject({ base: { kind: "upstream" } });
+    expect(run(["rebase", "--trunk"]).command).toMatchObject({ base: { kind: "trunk" } });
+    // Absent rather than defaulted: whether that is a question or a usage
+    // error depends on whether anybody is at the terminal, which is not the
+    // parser's to know.
+    expect(run(["rebase"]).command).toEqual({
+      name: "rebase",
+      target: undefined,
+      base: undefined,
+      fetch: true,
+      abortOnConflict: true,
+      carry: true,
+    });
+  });
+
+  test("two bases at once is refused, the way `add --on --from` is", () => {
+    for (const argv of [
+      ["rebase", "--trunk", "--upstream"],
+      ["rebase", "--onto", "main", "--trunk"],
+      ["rebase", "--onto", "main", "--upstream"],
+    ]) {
+      const parsed = error(argv);
+
+      expect(parsed.message).toContain("pass one");
+      expect(parsed.usage).toContain("Usage: grove rebase");
+    }
+  });
+});

@@ -12,6 +12,7 @@ import {
   withTempRepo,
 } from "../core/test-utils.ts";
 import type { GlobalOptions, GroveCommand } from "./args.ts";
+import type { Choice, Choose } from "./ask.ts";
 import { ExitCode, errorToExitCode } from "./exit-codes.ts";
 import { SUBCOMMANDS } from "./help.ts";
 import { runCommand } from "./run.ts";
@@ -39,6 +40,8 @@ type RunOptions = {
   readonly cwd?: string;
   /** Somebody at the terminal, answering every question this way. Absent: nobody. */
   readonly ask?: (question: string) => Promise<boolean>;
+  /** The same somebody, picking out of a list. Absent: nobody. */
+  readonly choose?: Choose;
 };
 
 type Fixture = {
@@ -61,7 +64,10 @@ async function withFixture(body: (fixture: Fixture) => Promise<void>): Promise<v
     const elsewhere = join(temp.root, "elsewhere");
     await mkdir(elsewhere, { recursive: true });
 
-    const attempt: Fixture["attempt"] = async (command, { global = {}, cwd = root, ask } = {}) => {
+    const attempt: Fixture["attempt"] = async (
+      command,
+      { global = {}, cwd = root, ask, choose } = {},
+    ) => {
       const log = recorder();
 
       try {
@@ -70,6 +76,7 @@ async function withFixture(body: (fixture: Fixture) => Promise<void>): Promise<v
           global: { ...BASE, ...global },
           reporter: log.reporter,
           ask,
+          choose,
         });
         return { log, error: undefined };
       } catch (error) {
@@ -292,6 +299,22 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     // `syncWorktrees` reports one row per worktree as `<path>\t<kind>`, and the
     // path is `.` because the sync was asked for from inside it.
     expect(log.out).toEqual([".\tup-to-date\n"]);
+  },
+
+  rebase: async ({ run }) => {
+    const log = await run({
+      name: "rebase",
+      target: "main",
+      base: { kind: "trunk" },
+      fetch: false,
+      abortOnConflict: true,
+      carry: true,
+    });
+
+    // The trunk's worktree is on `origin/main` already, which only
+    // `rebaseWorktree` says in these words — and as one row, `sync`'s shape.
+    expect(log.out).toEqual(["main\tup-to-date\n"]);
+    expect(log.err).toContain("· main is already on origin/main\n");
   },
 
   setup: async ({ root, run }) => {
@@ -785,6 +808,69 @@ describe("the context a command is handed", () => {
       // are two destinations, not one stream split by convention.
       expect(log.err).toEqual([]);
       expect(log.out).toHaveLength(1);
+    });
+  }, 60_000);
+});
+
+/**
+ * The one question that is not yes or no: which base a rebase goes onto, when
+ * no flag said. The list is `rebaseChoices`' — the same rows the screen's
+ * `/rebase` draws — and the answer is the flag the person would have typed.
+ */
+describe("asking which base a rebase goes onto", () => {
+  const rebase = (target: string): GroveCommand => ({
+    name: "rebase",
+    target,
+    fetch: false,
+    abortOnConflict: true,
+    carry: true,
+  });
+
+  test("nobody at the terminal is a usage error naming the flags, with the list under it", async () => {
+    await withFixture(async ({ attempt }) => {
+      const error = groveFailure(await attempt(rebase("main")));
+
+      expect(error.code).toBe("usage");
+      expect(errorToExitCode(error.code)).toBe(ExitCode.usage);
+      expect(error.message).toBe("say where main goes: --upstream, --trunk, or --onto <ref>");
+      // What each flag would have meant, so a pipe's log says it too.
+      expect(error.details.join("\n")).toContain("upstream");
+      expect(error.details.join("\n")).toContain("origin/main");
+    });
+  }, 60_000);
+
+  test("the bases are listed by number, and the key pressed is the base rebased onto", async () => {
+    await withFixture(async ({ run }) => {
+      const asked: { question: string; choices: readonly Choice[] }[] = [];
+      const choose: Choose = async (question, choices) => {
+        asked.push({ question, choices });
+        return "2";
+      };
+
+      const log = await run(rebase("main"), { choose });
+
+      expect(asked).toEqual([
+        {
+          question: "rebase main onto which base?",
+          // The trunk's own worktree tracks the trunk, so its remote and the
+          // trunk are the same ref under two names — and both are offered,
+          // because the list is the rule and not a guess about the row.
+          choices: [
+            { key: "1", label: "upstream", detail: "origin/main" },
+            { key: "2", label: "trunk", detail: "origin/main" },
+          ],
+        },
+      ]);
+      expect(log.out).toEqual(["main\tup-to-date\n"]);
+    });
+  }, 60_000);
+
+  test("a key that picks nothing leaves the worktree alone, and prints no row", async () => {
+    await withFixture(async ({ run }) => {
+      const log = await run(rebase("main"), { choose: async () => undefined });
+
+      expect(log.out).toEqual([]);
+      expect(log.err).toContain("· left as it is — nothing was rebased\n");
     });
   }, 60_000);
 });

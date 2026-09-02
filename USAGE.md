@@ -74,6 +74,12 @@ on no remote yet is asked about too: `y` pushes it and tracks it. `/sync-all`
 does every worktree with a single confirmation, and only says which branches
 are on no remote.
 
+**Rebase onto something else.** `/rebase` lists the bases for the selected
+worktree: the branch's remote, the branch it is stacked on, the trunk, and the
+other worktrees' branches. Pick one, `enter`. Nothing is pushed. Uncommitted
+changes are carried through and put back; if the rebase conflicts, or the
+changes will not sit on the result, the whole thing is undone.
+
 **Remove.** `r`. The prompt lists what would be lost. `y` removes the worktree
 and keeps the branch. On a folder row, `r` removes every worktree in it.
 `/prune` removes every worktree badged `merged` or `gone` at once: the prompt
@@ -110,6 +116,7 @@ Every destructive action asks first. `y` confirms. Any other key cancels.
 | --- | --- |
 | `/open` | open the selection in the editor |
 | `/setup` | re-apply `.grove.toml` to the selection |
+| `/rebase` | rebase the selection onto a base you pick |
 | `/sync-all` | sync every worktree |
 | `/prune` | remove the worktrees badged `merged` or `gone` |
 | `/review` | check out an open pull request |
@@ -237,6 +244,7 @@ grove path [target]               # enter; no target prints the root
 grove open [target]               # /open
 grove setup [target | --all]      # /setup
 grove sync [target | --all]       # s, /sync-all
+grove rebase [target]             # /rebase
 grove pr <number | url | branch>  # /review
 grove reset <target>              # x
 grove remove <target>             # r
@@ -290,6 +298,30 @@ to stay local, and reports nothing.
 
 The screen confirms before a force-push and before a first push. The CLI does
 neither.
+
+### rebase
+
+Moves one worktree's branch onto a base of your choosing and pushes nothing.
+`sync` picks its base and pushes; this is for when the base is the question.
+
+| flag | |
+| --- | --- |
+| `--upstream` | onto the branch the worktree tracks |
+| `--trunk` | onto the default branch as origin has it (`--onto main` is the local checkout) |
+| `--onto <ref>` | onto any branch or ref; a name only origin has means `origin/<name>` |
+| `--no-stash` | refuse a dirty worktree instead of carrying its changes |
+| `--no-abort` | leave a conflicted rebase, or conflicting changes, in place |
+| `--no-fetch` | skip the fetch |
+
+With none of the three base flags, a terminal is shown the bases and asked for
+one by number. A pipe gets exit code 2 with the same list on stderr.
+
+Uncommitted changes are snapshotted (a commit, never `refs/stash`), the rebase
+runs, and they are re-applied on top. If the rebase conflicts, or the changes
+do not apply cleanly to the rebased branch, everything is undone and the
+worktree is exactly as it was: exit code 5. `--no-abort` keeps the half-finished
+state instead and prints the snapshot's sha, so `git stash apply <sha>` brings
+the changes back once the conflict is resolved.
 
 ### remove / prune
 
