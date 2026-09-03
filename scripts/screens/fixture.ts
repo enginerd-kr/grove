@@ -93,8 +93,20 @@ const BRANCHES = ["feat/login", "feat/search", "fix/crash", "chore/docs"] as con
 /** A reporter with nowhere to write: the fixture's own progress is not the picture. */
 const quiet = createPlainReporter({ out: () => {}, err: () => {} });
 
+/**
+ * The moment the ages below are measured back from.
+ *
+ * `NOW` for the pictures, which are compared byte for byte and so must be
+ * built from a clock that does not move. The demo recording cannot use it: it
+ * launches the app in a separate process, on the real clock, where a fixture
+ * dated from a pinned moment in the past would put `1w ago` in the `last`
+ * column where the recording wants `2h ago`. So `buildFixture` takes the
+ * moment, and only the demo passes one.
+ */
+let measuredFrom = NOW;
+
 function at(hoursAgo: number): string {
-  return new Date(NOW - hoursAgo * 3_600_000).toISOString();
+  return new Date(measuredFrom - hoursAgo * 3_600_000).toISOString();
 }
 
 /** git, with the identity pinned and a commit date that will not move. */
@@ -170,7 +182,14 @@ async function seedOrigin(root: string): Promise<string> {
   return origin;
 }
 
-export async function buildFixture(): Promise<Fixture> {
+export type FixtureOptions = {
+  /** What the ages are measured back from. Defaults to the pictures' pinned moment. */
+  readonly now?: number;
+};
+
+export async function buildFixture(options: FixtureOptions = {}): Promise<Fixture> {
+  measuredFrom = options.now ?? NOW;
+
   // Canonicalised because macOS's `tmpdir()` is a symlink (`/var` →
   // `/private/var`), and a `~` that failed to match `HOME` would put the
   // machine's real temp path in the banner of a published picture.

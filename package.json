@@ -21,7 +21,8 @@
     "check": "biome ci . && tsc --noEmit",
     "ci": "bun run check && bash scripts/test.sh",
     "compile": "bash scripts/build-binaries.sh",
-    "screenshots": "bun scripts/screens/shots.tsx"
+    "screenshots": "bun scripts/screens/shots.tsx",
+    "demo": "bun scripts/screens/demo.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
