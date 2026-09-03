@@ -58,6 +58,13 @@ export type ProposeOptions = {
   readonly body?: string;
   /** `--web`: push, then open the browser to write it there instead. */
   readonly web: boolean;
+  /**
+   * `--stack`: the branches this one sits on first, bottom-up, then this one.
+   *
+   * Refused beside `--base`, `--title`, `--body` and `--web` by the parser:
+   * each of those is about one pull request, and this opens several.
+   */
+  readonly stack?: boolean;
 };
 
 /** An open pull request the forge already has for the branch. */
@@ -382,4 +389,75 @@ export async function proposePullRequest(
   );
 
   return { ...identity, base, pushed, number, url, created: true, web: false };
+}
+
+/**
+ * `grove propose --stack`: every pull request the stack under a branch needs,
+ * bottom-up, and then the branch's own.
+ *
+ * A stacked pull request goes onto its parent, so the parent's has to exist
+ * first — the forge refuses a base branch it has never seen — and the stack
+ * is opened from the bottom for that reason. Each one is `proposePullRequest`
+ * exactly, with its own base read off the stack, its own push, and its own
+ * "already exists" — so a stack half-proposed last week is finished rather
+ * than refused, and re-running this over a stack fully proposed reports each
+ * one and pushes nothing.
+ *
+ * The chain is the branch's ancestors and the branch, not the branches above
+ * it: a pull request is opened when its author says the work is ready, and
+ * the child of this branch may not be. From the top of a stack this proposes
+ * everything; from the bottom, only the bottom.
+ *
+ * A refusal stops the chain where it happened. What was proposed before it is
+ * proposed, was reported as it went, and is in the result the way `sync
+ * --all` keeps the worktrees that synced; the error carries the rest.
+ */
+export async function proposeStack(
+  repo: RepoPaths,
+  cwd: string,
+  options: ProposeOptions,
+  reporter: Reporter,
+): Promise<readonly ProposeResult[]> {
+  // `proposalFor` for its refusals — a detached HEAD, the trunk, a review
+  // worktree — before anything in the chain is pushed on the branch's behalf.
+  const { branch } = await proposalFor(repo, cwd, { target: options.target });
+  const trunk = await defaultBranch(repo.gitDir);
+
+  // Bottom-up: `ancestry` is nearest first, and the forge wants the base
+  // before the branch on it. A parent the repository has lost is not a base
+  // anybody can propose, and `sync` has already handed its children up past
+  // it — so it is skipped here the way `proposalFor` skips it as a base.
+  const chain: string[] = [];
+  for (const parent of ancestry(await readStack(repo.gitDir), branch).toReversed()) {
+    if (parent === trunk || !(await localBranchExists(repo.gitDir, parent))) continue;
+    chain.push(parent);
+  }
+  chain.push(branch);
+
+  const worktrees = await listWorktrees(repo.gitDir);
+  for (const member of chain) {
+    if (!worktrees.some((record) => record.branch === member)) {
+      throw new GroveError("refused", `${member} is in the stack and has no worktree here`, {
+        hint: `grove add ${member} gives it one; a branch is proposed from its worktree`,
+      });
+    }
+  }
+
+  if (chain.length > 1) {
+    reporter.info(`proposing ${plural(chain.length, "pull request")}: ${chain.join(" → ")}`);
+  }
+
+  const results: ProposeResult[] = [];
+  for (const member of chain) {
+    results.push(
+      await proposePullRequest(
+        repo,
+        cwd,
+        { ...options, target: member, base: undefined, stack: false },
+        reporter,
+      ),
+    );
+  }
+
+  return results;
 }

@@ -65,12 +65,115 @@ function carried(row: TreeRow | undefined): readonly string[] {
   return row.leaves.map((leaf) => leaf.dir);
 }
 
+describe("a stack inside a folder", () => {
+  test("a branch stacked on one in the same folder is drawn one step under it", () => {
+    const rows = buildTree([
+      wt("main", { isDefault: true }),
+      wt("feat/login-api", { parent: "feat/login" }),
+      wt("feat/login"),
+      wt("feat/search"),
+    ]);
+
+    // Under its parent rather than beside it, and the parent keeps its place
+    // among the folder's roots. The row says so, so the state column can
+    // leave `on feat/login` out.
+    expect(shape(rows)).toEqual([
+      ["leaf", "main", 0],
+      ["group", "feat/", 0],
+      ["leaf", "login", 1],
+      ["leaf", "login-api", 2],
+      ["leaf", "search", 1],
+    ]);
+    expect(rows.map((row) => row.kind === "leaf" && row.underParent)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  test("a stack three deep nests three deep, and siblings sort alphabetically under their parent", () => {
+    const rows = buildTree([
+      wt("feat/c", { parent: "feat/a" }),
+      wt("feat/b", { parent: "feat/a" }),
+      wt("feat/d", { parent: "feat/b" }),
+      wt("feat/a"),
+    ]);
+
+    expect(shape(rows)).toEqual([
+      ["group", "feat/", 0],
+      ["leaf", "a", 1],
+      ["leaf", "b", 2],
+      ["leaf", "d", 3],
+      ["leaf", "c", 2],
+    ]);
+  });
+
+  test("a parent in another folder, or with no worktree, leaves the row where its directory is", () => {
+    const rows = buildTree([
+      wt("fix/followup", { parent: "feat/login" }),
+      wt("feat/login"),
+      wt("feat/orphan", { parent: "feat/gone" }),
+    ]);
+
+    // Neither is indented, and both keep their `on <parent>` note: the
+    // folders are the shape the disk has, and a row moved out of its folder
+    // would be drawn somewhere it is not.
+    expect(shape(rows)).toEqual([
+      ["group", "feat/", 0],
+      ["leaf", "login", 1],
+      ["leaf", "orphan", 1],
+      ["group", "fix/", 0],
+      ["leaf", "followup", 1],
+    ]);
+    expect(rows.every((row) => row.kind === "group" || !row.underParent)).toBe(true);
+  });
+
+  test("two branches recorded on each other are both drawn, once, one under the other", () => {
+    const rows = buildTree([
+      wt("feat/a", { parent: "feat/b" }),
+      wt("feat/b", { parent: "feat/a" }),
+    ]);
+
+    // Neither is a root, so neither would be reached from one; the loop is
+    // broken at the first name and the rest hangs from it, rather than both
+    // vanishing from the folder.
+    expect(shape(rows)).toEqual([
+      ["group", "feat/", 0],
+      ["leaf", "a", 1],
+      ["leaf", "b", 2],
+    ]);
+  });
+
+  test("the arrows walk into and out of a stack the way they walk a folder", () => {
+    const rows = buildTree([wt("feat/login"), wt("feat/login-api", { parent: "feat/login" })]);
+    const [, login, api] = rows;
+
+    expect(firstChildOf(rows, at(rows, 1))).toBe(api);
+    expect(parentOf(rows, at(rows, 2))).toBe(login);
+  });
+
+  test("a folder still carries every worktree under it, nested or not", () => {
+    const rows = buildTree([wt("feat/login"), wt("feat/login-api", { parent: "feat/login" })]);
+
+    expect(carried(rows[0])).toEqual(["feat/login", "feat/login-api"]);
+  });
+});
+
 describe("buildTree", () => {
   test("a branch with no slash is one leaf at the top level", () => {
     const main = wt("main", { isDefault: true });
 
     expect(buildTree([main])).toEqual([
-      { kind: "leaf", key: "/repos/app/main", label: "main", depth: 0, summary: main },
+      {
+        kind: "leaf",
+        key: "/repos/app/main",
+        label: "main",
+        depth: 0,
+        summary: main,
+        underParent: false,
+      },
     ]);
   });
 

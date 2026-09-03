@@ -181,6 +181,220 @@ export async function listPullRequests(
   });
 }
 
+/**
+ * The fields the badges are drawn from, and nothing a picker would pay for.
+ *
+ * `statusCheckRollup` is the expensive one — a row per check per pull request
+ * — and it is the whole reason to ask: the number alone is what `propose`
+ * already prints, and what the screen wants to know is whether the thing is
+ * green.
+ */
+const BADGE_FIELDS = [
+  "number",
+  "url",
+  "headRefName",
+  "baseRefName",
+  "isDraft",
+  "reviewDecision",
+  "mergeable",
+  "statusCheckRollup",
+].join(",");
+
+/**
+ * How many open pull requests the badges are read from.
+ *
+ * One call for every row on the screen, so the cost is the forge's, and the
+ * newest hundred is where the pull request for a branch somebody is working in
+ * this week is; one older than that has to be reached by its number, which
+ * `grove pr <n>` takes.
+ */
+const BADGE_LIMIT = 100;
+
+/** Every check passed, one of them failed, or some have not answered yet. */
+export type ChecksState = "passing" | "failing" | "pending";
+
+/**
+ * What the reviewers said, when they have said something that stands.
+ *
+ * "Review required" is not a state here: it is what every fresh pull request
+ * reads, and a badge that said it on every row would be saying nothing.
+ */
+export type ReviewState = "approved" | "changes-requested";
+
+/**
+ * A branch's open pull request as the forge sees it — what stands between the
+ * branch and its merge.
+ *
+ * Read for the screen's `pr` column and for nothing else: `list` never asks
+ * the forge, so `grove list` is the same command with and without `gh`, and
+ * the column is the one part of the screen that is the forge's word rather
+ * than git's.
+ */
+export type BranchPullRequest = {
+  readonly number: number;
+  readonly url: string;
+  /** The branch it was proposed from, which is the branch a row is matched by. */
+  readonly head: string;
+  readonly base: string;
+  readonly isDraft: boolean;
+  /** Absent when the pull request has no checks at all. */
+  readonly checks?: ChecksState;
+  readonly review?: ReviewState;
+  /** True when the forge cannot merge it as it stands. */
+  readonly conflicts: boolean;
+};
+
+/**
+ * The words the forge uses for a check that has come back red, and for one
+ * that has come back green.
+ *
+ * Two shapes arrive in one list. A check run says `status` and, once
+ * `COMPLETED`, a `conclusion`; a commit status says `state`. GitHub's own
+ * "all checks have passed" counts a skipped or neutral run as passed, and so
+ * does this. Anything not on either list is a check still on its way.
+ */
+const FAILED = new Set([
+  "FAILURE",
+  "ERROR",
+  "TIMED_OUT",
+  "CANCELLED",
+  "ACTION_REQUIRED",
+  "STARTUP_FAILURE",
+]);
+const PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
+function checksOf(rollup: unknown): ChecksState | undefined {
+  if (!Array.isArray(rollup) || rollup.length === 0) return undefined;
+
+  let pending = false;
+  for (const entry of rollup) {
+    const row = record(entry);
+    const state =
+      text(row.state) || (text(row.status) === "COMPLETED" ? text(row.conclusion) : "PENDING");
+
+    // One failure is the answer whatever the rest are doing: a red check is
+    // what needs looking at, and a green one beside it changes nothing.
+    if (FAILED.has(state)) return "failing";
+    if (!PASSED.has(state)) pending = true;
+  }
+
+  return pending ? "pending" : "passing";
+}
+
+function reviewOf(decision: string): ReviewState | undefined {
+  if (decision === "APPROVED") return "approved";
+  if (decision === "CHANGES_REQUESTED") return "changes-requested";
+
+  return undefined;
+}
+
+/**
+ * The open pull requests with what stands between each and its merge — the
+ * screen's `pr` column, in one round trip.
+ *
+ * The same refusals as `listPullRequests`, and the screen swallows every one of
+ * them: this is read on the refresh tick, nobody pressed a key for it, and a
+ * repository without `gh`, without GitHub, or without a network is a
+ * repository with no column rather than one with a red line every minute.
+ */
+export async function branchPullRequests(
+  repo: RepoPaths,
+  limit = BADGE_LIMIT,
+): Promise<readonly BranchPullRequest[]> {
+  const parsed: unknown = await ghJson(
+    ["pr", "list", "--state", "open", "--limit", String(limit), "--json", BADGE_FIELDS],
+    repo.root,
+  );
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed.flatMap((entry) => {
+    const row = record(entry);
+    // A row with no number is a shape we do not recognise, and a badge with
+    // nothing to draw. Dropped rather than drawn as `#0`.
+    if (typeof row.number !== "number") return [];
+
+    return [
+      {
+        number: row.number,
+        url: text(row.url),
+        head: text(row.headRefName),
+        base: text(row.baseRefName),
+        isDraft: row.isDraft === true,
+        checks: checksOf(row.statusCheckRollup),
+        review: reviewOf(text(row.reviewDecision)),
+        conflicts: text(row.mergeable) === "CONFLICTING",
+      },
+    ];
+  });
+}
+
+/**
+ * The pull request a worktree's branch is on, out of what the forge listed.
+ *
+ * By the branch's name first, which is what the forge indexes on. A review
+ * worktree is the other way round: `pr/42` is grove's name for somebody
+ * else's `fix/crash`, and the number in it is the only thing the two share —
+ * so it is matched by that, and the row reviewing a pull request shows
+ * whether the pull request is green too.
+ */
+export function pullRequestFor(
+  prs: readonly BranchPullRequest[],
+  branch: string,
+): BranchPullRequest | undefined {
+  const byHead = prs.find((pr) => pr.head === branch);
+  if (byHead !== undefined) return byHead;
+
+  const number = prNumberOf(branch);
+
+  return number === undefined ? undefined : prs.find((pr) => pr.number === number);
+}
+
+/**
+ * How a word in the `pr` column is coloured, said as what it means rather
+ * than as a colour — the row decides the colour, the way it does for the
+ * state column's own words.
+ */
+export type BadgeTone = "plain" | "ok" | "warn" | "danger" | "dim";
+
+export type BadgePart = { readonly text: string; readonly tone: BadgeTone };
+
+/** One glyph per answer, so the column reads across the terminal without its colour. */
+const CHECK_GLYPHS: Record<ChecksState, BadgePart> = {
+  passing: { text: "✓", tone: "ok" },
+  failing: { text: "✗", tone: "danger" },
+  // The reporter's own mark for a step that has not settled, which is what a
+  // check still running is.
+  pending: { text: "·", tone: "dim" },
+};
+
+/**
+ * The `pr` column, as the words it is made of.
+ *
+ * The number first, because it is what the row is recognised by; the checks
+ * as one glyph, because they are the thing to glance at; and then only the
+ * words that mean something is to be done or nothing is — `draft`, what the
+ * reviewers said, and `conflicts`. A pull request waiting on its first review
+ * with green checks reads `#42 ✓`, which is the whole of what is true of it.
+ */
+export function pullRequestParts(pr: BranchPullRequest): readonly BadgePart[] {
+  const parts: BadgePart[] = [{ text: `#${pr.number}`, tone: "plain" }];
+
+  if (pr.checks !== undefined) parts.push(CHECK_GLYPHS[pr.checks]);
+  if (pr.isDraft) parts.push({ text: "draft", tone: "dim" });
+  if (pr.review === "approved") parts.push({ text: "approved", tone: "ok" });
+  if (pr.review === "changes-requested") parts.push({ text: "changes requested", tone: "warn" });
+  if (pr.conflicts) parts.push({ text: "conflicts", tone: "warn" });
+
+  return parts;
+}
+
+/** `pullRequestParts` as one string — what the column is sized by. */
+export function describePullRequest(pr: BranchPullRequest): string {
+  return pullRequestParts(pr)
+    .map((part) => part.text)
+    .join(" ");
+}
+
 /** A branch and the commit it is at — what a closed pull request is matched against. */
 export type ForgeCandidate = {
   readonly branch: string;

@@ -2,8 +2,13 @@ import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { version } from "../../../package.json";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
-import type { PullRequest } from "../../core/commands/pr.ts";
+import {
+  type BranchPullRequest,
+  type PullRequest,
+  pullRequestFor,
+} from "../../core/commands/pr.ts";
 import type { RebaseChoice } from "../../core/commands/rebase.ts";
+import type { StackResult } from "../../core/commands/stack.ts";
 import type { Commit } from "../../core/history.ts";
 import { plural } from "../../core/text.ts";
 import type { LineStore } from "../../report/lines.ts";
@@ -28,6 +33,7 @@ import {
   wouldPublish,
 } from "./pending.ts";
 import { padTo, Row } from "./Row.tsx";
+import { Stack } from "./Stack.tsx";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, firstChildOf, parentOf, pathOf } from "./tree.ts";
 import { editPrompt, type Prompt, typed } from "./typing.ts";
@@ -213,6 +219,16 @@ const GENERAL_TIPS: readonly Message[] = [
     kind: "info",
     text: "tip: x keeps a copy of what it discards — the line under it says how to get it back",
   },
+  {
+    kind: "info",
+    text: "tip: the pr column is the forge's word — ✓ ✗ · for the checks, then what the reviewers said",
+    hint: "read through gh once a minute; a repository gh cannot reach has no column",
+  },
+  {
+    kind: "info",
+    text: "tip: a row indented under another sits on it — the panel beside the list draws the whole stack",
+    hint: "`grove stack` prints the same picture, and `propose --stack` opens every pull request in it",
+  },
 ];
 
 /** A new set with `key` flipped in or out — `Set` is mutable and state is not. */
@@ -239,6 +255,16 @@ export function App({
   const columns = columnsOverride ?? live.columns;
   const terminalRows = rowsOverride ?? live.rows;
   const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
+  /**
+   * What the forge last said about the open pull requests, for the `pr`
+   * column — held apart from `rows` because it arrives on its own clock.
+   *
+   * `list` is git and answers in a moment; the forge is a network round trip
+   * and answers when it answers. Folding the two into one read would make
+   * every refresh, and every action's re-read after it, wait on `gh` — so the
+   * rows are drawn as soon as git has them, and the column fills in behind.
+   */
+  const [pullRequests, setPullRequests] = useState<readonly BranchPullRequest[]>([]);
   const [cursorKey, setCursorKey] = useState<string | undefined>(undefined);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
@@ -263,8 +289,38 @@ export function App({
   const [log, setLog] = useState<
     { readonly path: string; readonly commits: readonly Commit[] } | undefined
   >(undefined);
+  /**
+   * The stack the row under the cursor is in, for the panel beside the list.
+   *
+   * Held with the path it was read for, the way the commits are, and for the
+   * same reason: a read for the row before is still on its way back, and a
+   * picture under this row's heading has to be this row's picture.
+   */
+  const [stack, setStack] = useState<
+    { readonly path: string; readonly result: StackResult } | undefined
+  >(undefined);
 
   const lines = useSyncExternalStore(store.subscribe, store.snapshot, store.snapshot);
+
+  /**
+   * The rows with the forge's answer on each, for the ones it had one for.
+   *
+   * Matched here rather than in `list`, which never asks the forge: the
+   * summary carries the field so the row and the column can be drawn from
+   * one object, and this is where the two reads meet. Nothing listed means
+   * the rows as git gave them, which is also the whole screen before the
+   * first answer arrives and after every one that failed.
+   */
+  const badged = useMemo(() => {
+    if (pullRequests.length === 0) return rows;
+
+    return rows.map((row) => {
+      const pullRequest =
+        row.branch === undefined ? undefined : pullRequestFor(pullRequests, row.branch);
+
+      return pullRequest === undefined ? row : { ...row, pullRequest };
+    });
+  }, [rows, pullRequests]);
 
   // The cursor walks every drawn row, folders included: a folder is what you
   // reach for to act on the branches under it in one go.
@@ -272,7 +328,7 @@ export function App({
   // Folded folders are held by key rather than by row, so a fold survives the
   // list re-reading itself — which it does every two seconds, and which would
   // otherwise flick every folder back open while you were looking at it.
-  const tree = useMemo(() => buildTree(rows, collapsed), [rows, collapsed]);
+  const tree = useMemo(() => buildTree(badged, collapsed), [badged, collapsed]);
 
   /**
    * Where the cursor is, remembered as the row rather than as its position.
@@ -323,9 +379,44 @@ export function App({
     [tree],
   );
 
-  const refresh = useCallback(async () => {
-    setRows(await service.list());
+  const mounted = useRef(true);
+  useEffect(() => {
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  /**
+   * Asks the forge about the open pull requests, and keeps whatever it says.
+   *
+   * Never awaited by the caller, and never reported: this runs beside every
+   * re-read of the list, and the screen must not wait on a network round
+   * trip to draw rows git has already handed over, nor say anything when the
+   * round trip fails. No `gh`, no GitHub behind the remote, no network —
+   * each is a column that stays as it was, which for most of those is a
+   * column that is not there. One at a time, for `catchUp`'s reason.
+   */
+  const askingForge = useRef(false);
+  const readPullRequests = useCallback(async () => {
+    if (askingForge.current) return;
+    askingForge.current = true;
+
+    try {
+      const found = await service.branchPullRequests();
+      if (mounted.current) setPullRequests(found);
+    } catch {
+      // A read nobody asked for reports nothing; the column keeps its last answer.
+    } finally {
+      askingForge.current = false;
+    }
   }, [service]);
+
+  const refresh = useCallback(async () => {
+    // Started before the list is awaited so the two overlap, and not awaited
+    // at all: the rows are the outcome, and the column fills in behind them.
+    void readPullRequests();
+    setRows(await service.list());
+  }, [service, readPullRequests]);
 
   /**
    * The keys blocked and the last answer gone — how every action starts,
@@ -709,13 +800,6 @@ export function App({
     tipPool.length > 1 ? tipRotateMs : null,
   );
 
-  const mounted = useRef(true);
-  useEffect(() => {
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
   /**
    * One tick: bring the remote refs up to date, then re-read everything.
    *
@@ -742,6 +826,9 @@ export function App({
 
     try {
       await service.fetch();
+      // The forge beside git rather than after it, and not waited for: what
+      // it says lands in its own state whenever it lands.
+      void readPullRequests();
       const summaries = await service.list();
       if (mounted.current) setRows(summaries);
     } catch {
@@ -750,7 +837,7 @@ export function App({
     } finally {
       reading.current = false;
     }
-  }, [service]);
+  }, [service, readPullRequests]);
 
   // Once on open, because opening the screen is exactly when what it is showing
   // is most likely to be from another day.
@@ -818,6 +905,39 @@ export function App({
       live = false;
     };
   }, [logOn, selectedPath, rows, service]);
+
+  /**
+   * The stack for the row under the cursor, read when it could have changed.
+   *
+   * `log`'s shape, and only for a row that is in a stack: one that sits on
+   * another branch, or that another branch sits on. Every other row — which is
+   * every row in most repositories — asks nothing and draws nothing. The read
+   * is a handful of `rev-list` calls, one per edge, which is why it is asked
+   * of the one row being looked at rather than of every row on the tick.
+   */
+  const stacked =
+    selected !== undefined &&
+    (selected.parent !== undefined || rows.some((row) => row.parent === selected.branch));
+
+  useEffect(() => {
+    const target = rows.find((summary) => summary.path === selectedPath);
+    if (!stacked || target === undefined) return;
+
+    let live = true;
+
+    void service.stack(target.path).then(
+      (result) => {
+        if (live) setStack({ path: target.path, result });
+      },
+      () => {
+        if (live) setStack(undefined);
+      },
+    );
+
+    return () => {
+      live = false;
+    };
+  }, [stacked, selectedPath, rows, service]);
 
   /**
    * The menu's rows, and what `enter` on one does.
@@ -1276,6 +1396,24 @@ export function App({
       ? Math.min(widths.slack, MAX_FILES_COLS)
       : 0;
 
+  /**
+   * The stack panel's width, out of the same slack — and only when the files
+   * are not in it.
+   *
+   * The files win: what is uncommitted is the thing about to be lost or
+   * carried, and where the branch sits is a fact that keeps. Drawn only from a
+   * read made for this row, so a picture of the row before never sits under
+   * this row's name.
+   */
+  const stackShown =
+    filesWidth === 0 && stacked && selected !== undefined && stack?.path === selected.path
+      ? stack.result
+      : undefined;
+  const stackWidth =
+    stackShown !== undefined && widths.slack >= MIN_FILES_COLS
+      ? Math.min(widths.slack, MAX_FILES_COLS)
+      : 0;
+
   const rule = "─".repeat(Math.max(0, columns));
   // The banner already says how many there are, so the last row is left with
   // the one thing it cannot answer: where the cursor is in a list too long to
@@ -1322,6 +1460,10 @@ export function App({
           {/* Named after the branch it compares against, since `master` and
               `trunk` are both things people call it. */}
           {widths.trunk > 0 ? `${padTo(trunkName, widths.trunk)}${GAP}` : ""}
+          {/* The forge's column, only when the forge had something to say
+              about some row: a heading over a column of blanks would be
+              the screen announcing a feature it has nothing to show for. */}
+          {widths.pr > 0 ? `${padTo("pr", widths.pr)}${GAP}` : ""}
           state
         </Text>
       ) : null}
@@ -1349,6 +1491,15 @@ export function App({
             total={selected.changed}
             rows={listHeight}
             width={filesWidth}
+          />
+        ) : null}
+
+        {stackWidth > 0 && stackShown !== undefined && selected?.branch !== undefined ? (
+          <Stack
+            result={stackShown}
+            selected={selected.branch}
+            rows={listHeight}
+            width={stackWidth}
           />
         ) : null}
       </Box>

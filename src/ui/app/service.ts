@@ -4,7 +4,13 @@ import { addWorktree } from "../../core/commands/add.ts";
 import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { openWorktree } from "../../core/commands/open.ts";
-import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
+import {
+  type BranchPullRequest,
+  branchPullRequests,
+  checkoutPullRequest,
+  listPullRequests,
+  type PullRequest,
+} from "../../core/commands/pr.ts";
 import {
   type ExistingPullRequest,
   proposalFor,
@@ -21,6 +27,7 @@ import {
 import { removeWorktree } from "../../core/commands/remove.ts";
 import { describeDiscard, resetWorktree } from "../../core/commands/reset.ts";
 import { setUpWorktrees, failureFor as setupFailureFor } from "../../core/commands/setup.ts";
+import { type StackResult, stackOf } from "../../core/commands/stack.ts";
 import {
   type SyncOutcome,
   failureFor as syncFailureFor,
@@ -121,6 +128,15 @@ export type WorktreeService = {
    */
   readonly log: (path: string, limit: number) => Promise<readonly Commit[]>;
   /**
+   * The stack one worktree's branch is in — `grove stack <target>` — for the
+   * panel beside the list.
+   *
+   * Read the way `log` is read, and for its reasons: when the cursor lands on
+   * a row that is in a stack, about that row alone, and never reported — a
+   * panel that could not be drawn is a panel that is not there.
+   */
+  readonly stack: (target: string) => Promise<StackResult>;
+  /**
    * Each action answers with the one line worth showing afterwards.
    *
    * `from` is where a *new* branch starts. It is ignored when the branch already
@@ -211,6 +227,17 @@ export type WorktreeService = {
    * a popup there is nothing to pick from.
    */
   readonly pullRequests: () => Promise<readonly PullRequest[]>;
+  /**
+   * The open pull requests with what stands between each and its merge —
+   * the rows' `pr` column.
+   *
+   * The one read here the screen makes on its own clock and never reports:
+   * it runs beside the refresh tick, nobody pressed a key for it, and every
+   * refusal — no `gh`, no GitHub, no network — is a column that is not drawn
+   * rather than a red line every minute. `pullRequests` above is the same
+   * question asked for a key, which is why that one is allowed to refuse.
+   */
+  readonly branchPullRequests: () => Promise<readonly BranchPullRequest[]>;
   /**
    * The same worktree `grove pr <n>` makes, from the row that was picked.
    *
@@ -396,6 +423,8 @@ export function createWorktreeService(
 
     log: (path, limit) => recentCommits(path, limit),
 
+    stack: (target) => stackOf(repo, cwd, { target, all: false }),
+
     copyPath: async (path) => {
       // Thrown rather than swallowed, unlike `add`'s copy: there the worktree
       // was the outcome and the copy a courtesy, here the copy *is* what the
@@ -564,6 +593,8 @@ export function createWorktreeService(
     },
 
     pullRequests: () => listPullRequests(repo),
+
+    branchPullRequests: () => branchPullRequests(repo),
 
     checkoutPr: async (number) => {
       // `setup: true, trust: false` exactly like `add` above, and the app runs

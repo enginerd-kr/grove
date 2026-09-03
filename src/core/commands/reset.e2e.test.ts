@@ -31,6 +31,8 @@ type ResetJson = {
   readonly untracked: number;
   readonly cleaned: boolean;
   readonly head: string;
+  /** The snapshot's sha, when something was discarded. */
+  readonly saved?: string;
 };
 
 async function head(worktree: string): Promise<string> {
@@ -92,6 +94,9 @@ describe("grove reset", () => {
         untracked: 1,
         cleaned: false,
         head: (await head(worktree)).slice(0, 7),
+        // The snapshot's sha — what `git stash apply` takes — is the one field
+        // a script cannot predict, so its shape is what is checked.
+        saved: expect.stringMatching(/^[0-9a-f]{40}$/) as unknown as string,
       });
       // The document has stdout to itself; the warning about the untracked file
       // that survived still goes to the person on stderr.

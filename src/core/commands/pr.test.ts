@@ -5,7 +5,15 @@ import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
 import { pathExists } from "../fs.ts";
 import { type Attempt, attempt, probeGit, refused, seedGit, succeeded } from "../test-utils.ts";
 import { type Forge, withForge } from "./forge-test-utils.ts";
-import { checkoutPullRequest, listPullRequests, type PrResult } from "./pr.ts";
+import {
+  type BranchPullRequest,
+  branchPullRequests,
+  checkoutPullRequest,
+  describePullRequest,
+  listPullRequests,
+  type PrResult,
+  pullRequestFor,
+} from "./pr.ts";
 import { removeWorktree } from "./remove.ts";
 import { resetWorktree } from "./reset.ts";
 import { syncWorktrees } from "./sync.ts";
@@ -593,7 +601,7 @@ describe.skipIf(!POSIX)("when gh cannot answer", () => {
       expect(errorToExitCode(error.code)).toBe(ExitCode.gh);
       expect(error.message).toBe("this needs `gh`, which is not installed");
       expect(error.hint).toBe(
-        "https://cli.github.com — only `grove pr`, `grove propose` and `grove prune --closed` use it",
+        "https://cli.github.com — only `grove pr`, `grove propose`, `grove prune --closed` and the screen's pr column use it",
       );
       // Missing is not the same as failing: there is no exit code to quote and
       // no stderr to carry, so `details` is empty rather than a guess.
@@ -688,4 +696,151 @@ describe.skipIf(!POSIX)("when gh cannot answer", () => {
       expect(error.details.join("\n")).toContain("not json at all");
     });
   }, 90_000);
+});
+
+/**
+ * The `pr` column's read: one `gh pr list` with the fields that say what
+ * stands between each branch and its merge, folded down to a badge per row.
+ *
+ * The two shapes a check arrives in are both fed through — a check run with a
+ * `status` and a `conclusion`, a commit status with a `state` — because the
+ * fold is the part with rules in it, and the rules are GitHub's own: a red
+ * check anywhere is red, a skipped one is green, and one still running is
+ * neither.
+ */
+describe.skipIf(!POSIX)("what the pr column reads", () => {
+  test("one gh call, and a badge per open pull request", async () => {
+    await withForge(async (forge) => {
+      await forge.answerTo(
+        "pr list",
+        JSON.stringify([
+          {
+            number: 42,
+            url: "https://github.example/acme/widget/pull/42",
+            headRefName: "feat/login",
+            baseRefName: "main",
+            isDraft: false,
+            reviewDecision: "APPROVED",
+            mergeable: "MERGEABLE",
+            statusCheckRollup: [
+              { __typename: "CheckRun", status: "COMPLETED", conclusion: "SUCCESS" },
+              { __typename: "CheckRun", status: "COMPLETED", conclusion: "SKIPPED" },
+              { __typename: "StatusContext", state: "SUCCESS" },
+            ],
+          },
+          {
+            number: 43,
+            url: "https://github.example/acme/widget/pull/43",
+            headRefName: "feat/search",
+            baseRefName: "feat/login",
+            isDraft: true,
+            reviewDecision: "CHANGES_REQUESTED",
+            mergeable: "CONFLICTING",
+            statusCheckRollup: [
+              { __typename: "CheckRun", status: "IN_PROGRESS" },
+              { __typename: "CheckRun", status: "COMPLETED", conclusion: "FAILURE" },
+            ],
+          },
+          {
+            number: 44,
+            url: "https://github.example/acme/widget/pull/44",
+            headRefName: "fix/crash",
+            baseRefName: "main",
+            isDraft: false,
+            reviewDecision: "REVIEW_REQUIRED",
+            mergeable: "UNKNOWN",
+            statusCheckRollup: [{ __typename: "StatusContext", state: "PENDING" }],
+          },
+          {
+            number: 45,
+            url: "https://github.example/acme/widget/pull/45",
+            headRefName: "chore/deps",
+            baseRefName: "main",
+            isDraft: false,
+            reviewDecision: "",
+            mergeable: "MERGEABLE",
+            statusCheckRollup: [],
+          },
+          // A row with no number is a shape we do not recognise, and no badge.
+          { headRefName: "mystery" },
+        ]),
+      );
+
+      const prs = await branchPullRequests(forge.repo);
+
+      expect(prs).toEqual([
+        {
+          number: 42,
+          url: "https://github.example/acme/widget/pull/42",
+          head: "feat/login",
+          base: "main",
+          isDraft: false,
+          checks: "passing",
+          review: "approved",
+          conflicts: false,
+        },
+        {
+          number: 43,
+          url: "https://github.example/acme/widget/pull/43",
+          head: "feat/search",
+          base: "feat/login",
+          isDraft: true,
+          checks: "failing",
+          review: "changes-requested",
+          conflicts: true,
+        },
+        {
+          number: 44,
+          url: "https://github.example/acme/widget/pull/44",
+          head: "fix/crash",
+          base: "main",
+          isDraft: false,
+          checks: "pending",
+          review: undefined,
+          conflicts: false,
+        },
+        {
+          number: 45,
+          url: "https://github.example/acme/widget/pull/45",
+          head: "chore/deps",
+          base: "main",
+          isDraft: false,
+          checks: undefined,
+          review: undefined,
+          conflicts: false,
+        },
+      ]);
+
+      // One round trip, asking for exactly the fields the badges are drawn from.
+      expect(await forge.asked()).toEqual([
+        "pr list --state open --limit 100 --json number,url,headRefName,baseRefName,isDraft,reviewDecision,mergeable,statusCheckRollup",
+      ]);
+
+      // The words each row draws — the column is sized by these.
+      expect(prs.map(describePullRequest)).toEqual([
+        "#42 ✓ approved",
+        "#43 ✗ draft changes requested conflicts",
+        "#44 ·",
+        "#45",
+      ]);
+    });
+  }, 90_000);
+
+  test("a row is matched by its branch, and a review worktree by the number in its name", () => {
+    const login: BranchPullRequest = {
+      number: 42,
+      url: "",
+      head: "feat/login",
+      base: "main",
+      isDraft: false,
+      conflicts: false,
+    };
+    const crash: BranchPullRequest = { ...login, number: 7, head: "fix/crash" };
+
+    expect(pullRequestFor([login, crash], "feat/login")).toBe(login);
+    // `pr/7` is grove's name for somebody's `fix/crash`; the number is what they share.
+    expect(pullRequestFor([login, crash], "pr/7")).toBe(crash);
+    expect(pullRequestFor([login, crash], "pr/8")).toBeUndefined();
+    expect(pullRequestFor([login, crash], "feat/other")).toBeUndefined();
+  });
 });

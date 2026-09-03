@@ -186,6 +186,61 @@ const DISPATCH: Readonly<Record<string, (fixture: Fixture) => Promise<void>>> = 
     }
   },
 
+  propose: async ({ temp, run, attempt }) => {
+    // A branch to propose, then `gh` taken away: the existence question is
+    // the first thing `proposePullRequest` asks the forge, and only it asks.
+    await run({
+      name: "add",
+      branch: "feat/login",
+      from: undefined,
+      fetch: true,
+      push: false,
+      setup: false,
+      trust: false,
+      take: false,
+    });
+
+    const bin = await gitOnlyPath(temp.root);
+    const path = process.env.PATH;
+    process.env.PATH = bin;
+
+    try {
+      const error = groveFailure(
+        await attempt({
+          name: "propose",
+          target: "feat/login",
+          draft: false,
+          web: false,
+          stack: false,
+        }),
+      );
+
+      expect(error.code).toBe("gh");
+      expect(error.hint).toContain("grove propose");
+    } finally {
+      process.env.PATH = path;
+    }
+  },
+
+  stack: async ({ run }) => {
+    await run({
+      name: "add",
+      branch: "feat/login",
+      from: undefined,
+      fetch: true,
+      push: false,
+      setup: false,
+      trust: false,
+      take: false,
+    });
+
+    const log = await run({ name: "stack", target: "feat/login", all: false });
+
+    // The picture, which only `formatStack` draws: the trunk, and the branch
+    // under it with its one commit over the trunk.
+    expect(log.out).toEqual(["main\n└─ feat/login  feat/login  ↑1 ↓0\n"]);
+  },
+
   path: async ({ root, run }) => {
     const log = await run({ name: "path", target: undefined });
 

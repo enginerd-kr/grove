@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { render } from "ink-testing-library";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
-import type { PullRequest } from "../../core/commands/pr.ts";
+import type { BranchPullRequest, PullRequest } from "../../core/commands/pr.ts";
 import type { RebaseBase, RebaseChoice } from "../../core/commands/rebase.ts";
 import { GroveError } from "../../core/errors.ts";
 import type { Commit } from "../../core/history.ts";
@@ -87,6 +87,19 @@ const TRUNK_ONLY: readonly RebaseChoice[] = [
   { base: { kind: "trunk" }, ref: "origin/main", label: "trunk" },
 ];
 
+/** What the forge says about a branch, for the `pr` column. */
+function badge(head: string, overrides: Partial<BranchPullRequest> = {}): BranchPullRequest {
+  return {
+    number: 42,
+    url: "https://forge/pull/42",
+    head,
+    base: "main",
+    isDraft: false,
+    conflicts: false,
+    ...overrides,
+  };
+}
+
 function pullRequest(number: number, overrides: Partial<PullRequest> = {}): PullRequest {
   return {
     number,
@@ -165,6 +178,9 @@ function stub(overrides: Partial<WorktreeService> = {}): {
         calls.logged.push(path);
         return [];
       },
+      // The trunk alone by default: no row in `ROWS` is stacked, so this is
+      // never asked; the test about the panel hands over rows of its own.
+      stack: async () => ({ trunk: "main", rows: [] }),
       copyPath: async (path) => {
         calls.copied.push(path);
         return `copied ${path}`;
@@ -200,6 +216,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       // Nothing open by default: the popup is the thing being tested when it is
       // being tested, and everywhere else `p` should be a message line.
       pullRequests: async () => [],
+      // Nothing from the forge by default, so the `pr` column is absent from
+      // every frame the other tests read; the tests about the column hand
+      // over an answer of their own.
+      branchPullRequests: async () => [],
       checkoutPr: async (number) => {
         calls.checkedOut.push(number);
         return `added pr/${number} — Change number ${number}`;
@@ -2226,5 +2246,164 @@ describe("proposing a pull request", () => {
     expect(frame).toContain("cli.github.com");
     expect(IN_LIST(frame)).toBe(true);
     expect(calls.proposed).toEqual([]);
+  });
+});
+
+/**
+ * The `pr` column: the forge's word on each row, read beside the list and
+ * never waited for.
+ *
+ * The rows are on screen before the forge answers, and they stay on screen
+ * when it refuses — a background read reports nothing — so what is checked
+ * is that the column appears once there is something to draw, says the right
+ * words for the right row, and is simply absent otherwise.
+ */
+describe("the pr column", () => {
+  test("appears once the forge has answered, with the number, the checks and the review", async () => {
+    const { service } = stub({
+      branchPullRequests: async () => [
+        badge("feat/login", { checks: "passing", review: "approved" }),
+        badge("feat/search", { number: 43, checks: "failing", isDraft: true }),
+      ],
+    });
+    const ui = await opened_with(service);
+
+    const frame = await settled(ui, (each) => each.includes("#42 ✓ approved"));
+
+    expect(frame).toContain("#43 ✗ draft");
+    // The heading, between the trunk's column and the state.
+    expect(frame).toMatch(/main\s+pr\s+state/);
+    // The row keeps its other columns: the badge is one more, not a replacement.
+    expect(frame).toMatch(/login\s+↑2 ↓0\s+↑5 ↓3\s+#42 ✓ approved/);
+  });
+
+  test("a review worktree is matched by its number, since its branch is grove's own name", async () => {
+    const { service } = stub({
+      list: async () => [...ROWS, summary({ dir: "pr/7", upstream: undefined })],
+      branchPullRequests: async () => [
+        badge("fix/crash", { number: 7, checks: "pending", conflicts: true }),
+      ],
+    });
+    const ui = await opened_with(service);
+
+    const frame = await settled(ui, (each) => each.includes("#7 · conflicts"));
+
+    expect(frame).toMatch(/pr\/\s*\n?.*7.*#7 · conflicts/s);
+  });
+
+  test("a forge that refuses leaves the list as it was, with no column and no red line", async () => {
+    let asked = 0;
+    const { service } = stub({
+      branchPullRequests: async () => {
+        asked += 1;
+        throw new GroveError("gh", "this needs `gh`, which is not installed");
+      },
+    });
+    const ui = await opened_with(service);
+
+    // The read happens on the open, beside the fetch; wait for it to have
+    // been made and refused, then look at what the screen did about it.
+    await waitFor(
+      () => String(asked),
+      (count) => count === "1",
+      { timeoutMs: WAIT },
+    );
+    await nextFrame();
+
+    const frame = plain(ui.lastFrame());
+    expect(frame).not.toContain("not installed");
+    expect(frame).not.toMatch(/\bpr\s+state/);
+    expect(IN_LIST(frame)).toBe(true);
+  });
+});
+
+/**
+ * The stack panel: `grove stack`'s picture beside the list, for a row that is
+ * in a stack, in the space the files panel would otherwise take.
+ */
+describe("the stack panel", () => {
+  const STACKED: readonly WorktreeSummary[] = [
+    summary({ dir: "main", isDefault: true, current: true }),
+    summary({ dir: "feat/login" }),
+    summary({ dir: "feat/login-api", parent: "feat/login" }),
+  ];
+
+  const PICTURE = {
+    trunk: "main",
+    rows: [
+      { branch: "main", depth: 0, dir: "main", exists: true, current: true },
+      {
+        branch: "feat/login",
+        parent: "main",
+        depth: 1,
+        dir: "feat/login",
+        ahead: 2,
+        behind: 0,
+        exists: true,
+        current: false,
+      },
+      {
+        branch: "feat/login-api",
+        parent: "feat/login",
+        depth: 2,
+        dir: "feat/login-api",
+        ahead: 1,
+        behind: 1,
+        exists: true,
+        current: false,
+      },
+    ],
+  };
+
+  test("appears beside a stacked row, with the drift against each parent, and not beside the rest", async () => {
+    const asked: string[] = [];
+    const { service } = stub({
+      list: async () => [...STACKED],
+      stack: async (target) => {
+        asked.push(target);
+        return PICTURE;
+      },
+    });
+    const ui = await opened_with(service, { columns: 120 });
+
+    // The cursor opens on `main`, which is in no stack: nothing is asked.
+    expect(plain(ui.lastFrame())).not.toContain("stack under");
+
+    // Down onto `login`, the bottom of the stack: the panel draws the whole
+    // of it, the guides and the drift each branch has against its parent.
+    await press(ui, "j");
+    await press(ui, "j");
+    const frame = await settled(ui, (each) => each.includes("stack under main"));
+
+    expect(asked).toEqual(["/repo/feat/login"]);
+    expect(frame).toMatch(/└─ feat\/login\s+↑2 ↓0/);
+    expect(frame).toMatch(/└─ feat\/login-api\s+↑1 ↓1/);
+
+    // And the child is drawn one step in under it in the list itself.
+    expect(frame).toMatch(/▸\s+login\b[^\n]*\n\s{8}login-api/);
+  });
+
+  test("the files win the space when the row is dirty as well", async () => {
+    const { service } = stub({
+      list: async () => [
+        ...STACKED.slice(0, 2),
+        summary({
+          dir: "feat/login-api",
+          parent: "feat/login",
+          dirty: true,
+          changed: 1,
+          files: ["api.ts"],
+        }),
+      ],
+      stack: async () => PICTURE,
+    });
+    const ui = await opened_with(service, { columns: 120 });
+
+    await press(ui, "j");
+    await press(ui, "j");
+    await press(ui, "j");
+    const frame = await settled(ui, (each) => each.includes("uncommitted in feat/login-api"));
+
+    expect(frame).not.toContain("stack under");
   });
 });

@@ -74,6 +74,14 @@ export type GroveCommand =
       readonly body?: string;
       /** `--web`: push, then write the pull request in the browser. */
       readonly web: boolean;
+      /** `--stack`: the branches it sits on first, then it — one pull request each. */
+      readonly stack: boolean;
+    }
+  | {
+      readonly name: "stack";
+      /** Absent, and without `--all`, means the worktree the shell is standing in. */
+      readonly target?: string;
+      readonly all: boolean;
     }
   | { readonly name: "list" }
   | { readonly name: "doctor" }
@@ -285,6 +293,19 @@ function buildCommand(
         return usageError(spec, "--body goes with --title; pass both, or neither");
       }
 
+      // `--stack` opens one pull request per branch, and each of these is
+      // about one: a base for all of them is wrong for all but one, a title
+      // for all of them is the same title on three pull requests, and `--web`
+      // is three browser tabs. Refused rather than applied to the last one.
+      const stack = bool(values, "stack");
+      const single = ["base", "title", "body", "web"].filter((flag) => values[flag] !== undefined);
+      if (stack && single.length > 0) {
+        return usageError(
+          spec,
+          `--stack opens a pull request per branch; ${single.map((flag) => `--${flag}`).join(", ")} is for one`,
+        );
+      }
+
       return {
         name: "propose",
         target: first,
@@ -293,8 +314,11 @@ function buildCommand(
         title: str(values, "title"),
         body,
         web: bool(values, "web"),
+        stack,
       };
     }
+    case "stack":
+      return { name: "stack", target: first, all: bool(values, "all") };
     case "list":
       return { name: "list" };
     case "doctor":

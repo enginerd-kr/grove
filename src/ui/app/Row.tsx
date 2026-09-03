@@ -9,6 +9,11 @@ import {
   STALE_SETUP,
   type WorktreeSummary,
 } from "../../core/commands/list.ts";
+import {
+  type BadgeTone,
+  type BranchPullRequest,
+  pullRequestParts,
+} from "../../core/commands/pr.ts";
 import { theme } from "../theme.ts";
 import { clip } from "./Files.tsx";
 import { GAP, type Widths } from "./layout.ts";
@@ -69,6 +74,65 @@ function DriftCell({
   );
 }
 
+/** What each of the forge's words is coloured; `plain` takes the row's own colour. */
+const TONES: Record<BadgeTone, string | undefined> = {
+  plain: undefined,
+  ok: theme.ok,
+  warn: theme.warn,
+  danger: theme.danger,
+  dim: undefined,
+};
+
+/**
+ * The `pr` column: the forge's word on the row's pull request.
+ *
+ * Coloured the way the state column colours its words, and for the same
+ * reasons. A green `✓` is news of the kind a green `↑` is; a red `✗` is the
+ * one thing on the screen that says a check failed, and it is the only red
+ * the list draws. `approved` is an invitation, like `merged`; `changes
+ * requested` and `conflicts` are things to do, and take the amber a `↓`
+ * takes. The number itself is dimmed like an aside, since it is how the row
+ * is recognised and not what it says.
+ *
+ * Shape as well as colour, the state column's own rule: the three check
+ * glyphs differ in shape, so the column reads on a terminal whose theme has
+ * opinions about green.
+ */
+function PullRequestCell({
+  pr,
+  width,
+  selected,
+}: {
+  readonly pr: BranchPullRequest | undefined;
+  readonly width: number;
+  readonly selected: boolean;
+}) {
+  if (pr === undefined) return <Text>{" ".repeat(width)}</Text>;
+
+  const parts = pullRequestParts(pr);
+  const text = parts.map((part) => part.text).join(" ");
+
+  // One padded run when it does not fit, for `StateCell`'s reason.
+  if (text.length > width) return <Text dimColor={!selected}>{padTo(text, width)}</Text>;
+
+  return (
+    <>
+      {parts.map((part, at) => (
+        <Fragment key={part.text}>
+          {at === 0 ? null : " "}
+          <Text
+            color={TONES[part.tone]}
+            dimColor={part.tone === "dim" || (part.tone === "plain" && !selected)}
+          >
+            {part.text}
+          </Text>
+        </Fragment>
+      ))}
+      <Text>{" ".repeat(width - text.length)}</Text>
+    </>
+  );
+}
+
 /**
  * The working tree as one glyph, and only the unusual states as words.
  *
@@ -86,12 +150,15 @@ function StateCell({
   summary,
   width,
   selected,
+  underParent,
 }: {
   readonly summary: WorktreeSummary;
   readonly width: number;
   readonly selected: boolean;
+  /** Drawn under the branch it sits on, so the column need not name it. */
+  readonly underParent: boolean;
 }) {
-  const parts = noteParts(summary);
+  const parts = noteParts(summary, { parent: !underParent });
   const notes = parts.length === 0 ? "" : ` ${parts.join(", ")}`;
   const room = Math.max(0, width - 1);
 
@@ -207,7 +274,18 @@ export function Row({
           {GAP}
         </>
       ) : null}
-      <StateCell summary={row.summary} width={widths.state} selected={selected} />
+      {widths.pr > 0 ? (
+        <>
+          <PullRequestCell pr={row.summary.pullRequest} width={widths.pr} selected={selected} />
+          {GAP}
+        </>
+      ) : null}
+      <StateCell
+        summary={row.summary}
+        width={widths.state}
+        selected={selected}
+        underParent={row.underParent}
+      />
       {/* Right beside the state, without a heading of its own: "when was I
           last here" is an aside about the row, not a column the eye scans
           down — and the state column is content-sized so this sits next to

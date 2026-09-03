@@ -53,10 +53,18 @@ the worktree you ran `grove` from. `▸` is the cursor.
 | --- | --- |
 | remote | commits ahead / behind the branch's upstream |
 | main | commits ahead / behind the trunk |
+| pr | the branch's open pull request, as GitHub sees it: the number, `✓` `✗` `·` for checks passed, failed, or still running, then `draft`, `approved`, `changes requested`, `conflicts` as they apply. Read through `gh` once a minute; without `gh`, or outside GitHub, the column is not drawn |
 | state | `●` has uncommitted changes, `○` clean, then the age of the last commit. `merged` and `gone` mean the branch is finished with; `setup stale` means `.grove.toml` changed since the worktree was filled in |
 
+A row indented under another worktree, rather than under a folder, sits on
+it: `grove add --on` stacked it there. The state column says `on <branch>`
+instead when the parent is in another folder.
+
 Below the list: files changed in the selected worktree, and (with `/log`) its
-recent commits. The bottom bar shows the keys available right now.
+recent commits. Beside the list, when the selected row is in a stack: the
+whole stack, each branch under the one it sits on with how far it has drifted
+from it — the same picture `grove stack` prints. The bottom bar shows the keys
+available right now.
 
 The screen refreshes periodically. `/refresh` forces one.
 
@@ -320,6 +328,7 @@ grove sync [target | --all]       # s, /sync-all
 grove rebase [target]             # /rebase
 grove pr <number | url | branch>  # /review
 grove propose [target]            # /propose
+grove stack [target | --all]      # the panel beside a stacked row
 grove reset <target>              # x
 grove remove <target>             # r
 grove prune                       # /prune
@@ -410,6 +419,7 @@ Uncommitted changes are warned about and left alone.
 | flag | |
 | --- | --- |
 | `--base <branch>` | open it onto `<branch>` |
+| `--stack` | the branches it sits on first, bottom-up, then it — one pull request each, onto the branch below |
 | `--draft` | open it as a draft |
 | `--title <text>` | the title; without it, and `--body`, both are filled in from the commits |
 | `--body <text>` | the body, beside `--title` |
@@ -418,6 +428,34 @@ Uncommitted changes are warned about and left alone.
 A branch that already has an open pull request is reported with its number
 and base, and nothing is pushed. If that base is not the one the stack says,
 the `gh pr edit` that moves it is printed. Needs `gh`; exits `10` without it.
+
+`--stack` is `propose` run over the chain: the bottom branch onto the trunk,
+each one above onto the one below, and the target last. A pull request
+already open is reported and left alone, so a half-proposed stack is
+finished. `--base`, `--title`, `--body` and `--web` are each about one pull
+request and are refused beside it; `--draft` applies to every one. The
+branches above the target are left alone — a pull request is opened when
+its author says the work is ready.
+
+### stack
+
+Draws the stack a worktree's branch is in: the trunk at the top, each branch
+under the one it sits on, and beside each its worktree and how far it has
+drifted from its base — `↑` commits it adds, `↓` commits it has fallen behind
+by, which is the number `sync` would close. `*` marks where you are.
+
+```text
+main
+├─ feat/login *       feat/login      ↑2 ↓0
+│  └─ feat/login-api  feat/login-api  ↑1 ↓1
+└─ fix/crash          no worktree     ↑1 ↓0
+```
+
+A branch in the stack without a worktree says so; `grove add <branch>` gives
+it one. A branch the records name and the repository has lost reads `gone`.
+`--all` draws every stack in the repository; an unstacked branch is drawn
+alone under the trunk. Reads git only — whether a branch has a pull request
+is the forge's word, and the screen's `pr` column is where that is drawn.
 
 ### remove / prune
 
@@ -497,7 +535,8 @@ success is never to be inferred from what was printed on stderr.
 | `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `setup` |
 | `add`'s `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
 | `list` | one row per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale` |
-| `propose` | `url`, `number`, `base`, `created` (false when one already existed), `pushed` |
+| `propose` | `url`, `number`, `base`, `created` (false when one already existed), `pushed`; with `--stack`, an array of these, bottom-up |
+| `stack` | `trunk`, and `rows[]` top to bottom, each with `branch`, `parent`, `depth`, `dir` (absent without a worktree), `ahead`/`behind` against the parent, `exists`, `current` |
 | `reset` | `saved`: the snapshot's sha, for `git stash apply` |
 | `sync` | exit `4` with nothing pushed means the branch is on no remote yet |
 | `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when it stays |

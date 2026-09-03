@@ -17,6 +17,7 @@ import {
   type ProposeResult,
   proposalFor,
   proposePullRequest,
+  proposeStack,
 } from "./propose.ts";
 
 /**
@@ -47,7 +48,14 @@ async function branch(forge: Forge, name: string, on?: string): Promise<string> 
   return result.path;
 }
 
-/** Commits `text` to `file` in `worktree`, so the branch has something of its own. */
+/**
+ * Commits `text` to `file` in `worktree`, so the branch has something of its own.
+ *
+ * The fixture's origin already has `feat/login` with `login.txt` reading
+ * `login`, so a test that writes that same line there has changed nothing and
+ * git refuses the commit: what goes on `feat/login` here has to differ from
+ * what the fixture put there.
+ */
 async function commit(worktree: string, file: string, text: string): Promise<void> {
   await Bun.write(join(worktree, file), text);
   await seedGit(worktree, ["add", "-A"]);
@@ -86,7 +94,7 @@ describe.skipIf(!POSIX)("where the pull request goes", () => {
       await forge.answerTo("pr create", CREATED);
 
       const login = await branch(forge, "feat/login");
-      await commit(login, "login.txt", "login\n");
+      await commit(login, "login.txt", "login, again\n");
       const api = await branch(forge, "feat/login-api", "feat/login");
       await commit(api, "api.txt", "api\n");
 
@@ -139,7 +147,7 @@ describe.skipIf(!POSIX)("where the pull request goes", () => {
       await forge.answerTo("pr create", CREATED);
 
       const login = await branch(forge, "feat/login");
-      await commit(login, "login.txt", "login\n");
+      await commit(login, "login.txt", "login, again\n");
       const api = await branch(forge, "feat/login-api", "feat/login");
       await commit(api, "api.txt", "api\n");
 
@@ -193,6 +201,125 @@ describe.skipIf(!POSIX)("where the pull request goes", () => {
       expect(await onOrigin(forge, "spike")).toBe(await headOf(spike));
       expect((await forge.asked()).at(-1)).toBe("pr create --base main --web");
       expect(outcome.log.err.join("")).toContain("✓ browser opened for spike onto main");
+    });
+  }, 90_000);
+});
+
+describe.skipIf(!POSIX)("--stack", () => {
+  test("proposes the branches under the target first, each onto the one below it", async () => {
+    await withForge(async (forge) => {
+      await forge.answerTo("pr list", "[]");
+      await forge.answerTo("pr create", CREATED);
+
+      const login = await branch(forge, "feat/login");
+      await commit(login, "login.txt", "login, again\n");
+      const api = await branch(forge, "feat/login-api", "feat/login");
+      await commit(api, "api.txt", "api\n");
+      const ui = await branch(forge, "feat/login-ui", "feat/login-api");
+      await commit(ui, "ui.txt", "ui\n");
+
+      const outcome = await attempt((reporter) =>
+        proposeStack(
+          forge.repo,
+          forge.repo.root,
+          { target: "feat/login-ui", draft: true, web: false, stack: true },
+          reporter,
+        ),
+      );
+      const results = succeeded(outcome);
+
+      // Bottom-up, and one result per branch in the order they were opened.
+      // `feat/login` is the fixture's own branch and already tracks origin, so
+      // its commit is pushed; the two cut here are published on the way.
+      expect(results.map((result) => [result.branch, result.base, result.pushed])).toEqual([
+        ["feat/login", "main", "pushed"],
+        ["feat/login-api", "feat/login", "published"],
+        ["feat/login-ui", "feat/login-api", "published"],
+      ]);
+      // Every push is real.
+      for (const [name, path] of [
+        ["feat/login", login],
+        ["feat/login-api", api],
+        ["feat/login-ui", ui],
+      ] as const) {
+        expect(await onOrigin(forge, name)).toBe(await headOf(path));
+      }
+
+      // The forge was asked about each in turn: does one exist, then open it
+      // onto the branch below — `--draft` reaching every one of them.
+      expect((await forge.asked()).filter((call) => call.startsWith("pr create"))).toEqual([
+        "pr create --base main --draft --fill",
+        "pr create --base feat/login --draft --fill",
+        "pr create --base feat/login-api --draft --fill",
+      ]);
+      expect(outcome.log.err.join("")).toContain(
+        "proposing 3 pull requests: feat/login → feat/login-api → feat/login-ui",
+      );
+    });
+  }, 90_000);
+
+  test("a pull request already open in the chain is reported and the rest are still opened", async () => {
+    await withForge(async (forge) => {
+      await forge.answerTo("pr create", CREATED);
+
+      const login = await branch(forge, "feat/login");
+      await commit(login, "login.txt", "login, again\n");
+      const api = await branch(forge, "feat/login-api", "feat/login");
+      await commit(api, "api.txt", "api\n");
+
+      // The forge answers the existence question the same way for every
+      // branch, so both read as already proposed onto main; what matters is
+      // that neither is refused and the second is still reached.
+      await forge.answerTo(
+        "pr list",
+        JSON.stringify([
+          { number: 9, url: "https://github.example/acme/widget/pull/9", baseRefName: "main" },
+        ]),
+      );
+
+      const results = succeeded(
+        await attempt((reporter) =>
+          proposeStack(
+            forge.repo,
+            forge.repo.root,
+            { target: "feat/login-api", draft: false, web: false, stack: true },
+            reporter,
+          ),
+        ),
+      );
+
+      expect(results.map((result) => [result.branch, result.created, result.number])).toEqual([
+        ["feat/login", false, 9],
+        ["feat/login-api", false, 9],
+      ]);
+      expect((await forge.asked()).some((call) => call.startsWith("pr create"))).toBe(false);
+    });
+  }, 90_000);
+
+  test("a branch in the chain with no worktree is refused before anything is pushed", async () => {
+    await withForge(async (forge) => {
+      await forge.answerTo("pr list", "[]");
+
+      const login = await branch(forge, "feat/login");
+      await commit(login, "login.txt", "login, again\n");
+      const api = await branch(forge, "feat/login-api", "feat/login");
+      await commit(api, "api.txt", "api\n");
+      await seedGit(forge.repo.root, ["worktree", "remove", login]);
+
+      const error = refused(
+        await attempt((reporter) =>
+          proposeStack(
+            forge.repo,
+            forge.repo.root,
+            { target: "feat/login-api", draft: false, web: false, stack: true },
+            reporter,
+          ),
+        ),
+      );
+
+      expect(error.message).toBe("feat/login is in the stack and has no worktree here");
+      expect(error.hint).toContain("grove add feat/login");
+      expect(await onOrigin(forge, "feat/login-api")).toBeUndefined();
     });
   }, 90_000);
 });
@@ -273,7 +400,7 @@ describe.skipIf(!POSIX)("a pull request that already exists", () => {
   test("is reported rather than opened twice, and a base the stack disagrees with is said", async () => {
     await withForge(async (forge) => {
       const login = await branch(forge, "feat/login");
-      await commit(login, "login.txt", "login\n");
+      await commit(login, "login.txt", "login, again\n");
       const api = await branch(forge, "feat/login-api", "feat/login");
       await commit(api, "api.txt", "api\n");
 
@@ -315,7 +442,7 @@ describe.skipIf(!POSIX)("a pull request that already exists", () => {
       await forge.answerTo("pr list", "[]");
 
       const login = await branch(forge, "feat/login");
-      await commit(login, "login.txt", "login\n");
+      await commit(login, "login.txt", "login, again\n");
       await branch(forge, "feat/login-api", "feat/login");
 
       const proposal = await proposalFor(forge.repo, forge.repo.root, {

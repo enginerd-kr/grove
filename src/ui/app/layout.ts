@@ -4,6 +4,7 @@ import {
   describeTouched,
   describeTrunk,
 } from "../../core/commands/list.ts";
+import { describePullRequest } from "../../core/commands/pr.ts";
 import type { Line } from "../../report/lines.ts";
 import { type Hint, statusBarRows } from "../components/StatusBar.tsx";
 import { bannerRows } from "./Banner.tsx";
@@ -114,6 +115,8 @@ export type Widths = {
   readonly tree: number;
   readonly remote: number;
   readonly trunk: number;
+  /** Zero when no row has a pull request, which is when the column is not drawn. */
+  readonly pr: number;
   readonly touched: number;
   readonly state: number;
   readonly slack: number;
@@ -488,7 +491,7 @@ export function columnWidths(
   );
   // The heading is content too: a column sized only to its rows truncates its
   // own label the moment the rows are shorter than it (`↑0 ↓0` under `remo…`).
-  const LABELS = { remote: 6, state: 5 };
+  const LABELS = { remote: 6, pr: 2, state: 5 };
 
   const leaves = leavesOf(tree);
 
@@ -503,6 +506,19 @@ export function columnWidths(
     ...leaves.map((leaf) => describeTrunk(leaf.summary).length),
   );
 
+  // Only when some row has a pull request, and then wide enough for its own
+  // heading: the forge's column is absent from a repository the forge has
+  // nothing to say about, rather than a blank heading over blank cells.
+  const longestPr = Math.max(
+    0,
+    ...leaves.map((leaf) =>
+      leaf.summary.pullRequest === undefined
+        ? 0
+        : describePullRequest(leaf.summary.pullRequest).length,
+    ),
+  );
+  const prWidth = longestPr > 0 ? Math.max(LABELS.pr, longestPr) : 0;
+
   // Only when something has a time to show. No heading and no minimum,
   // because it trails the row rather than heading a column — its width is
   // just the longest thing it will say.
@@ -514,21 +530,22 @@ export function columnWidths(
   // The state column stopped being the row's flexible remainder when the
   // touched aside moved in behind it: sized to what it actually says — the
   // dot, plus the unusual states written out — the time sits beside the
-  // state rather than at the far edge of the screen.
+  // state rather than at the far edge of the screen. A row drawn under its
+  // parent leaves the parent out, the way the row itself does.
   const stateWidth = Math.max(
     LABELS.state,
     ...leaves.map((leaf) => {
-      const notes = describeNotes(leaf.summary);
+      const notes = describeNotes(leaf.summary, { parent: !leaf.underParent });
 
       return notes.length === 0 ? 1 : notes.length + 2;
     }),
   );
 
   // Dropped when what is left cannot hold the state column's own heading.
-  // `touched` goes first, then `trunk`: "is there anything uncommitted here"
-  // and "is there anything to push" are the two a narrow terminal should keep.
-  // The constant 4 is the marker prefix (`▸ * `); each column then costs its
-  // width plus one `GAP` in front of it.
+  // `touched` goes first, then `pr`, then `trunk`: "is there anything
+  // uncommitted here" and "is there anything to push" are the two a narrow
+  // terminal should keep. The constant 4 is the marker prefix (`▸ * `); each
+  // column then costs its width plus one `GAP` in front of it.
   const gaps = 4 + GAP.length;
   const spare = (...widths: number[]) =>
     columns - treeColumn - gaps - widths.reduce((a, b) => a + b + GAP.length, 0);
@@ -536,19 +553,28 @@ export function columnWidths(
 
   const remote = fits(remoteWidth) ? remoteWidth : 0;
   const trunk = remote > 0 && fits(remoteWidth, trunkWidth) ? trunkWidth : 0;
-  // The aside must leave the state column whole, not just its heading.
+  // The forge's column must leave the state column whole, not just its
+  // heading: `merged` on a row outranks the pull request that produced it.
+  const pr =
+    prWidth > 0 && trunk > 0 && spare(remoteWidth, trunkWidth, prWidth) >= stateWidth ? prWidth : 0;
+  // The aside goes after the forge's column, and only once that one has
+  // either fitted or was never there to fit.
   const touched =
-    touchedWidth > 0 && trunk > 0 && spare(remoteWidth, trunkWidth, touchedWidth) >= stateWidth
+    touchedWidth > 0 &&
+    trunk > 0 &&
+    pr === prWidth &&
+    spare(remoteWidth, trunkWidth, prWidth, touchedWidth) >= stateWidth
       ? touchedWidth
       : 0;
 
-  const taken = [remote, trunk, touched].filter((width) => width > 0);
+  const taken = [remote, trunk, pr, touched].filter((width) => width > 0);
   const state = Math.max(0, Math.min(stateWidth, spare(...taken)));
 
   return {
     tree: treeColumn,
     remote,
     trunk,
+    pr,
     touched,
     state,
     /**

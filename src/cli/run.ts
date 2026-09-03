@@ -17,7 +17,7 @@ import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/lis
 import { openWorktree } from "../core/commands/open.ts";
 import { worktreePath } from "../core/commands/path.ts";
 import { checkoutPullRequest } from "../core/commands/pr.ts";
-import { proposePullRequest } from "../core/commands/propose.ts";
+import { proposePullRequest, proposeStack } from "../core/commands/propose.ts";
 import { describePrune, formatPruneTable, pruneWorktrees } from "../core/commands/prune.ts";
 import {
   type RebaseBase,
@@ -29,6 +29,7 @@ import { removeWorktree } from "../core/commands/remove.ts";
 import { renameWorktree } from "../core/commands/rename.ts";
 import { resetWorktree } from "../core/commands/reset.ts";
 import { setUpWorktrees, failureFor as setupFailure } from "../core/commands/setup.ts";
+import { formatStack, stackOf } from "../core/commands/stack.ts";
 import { failureFor, syncWorktrees } from "../core/commands/sync.ts";
 import { followUpstream } from "../core/commands/upstream.ts";
 import { findRepoRoot } from "../core/discover.ts";
@@ -293,13 +294,47 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "propose": {
       const { name, ...options } = command;
       const repo = await findRepoRoot(cwd, global.repo);
+
+      // One line per pull request either way. `--stack` is a list because it
+      // is several, and a script reading `--json` gets an array there and an
+      // object here — the same split `setup --all` makes against `setup`.
+      const line = (result: { path: string; url?: string; base: string }) =>
+        `${display(cwd, result.path)}\t${result.url ?? result.base}`;
+
+      if (options.stack) {
+        const results = await proposeStack(repo, cwd, options, reporter);
+
+        report(results, () => reporter.out(results.map(line).join("\n")));
+        return;
+      }
+
       const result = await proposePullRequest(repo, cwd, options, reporter);
 
       // The URL is the result: it is what gets pasted into the next message,
       // and `--web` has none to give yet, so the base stands in for it there.
-      report(result, () =>
-        reporter.out(`${display(cwd, result.path)}\t${result.url ?? result.base}`),
-      );
+      report(result, () => reporter.out(line(result)));
+      return;
+    }
+
+    case "stack": {
+      const { name, ...options } = command;
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await stackOf(repo, cwd, options);
+
+      report(result, () => {
+        // The trunk alone is a picture of nothing. Said on stderr, the way
+        // `list` says `no worktrees`, and with the command that would change it.
+        if (result.rows.length === 1) {
+          reporter.info(
+            options.all
+              ? "nothing is stacked — `grove add <branch> --on <parent>` stacks one"
+              : `${result.trunk} is the trunk, which every stack sits on — --all draws them`,
+          );
+          return;
+        }
+
+        reporter.out(formatStack(result));
+      });
       return;
     }
 

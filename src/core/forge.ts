@@ -4,12 +4,13 @@ import { runTool } from "./git.ts";
 /**
  * `gh` — the one tool besides git that grove runs, and how its answers are read.
  *
- * Three commands reach for it, and each asks only what git cannot answer:
- * `pr` asks which repository a pull request's head lives in, `prune --closed`
- * asks whether a pull request was closed without merging, and `propose` asks
- * the forge to open one. Everything after the answer is git, run by us. Kept
- * in one file so that "gh is not installed" and "gh answered with something
- * that is not JSON" are one refusal each, wherever they arrive from.
+ * Three commands and one column reach for it, and each asks only what git
+ * cannot answer: `pr` asks which repository a pull request's head lives in,
+ * `prune --closed` asks whether a pull request was closed without merging,
+ * `propose` asks the forge to open one, and the screen's `pr` column asks
+ * whether each one is green. Everything after the answer is git, run by us.
+ * Kept in one file so that "gh is not installed" and "gh answered with
+ * something that is not JSON" are one refusal each, wherever they arrive from.
  */
 
 /** `gh pr view` — the first two words of the call, which is how the errors name it. */
@@ -30,7 +31,7 @@ export async function runGh(argv: readonly string[], cwd: string): Promise<strin
 
   if (result === null) {
     throw new GroveError("gh", "this needs `gh`, which is not installed", {
-      hint: "https://cli.github.com — only `grove pr`, `grove propose` and `grove prune --closed` use it",
+      hint: "https://cli.github.com — only `grove pr`, `grove propose`, `grove prune --closed` and the screen's pr column use it",
     });
   }
 

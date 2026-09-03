@@ -352,8 +352,10 @@ describe("createWorktreeService", () => {
         await Bun.write(join(dir, "README.md"), "changed\n");
         await Bun.write(join(dir, "scratch.txt"), "half-finished\n");
 
-        expect(await service.reset("feat/login")).toBe(
-          "discarded 1 change and 1 untracked file in feat/login",
+        // The way back is on the same line: `x` promised a copy was kept, and
+        // this is where it says which one.
+        expect(await service.reset("feat/login")).toMatch(
+          /^discarded 1 change and 1 untracked file in feat\/login — git stash apply [0-9a-f]{40} brings them back$/,
         );
         expect(await pathExists(join(dir, "scratch.txt"))).toBe(false);
         // The worktree itself stays — this is not a removal wearing another key.

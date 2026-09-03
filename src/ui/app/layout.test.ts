@@ -243,7 +243,7 @@ describe("columnWidths", () => {
   function kept(columns: number, now = NOW): readonly string[] {
     const widths = columnWidths(TREE, columns, "main", now);
 
-    return (["remote", "trunk", "touched", "state"] as const).filter(
+    return (["remote", "trunk", "pr", "touched", "state"] as const).filter(
       (column) => widths[column] > 0,
     );
   }
@@ -266,10 +266,73 @@ describe("columnWidths", () => {
     expect(previous).toEqual(["state"]);
   });
 
+  /** The same grove, with the forge's answer on one row. */
+  const BADGED = buildTree(
+    SUMMARIES.map((summary) =>
+      summary.dir === "feat/login"
+        ? {
+            ...summary,
+            pullRequest: {
+              number: 42,
+              url: "https://forge/pull/42",
+              head: "feat/login",
+              base: "main",
+              isDraft: false,
+              checks: "passing" as const,
+              review: "approved" as const,
+              conflicts: false,
+            },
+          }
+        : summary,
+    ),
+    new Set(),
+  );
+
+  test("the pr column is drawn only when some row has one, and goes after touched", () => {
+    // Nothing from the forge: no column, and no heading over blank cells.
+    expect(columnWidths(TREE, 200, "main", NOW).pr).toBe(0);
+
+    const wide = columnWidths(BADGED, 200, "main", NOW);
+    expect(wide.pr).toBe("#42 ✓ approved".length);
+
+    // The same walk as above, over the badged rows: `touched` goes first,
+    // then `pr`, then `trunk`, and never does a narrower terminal put a
+    // column back.
+    const keptOf = (columns: number) =>
+      (["remote", "trunk", "pr", "touched", "state"] as const).filter(
+        (column) => columnWidths(BADGED, columns, "main", NOW)[column] > 0,
+      );
+    let previous = keptOf(200);
+    expect(previous).toEqual(["remote", "trunk", "pr", "touched", "state"]);
+
+    for (let columns = 199; columns >= 20; columns -= 1) {
+      const here = keptOf(columns);
+
+      expect(`${columns}: ${here.join(",")}`).toBe(
+        `${columns}: ${here.filter((column) => previous.includes(column)).join(",")}`,
+      );
+      previous = here;
+    }
+
+    expect(previous).toEqual(["state"]);
+  });
+
+  test("a row drawn under its parent is sized without the `on` it no longer says", () => {
+    const stacked = buildTree([wt("feat/login"), wt("feat/login-api", { parent: "feat/login" })]);
+    const apart = buildTree([wt("feat/login"), wt("fix/api", { parent: "feat/login" })]);
+
+    // `on feat/login` is eleven characters and two of padding; the nested
+    // row says nothing, so the column is the heading's width.
+    expect(columnWidths(stacked, 200, "main", NOW).state).toBe(5);
+    expect(columnWidths(apart, 200, "main", NOW).state).toBe("on feat/login".length + 2);
+  });
+
   test("what is left over is never spent twice", () => {
     for (let columns = 20; columns <= 200; columns += 1) {
-      const widths = columnWidths(TREE, columns, "main", NOW);
-      const taken = [widths.remote, widths.trunk, widths.touched].filter((width) => width > 0);
+      const widths = columnWidths(BADGED, columns, "main", NOW);
+      const taken = [widths.remote, widths.trunk, widths.pr, widths.touched].filter(
+        (width) => width > 0,
+      );
       const drawn =
         4 +
         widths.tree +

@@ -57,13 +57,13 @@ grove clone creates a managed repository. grove add creates a branch worktree an
 
 - **Start a branch without losing your current one.** grove add feat/search creates a real worktree in a predictable path.
 - **Branch after you already started typing.** grove add feat/search --take moves your uncommitted changes into the new worktree and leaves the old one clean.
-- **Stack one change on another.** grove add feat/step-2 --on feat/step-1 remembers the base, sync rebases through it, and grove propose opens the pull request onto it.
+- **Stack one change on another.** grove add feat/step-2 --on feat/step-1 remembers the base, sync rebases through it, grove stack draws the whole chain, and grove propose --stack opens a pull request for every step onto the one below.
 - **Review a pull request in a real checkout.** grove pr 42 takes a number, a URL, or a branch name. Push from there, or sync, and the pull request updates.
 - **Contribute from a fork.** grove clone --upstream keeps your trunk following the original and sends your branches to your fork. Nothing to configure afterwards.
 - **Rebase onto a base you pick.** grove rebase lists the candidates, carries your uncommitted changes through, and undoes everything if it conflicts.
 - **Give every coding agent its own workspace.** agents/refactor, agents/tests, agents/ui-copy — no second clone.
 - **Stop rebuilding the same local setup.** .grove.toml copies .env, links dependency folders, sets the environment, runs the install, opens your editor.
-- **See the whole repository at once.** grove shows branches, dirty worktrees, sync drift, recent activity, and which worktrees were set up from an older .grove.toml.
+- **See the whole repository at once.** grove shows branches, dirty worktrees, sync drift, recent activity, each branch's pull request with its checks and review, and which worktrees were set up from an older .grove.toml.
 - **Discard without regret.** grove reset keeps what it throws away as a commit, and tells you the git stash apply that brings it back.
 - **Clear away what is finished.** grove prune removes the worktrees whose branch is gone or already merged, and can ask GitHub about pull requests closed without merging.
 

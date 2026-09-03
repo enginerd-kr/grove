@@ -53,10 +53,18 @@ grove는 기존 `git clone` 안에서도 동작합니다. 새 워크트리는 �
 | --- | --- |
 | remote | 브랜치가 추적하는 원격 브랜치 대비 앞선 / 뒤처진 커밋 수 |
 | main | 트렁크 대비 앞선 / 뒤처진 커밋 수 |
+| pr | 브랜치의 열린 풀 리퀘스트를 GitHub가 보는 대로: 번호, 체크가 통과/실패/진행 중이면 `✓` `✗` `·`, 그 뒤에 해당하는 대로 `draft`, `approved`, `changes requested`, `conflicts`. `gh`를 통해 1분마다 읽으며, `gh`가 없거나 GitHub 밖이면 이 열은 그려지지 않음 |
 | state | `●` 커밋하지 않은 변경 있음, `○` 깨끗함, 그 뒤에 마지막 커밋의 시점. `merged`와 `gone`은 브랜치가 끝났다는 뜻이고, `setup stale`은 워크트리를 채운 뒤 `.grove.toml`이 바뀌었다는 뜻 |
 
+폴더가 아니라 다른 워크트리 아래에 들여쓰기된 줄은 그 위에 올라앉은
+것입니다: `grove add --on`이 거기에 쌓았습니다. 부모가 다른 폴더에 있으면
+대신 state 열에 `on <branch>`라고 적힙니다.
+
 목록 아래에는 선택한 워크트리에서 변경된 파일과, (`/log`를 켜면) 최근 커밋이
-보입니다. 하단 바는 지금 쓸 수 있는 키를 보여 줍니다.
+보입니다. 선택한 줄이 스택에 속해 있으면 목록 옆에 스택 전체가 보입니다:
+각 브랜치가 올라앉은 브랜치 아래에, 그 브랜치 대비 얼마나 벌어졌는지와
+함께 — `grove stack`이 출력하는 것과 같은 그림입니다. 하단 바는 지금 쓸 수
+있는 키를 보여 줍니다.
 
 화면은 주기적으로 새로고침됩니다. `/refresh`는 즉시 새로고침합니다.
 
@@ -319,6 +327,7 @@ grove sync [target | --all]       # s, /sync-all
 grove rebase [target]             # /rebase
 grove pr <number | url | branch>  # /review
 grove propose [target]            # /propose
+grove stack [target | --all]      # 쌓인 줄 옆의 패널
 grove reset <target>              # x
 grove remove <target>             # r
 grove prune                       # /prune
@@ -409,6 +418,7 @@ fetch한 뒤:
 | 플래그 | |
 | --- | --- |
 | `--base <branch>` | `<branch>` 위로 열기 |
+| `--stack` | 올라앉은 브랜치들을 아래에서부터 먼저, 그다음 이 브랜치 — 각각 바로 아래 브랜치 위로 풀 리퀘스트 하나씩 |
 | `--draft` | 초안으로 열기 |
 | `--title <text>` | 제목; 이것과 `--body`가 없으면 둘 다 커밋에서 채움 |
 | `--body <text>` | 본문, `--title`과 함께 |
@@ -417,6 +427,34 @@ fetch한 뒤:
 이미 열린 풀 리퀘스트가 있는 브랜치는 번호와 베이스를 알려 주고 아무것도
 push하지 않습니다. 그 베이스가 스택이 말하는 것과 다르면, 옮기는 `gh pr edit`
 명령을 출력합니다. `gh`가 필요하며, 없으면 `10`으로 종료합니다.
+
+`--stack`은 체인을 따라 `propose`를 실행합니다: 맨 아래 브랜치는 트렁크 위로,
+그 위의 각 브랜치는 바로 아래 브랜치 위로, 대상 브랜치는 마지막에. 이미 열린
+풀 리퀘스트는 알려 주고 그대로 두므로, 절반만 올렸던 스택도 마저 올라갑니다.
+`--base`, `--title`, `--body`, `--web`은 각각 풀 리퀘스트 하나에 대한
+것이라 함께 쓰면 거부되고, `--draft`는 전부에 적용됩니다. 대상 위에 쌓인
+브랜치는 건드리지 않습니다 — 풀 리퀘스트는 작성자가 준비됐다고 할 때 여는
+것이니까요.
+
+### stack
+
+워크트리의 브랜치가 속한 스택을 그립니다: 맨 위에 트렁크, 각 브랜치는
+올라앉은 브랜치 아래에, 그 옆에 워크트리와 베이스 대비 얼마나 벌어졌는지 —
+`↑`는 더한 커밋, `↓`는 뒤처진 커밋으로, `sync`가 좁힐 숫자입니다. `*`는
+지금 있는 곳입니다.
+
+```text
+main
+├─ feat/login *       feat/login      ↑2 ↓0
+│  └─ feat/login-api  feat/login-api  ↑1 ↓1
+└─ fix/crash          no worktree     ↑1 ↓0
+```
+
+스택에 있지만 워크트리가 없는 브랜치는 그렇다고 적히며, `grove add
+<branch>`가 워크트리를 만들어 줍니다. 기록에는 있지만 저장소에서 사라진
+브랜치는 `gone`으로 읽힙니다. `--all`은 저장소의 모든 스택을 그리고, 쌓이지
+않은 브랜치는 트렁크 아래 혼자 그려집니다. git만 읽습니다 — 브랜치에 풀
+리퀘스트가 있는지는 forge의 몫이고, 화면의 `pr` 열이 그것을 보여 줍니다.
 
 ### remove / prune
 
@@ -496,7 +534,8 @@ grove exec -- sh -c 'echo $GROVE_BRANCH'
 | `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `setup` |
 | `add`의 `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
 | `list` | 워크트리마다 한 줄: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale` |
-| `propose` | `url`, `number`, `base`, `created` (이미 있었으면 false), `pushed` |
+| `propose` | `url`, `number`, `base`, `created` (이미 있었으면 false), `pushed`; `--stack`이면 이것들의 배열, 아래에서 위로 |
+| `stack` | `trunk`, 그리고 위에서 아래로 `rows[]`, 각각 `branch`, `parent`, `depth`, `dir` (워크트리가 없으면 없음), 부모 대비 `ahead`/`behind`, `exists`, `current` |
 | `reset` | `saved`: 스냅샷의 sha, `git stash apply`용 |
 | `sync` | 아무것도 push하지 않고 종료 코드 `4`이면 브랜치가 아직 어느 원격에도 없다는 뜻 |
 | `prune -n` | `entries[]`, 각각 `dir`, `reason`, 그리고 남는 경우 `skipped` |

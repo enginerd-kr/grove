@@ -29,11 +29,21 @@ function requiredArgs(spec: SubcommandSpec): readonly string[] {
     .map(() => "x");
 }
 
+/**
+ * The one flag that is refused on its own: `propose --body` wants a `--title`
+ * beside it, because gh wants both or neither. Written with its companion, so
+ * what is checked is that the parser knows the flag, not that it stands alone.
+ */
+const COMPANIONS: Readonly<Record<string, readonly string[]>> = {
+  "propose --body": ["--title", "value"],
+};
+
 /** A value the flag will accept, so a `run` command is what comes back. */
 function argvFor(spec: SubcommandSpec, flag: FlagSpec): readonly string[] {
   const written = flag.type === "string" ? [`--${flag.name}`, "value"] : [`--${flag.name}`];
+  const companion = COMPANIONS[`${spec.name} --${flag.name}`] ?? [];
 
-  return [spec.name, ...written, ...requiredArgs(spec)];
+  return [spec.name, ...written, ...companion, ...requiredArgs(spec)];
 }
 
 /**

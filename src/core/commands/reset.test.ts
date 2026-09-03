@@ -185,6 +185,9 @@ describe("grove reset", () => {
       expect(await Bun.file(join(worktree, "junk", "output.bin")).text()).toBe("junk\n");
 
       // A second discard replaces the branch's copy rather than piling up.
+      // Of something different: the snapshot is a commit, and the same tree
+      // in the same second is the same commit, which would prove nothing.
+      await Bun.write(join(worktree, "app.txt"), "edited again\n");
       const again = succeeded(await attemptReset(repo, "spike", { clean: true }));
       expect(again.saved).not.toBe(result.saved);
       expect(

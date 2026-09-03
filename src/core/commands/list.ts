@@ -13,6 +13,7 @@ import {
 import { contains, type RepoPaths } from "../layout.ts";
 import { readStack } from "../stack.ts";
 import { listWorktrees, statusOf, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
+import type { BranchPullRequest } from "./pr.ts";
 
 /** `grove list` — what is here, what state it is in, and where you are standing. */
 
@@ -170,6 +171,16 @@ export type WorktreeSummary = {
    * base, and this is the field that says so. See `core/stack.ts`.
    */
   readonly parent?: string;
+  /**
+   * The branch's open pull request, as the forge last described it.
+   *
+   * Never set by `list`: this command reads git and nothing else, so `grove
+   * list` is the same command with and without `gh`. The screen fills it in
+   * on its own clock — see `App`'s `readPullRequests` — and draws the `pr`
+   * column from it, which is why the field lives on the row the column is
+   * drawn from rather than beside it.
+   */
+  readonly pullRequest?: BranchPullRequest;
   /** True for the branch the repository treats as its trunk. */
   readonly isDefault: boolean;
   /** True for the worktree the command was run from. */
@@ -357,19 +368,30 @@ function describeState(summary: WorktreeSummary): string {
  * own column — leaving this with the three that are neither: a rebase stopped
  * part-way, a detached HEAD, and a lock. All three are unusual, and all three
  * are things you would rather read than decode.
+ *
+ * `parent` off leaves out the `on <branch>` the row would otherwise end with.
+ * The screen draws a stacked worktree indented under the branch it sits on
+ * when that branch is in the same folder, and a row already sitting under
+ * `feat/login` saying `on feat/login` would be saying it twice.
  */
-export function noteParts(summary: WorktreeSummary): readonly string[] {
+export function noteParts(
+  summary: WorktreeSummary,
+  { parent = true }: { readonly parent?: boolean } = {},
+): readonly string[] {
   const parts = stateParts(summary, false);
   if (summary.locked) parts.push("locked");
   // Last, because it is the only one of these that is not a warning: the other
   // three are things to deal with, and this is where the row sits.
-  if (summary.parent !== undefined) parts.push(`on ${summary.parent}`);
+  if (parent && summary.parent !== undefined) parts.push(`on ${summary.parent}`);
 
   return parts;
 }
 
-export function describeNotes(summary: WorktreeSummary): string {
-  return noteParts(summary).join(", ");
+export function describeNotes(
+  summary: WorktreeSummary,
+  options: { readonly parent?: boolean } = {},
+): string {
+  return noteParts(summary, options).join(", ");
 }
 
 /**

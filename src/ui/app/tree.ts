@@ -49,6 +49,14 @@ export type TreeRow =
       readonly label: string;
       readonly depth: number;
       readonly summary: WorktreeSummary;
+      /**
+       * True when the row is drawn one step in under the branch it is stacked
+       * on, rather than beside it.
+       *
+       * The row then says nothing about its parent in the state column: the
+       * row above it is the parent, and the indent is the sentence.
+       */
+      readonly underParent: boolean;
     };
 
 type Node = {
@@ -85,14 +93,6 @@ function insert(root: Node, summary: WorktreeSummary): void {
   node.leaves.push({ label, summary });
 }
 
-/**
- * Worktrees before folders at every level, and the default branch before its
- * siblings.
- *
- * Reading order, not alphabetical order: `main` is the row people look for, and
- * a folder is a heading — headings after the plain rows keeps the top of each
- * level scannable rather than making you step over `chore/` to reach it.
- */
 /** Every worktree beneath a node, at any depth, in no particular order. */
 function allLeaves(node: Node): readonly WorktreeSummary[] {
   return [
@@ -101,6 +101,72 @@ function allLeaves(node: Node): readonly WorktreeSummary[] {
   ];
 }
 
+type Leaf = Node["leaves"][number];
+
+/**
+ * A folder's worktrees, with each stacked one under the branch it sits on.
+ *
+ * A stack is drawn as the tree it is, but only inside one folder: `feat/login`
+ * and `feat/login-api` sit side by side in `feat/`, and the second is indented
+ * one step under the first. A branch stacked on one in another folder — or on
+ * one with no worktree here — stays where its directory puts it, and its state
+ * column says `on <branch>` as it always has. The folders are the shape the
+ * disk has, and a row moved out of its folder to sit under its parent would be
+ * drawn somewhere it is not.
+ *
+ * The order inside a folder is the one `emit` always had — the trunk, then
+ * alphabetical — applied to the roots, and again to each root's children. A
+ * loop in the records (two branches each recorded on the other, which
+ * `add --on` refuses but a config file can hold) leaves both without a root
+ * to hang from; the loop is broken at the first name and the rest drawn
+ * under it, so nothing is lost from the folder.
+ */
+function stacked(leaves: readonly Leaf[], depth: number, into: TreeRow[]): void {
+  const byName = (a: Leaf, b: Leaf) => {
+    if (a.summary.isDefault !== b.summary.isDefault) return a.summary.isDefault ? -1 : 1;
+
+    return a.label.localeCompare(b.label);
+  };
+
+  const here = new Set(
+    leaves.map((leaf) => leaf.summary.branch).filter((branch) => branch !== undefined),
+  );
+  const childrenOf = (branch: string | undefined) =>
+    leaves
+      .filter((leaf) => branch !== undefined && leaf.summary.parent === branch)
+      .toSorted(byName);
+
+  const drawn = new Set<Leaf>();
+  const push = (leaf: Leaf, at: number, underParent: boolean): void => {
+    if (drawn.has(leaf)) return;
+    drawn.add(leaf);
+    into.push({
+      kind: "leaf",
+      key: leaf.summary.path,
+      label: leaf.label,
+      depth: at,
+      summary: leaf.summary,
+      underParent,
+    });
+    for (const child of childrenOf(leaf.summary.branch)) push(child, at + 1, true);
+  };
+
+  const roots = leaves
+    .filter((leaf) => leaf.summary.parent === undefined || !here.has(leaf.summary.parent))
+    .toSorted(byName);
+  for (const root of roots) push(root, depth, false);
+  // What a loop left over, in the order it would have had without one.
+  for (const leaf of leaves.toSorted(byName)) push(leaf, depth, false);
+}
+
+/**
+ * Worktrees before folders at every level, and the default branch before its
+ * siblings.
+ *
+ * Reading order, not alphabetical order: `main` is the row people look for, and
+ * a folder is a heading — headings after the plain rows keeps the top of each
+ * level scannable rather than making you step over `chore/` to reach it.
+ */
 function emit(
   node: Node,
   depth: number,
@@ -108,21 +174,7 @@ function emit(
   collapsed: ReadonlySet<string>,
   into: TreeRow[],
 ): void {
-  const leaves = node.leaves.toSorted((a, b) => {
-    if (a.summary.isDefault !== b.summary.isDefault) return a.summary.isDefault ? -1 : 1;
-
-    return a.label.localeCompare(b.label);
-  });
-
-  for (const leaf of leaves) {
-    into.push({
-      kind: "leaf",
-      key: leaf.summary.path,
-      label: leaf.label,
-      depth,
-      summary: leaf.summary,
-    });
-  }
+  stacked(node.leaves, depth, into);
 
   for (const name of [...node.groups.keys()].toSorted((a, b) => a.localeCompare(b))) {
     const group = node.groups.get(name);

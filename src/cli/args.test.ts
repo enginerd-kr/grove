@@ -358,6 +358,7 @@ describe("propose", () => {
       title: undefined,
       body: undefined,
       web: false,
+      stack: false,
     });
     expect(
       run([
@@ -380,7 +381,26 @@ describe("propose", () => {
       title: "Add the API",
       body: "Sits on feat/login.",
       web: true,
+      stack: false,
     });
+  });
+
+  test("--stack is refused beside the flags that describe one pull request", () => {
+    expect(run(["propose", "--stack"]).command).toMatchObject({ stack: true, draft: false });
+    // `--draft` is about every one of them, so it is allowed through.
+    expect(run(["propose", "feat/x", "--stack", "--draft"]).command).toMatchObject({
+      target: "feat/x",
+      stack: true,
+      draft: true,
+    });
+
+    for (const single of [["--base", "main"], ["--title", "One"], ["--web"]]) {
+      const parsed = error(["propose", "--stack", ...single]);
+
+      expect(parsed.message).toContain("--stack opens a pull request per branch");
+      expect(parsed.message).toContain(single[0] ?? "");
+      expect(parsed.usage).toContain("Usage: grove propose");
+    }
   });
 
   test("a body with no title is refused: gh wants both or neither", () => {
@@ -442,5 +462,21 @@ describe("rebase's base", () => {
       expect(parsed.message).toContain("pass one");
       expect(parsed.usage).toContain("Usage: grove rebase");
     }
+  });
+});
+
+describe("stack", () => {
+  test("the target is optional, and --all is the other spelling", () => {
+    expect(run(["stack"]).command).toEqual({ name: "stack", target: undefined, all: false });
+    expect(run(["stack", "feat/login"]).command).toEqual({
+      name: "stack",
+      target: "feat/login",
+      all: false,
+    });
+    expect(run(["stack", "--all"]).command).toEqual({
+      name: "stack",
+      target: undefined,
+      all: true,
+    });
   });
 });
