@@ -17,6 +17,7 @@ import { formatWorktreeTable, listWorktreeSummaries } from "../core/commands/lis
 import { openWorktree } from "../core/commands/open.ts";
 import { worktreePath } from "../core/commands/path.ts";
 import { checkoutPullRequest } from "../core/commands/pr.ts";
+import { proposePullRequest } from "../core/commands/propose.ts";
 import { describePrune, formatPruneTable, pruneWorktrees } from "../core/commands/prune.ts";
 import {
   type RebaseBase,
@@ -33,6 +34,7 @@ import { followUpstream } from "../core/commands/upstream.ts";
 import { findRepoRoot } from "../core/discover.ts";
 import { GroveError } from "../core/errors.ts";
 import type { RepoPaths } from "../core/layout.ts";
+import { recoverLine } from "../core/snapshot.ts";
 import { plural } from "../core/text.ts";
 import {
   describeSetup,
@@ -254,9 +256,7 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       // Said out loud rather than left to be discovered: `--take` emptied a
       // directory somebody was working in, and the sha is what undoes that.
       if (result.took?.stash !== undefined) {
-        reporter.info(
-          `the changes are also saved as a commit: git stash apply ${result.took.stash}`,
-        );
+        reporter.info(`the changes are also saved as a commit: ${recoverLine(result.took.stash)}`);
       }
 
       report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.branch}`));
@@ -287,6 +287,19 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       }
 
       report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.branch}`));
+      return;
+    }
+
+    case "propose": {
+      const { name, ...options } = command;
+      const repo = await findRepoRoot(cwd, global.repo);
+      const result = await proposePullRequest(repo, cwd, options, reporter);
+
+      // The URL is the result: it is what gets pasted into the next message,
+      // and `--web` has none to give yet, so the base stands in for it there.
+      report(result, () =>
+        reporter.out(`${display(cwd, result.path)}\t${result.url ?? result.base}`),
+      );
       return;
     }
 

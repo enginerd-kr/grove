@@ -204,6 +204,15 @@ const GENERAL_TIPS: readonly Message[] = [
     text: "tip: a row reading merged or gone has nothing left in it — r clears one",
     hint: "or `grove prune` clears every one of them at once",
   },
+  {
+    kind: "info",
+    text: "tip: setup stale on a row means .grove.toml changed since it was filled in",
+    hint: "/ setup catches it up, or `grove setup --all` catches up every one",
+  },
+  {
+    kind: "info",
+    text: "tip: x keeps a copy of what it discards — the line under it says how to get it back",
+  },
 ];
 
 /** A new set with `key` flipped in or out — `Set` is mutable and state is not. */
@@ -506,6 +515,42 @@ export function App({
         () => void perform(`opening ${summary.dir}`, () => service.open(summary.path)),
       ),
     [askThen, perform, service],
+  );
+
+  /**
+   * `/propose`: find out where the pull request would go, then ask — or say
+   * which one already exists.
+   *
+   * `askThen`'s shape, and the base is why the question is worth putting up
+   * at all: a stacked branch goes onto its parent, and that is a fact to read
+   * before it reaches other people's screens. The probe asks the forge on the
+   * way, so a branch that already has a pull request is answered on the
+   * message line rather than proposed twice — `openPrs`'s rule for an empty
+   * list, applied to a full one.
+   */
+  const beginPropose = useCallback(
+    async (summary: WorktreeSummary) => {
+      busy(`checking ${summary.dir}`);
+
+      try {
+        const proposal = await service.pendingPropose(summary.path);
+        if (proposal.existing === undefined) {
+          return setMode({ kind: "confirm", target: { kind: "propose", summary, proposal } });
+        }
+
+        const { number, base, url } = proposal.existing;
+        setMessage({
+          kind: "info",
+          text: `pull request ${number} already proposes ${summary.dir} onto ${base}`,
+          hint: url,
+        });
+      } catch (error) {
+        setMessage(messageFor(error));
+      }
+
+      setMode({ kind: "list" });
+    },
+    [busy, service],
   );
 
   /**
@@ -817,6 +862,11 @@ export function App({
         case "rebase":
           if (!selected) return;
           return void beginRebase(selected);
+        // Row-aimed like the three above, and a `confirm` rather than a
+        // popup: the only thing to choose is whether to send it.
+        case "propose":
+          if (!selected) return;
+          return void beginPropose(selected);
         case "sync-all":
           return void beginSyncAll();
         case "prune":
@@ -833,7 +883,17 @@ export function App({
           return setLogOn((on) => !on);
       }
     },
-    [perform, beginOpen, beginRebase, beginSyncAll, beginPrune, openPrs, selected, service],
+    [
+      perform,
+      beginOpen,
+      beginRebase,
+      beginPropose,
+      beginSyncAll,
+      beginPrune,
+      openPrs,
+      selected,
+      service,
+    ],
   );
 
   useInput((input, key) => {

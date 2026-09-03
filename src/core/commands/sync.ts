@@ -537,7 +537,7 @@ async function publish(
 }
 
 /** Where a push goes, spelled out: the remote, the refspec, and the ref that mirrors it here. */
-type PushTarget = {
+export type PushTarget = {
   readonly remote: string;
   /** `<branch>:<ref on the remote>`, always explicit — see `pushTarget`. */
   readonly refspec: string;
@@ -598,7 +598,11 @@ function forceArgs(target: PushTarget, integrated: string | undefined): readonly
  * workflow — the destination is the branch's own name, which is what git's
  * `push.default=simple` does in exactly that arrangement.
  */
-async function pushTarget(path: string, branch: string, upstream: string): Promise<PushTarget> {
+export async function pushTarget(
+  path: string,
+  branch: string,
+  upstream: string,
+): Promise<PushTarget> {
   const remote = await publishRemote(path, branch);
   const [tracks, merge] = await Promise.all([
     runGit(["config", "--get", `branch.${branch}.remote`], { cwd: path }),

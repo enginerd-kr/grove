@@ -27,7 +27,7 @@ export const ExitCode = {
    * retry that rather than to conclude it has no worktree.
    */
   setupFailed: 9,
-  /** `gh` was missing or refused; only PR creation ever reports this. */
+  /** `gh` was missing or refused; only `pr`, `propose` and `prune --closed` report this. */
   gh: 10,
   /**
    * A command handed to `grove exec` exited non-zero in at least one worktree.

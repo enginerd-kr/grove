@@ -44,7 +44,7 @@ export type GroveErrorCode =
   | "git-failed"
   /** The remote was unreachable, refused us, or does not exist. */
   | "remote"
-  /** `gh` — needed only for PRs — was missing, or refused the PR. */
+  /** `gh` — needed only for pull requests — was missing, or refused. */
   | "gh";
 
 type GroveErrorOptions = {

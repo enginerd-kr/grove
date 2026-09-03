@@ -348,6 +348,54 @@ describe("mistyped flags", () => {
   });
 });
 
+describe("propose", () => {
+  test("the target is optional, and every flag lands where the command expects it", () => {
+    expect(run(["propose"]).command).toEqual({
+      name: "propose",
+      target: undefined,
+      base: undefined,
+      draft: false,
+      title: undefined,
+      body: undefined,
+      web: false,
+    });
+    expect(
+      run([
+        "propose",
+        "feat/login-api",
+        "--base",
+        "feat/login",
+        "--draft",
+        "--title",
+        "Add the API",
+        "--body",
+        "Sits on feat/login.",
+        "--web",
+      ]).command,
+    ).toEqual({
+      name: "propose",
+      target: "feat/login-api",
+      base: "feat/login",
+      draft: true,
+      title: "Add the API",
+      body: "Sits on feat/login.",
+      web: true,
+    });
+  });
+
+  test("a body with no title is refused: gh wants both or neither", () => {
+    const parsed = error(["propose", "--body", "words"]);
+
+    expect(parsed.message).toBe("--body goes with --title; pass both, or neither");
+    expect(parsed.usage).toContain("Usage: grove propose");
+    // A title alone is fine — the body is then empty, which gh accepts.
+    expect(run(["propose", "--title", "Words"]).command).toMatchObject({
+      title: "Words",
+      body: undefined,
+    });
+  });
+});
+
 describe("rebase's base", () => {
   test("each of the three flags lands as the base, and no flag is no base", () => {
     expect(

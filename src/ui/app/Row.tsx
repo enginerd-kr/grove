@@ -6,6 +6,7 @@ import {
   describeTouched,
   describeTrunk,
   noteParts,
+  STALE_SETUP,
   type WorktreeSummary,
 } from "../../core/commands/list.ts";
 import { theme } from "../theme.ts";
@@ -117,13 +118,18 @@ function StateCell({
       {parts.map((part, at) => (
         <Fragment key={part}>
           <Text dimColor={!selected}>{at === 0 ? " " : ", "}</Text>
-          {/* The one word in this column that is an invitation rather than a
-              warning: `merged` and `gone` both mean the work landed and the
-              directory is free to go, which is news of the same kind as a green
-              `↑`. Everything beside it stays the colour of an aside. */}
+          {/* Two words in this column are coloured, for opposite reasons.
+              `merged` and `gone` are an invitation: the work landed and the
+              directory is free to go, which is news of the same kind as a
+              green `↑`. `setup stale` is a thing to do — the project's file
+              moved on and this worktree did not — and it takes the amber a
+              `↓` takes, since both say something here is behind. Everything
+              beside them stays the colour of an aside. */}
           <Text
-            color={part === summary.finished ? theme.ok : undefined}
-            dimColor={part !== summary.finished && !selected}
+            color={
+              part === summary.finished ? theme.ok : part === STALE_SETUP ? theme.warn : undefined
+            }
+            dimColor={part !== summary.finished && part !== STALE_SETUP && !selected}
           >
             {part}
           </Text>

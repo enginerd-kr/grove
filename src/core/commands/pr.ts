@@ -2,7 +2,8 @@ import type { SetupResult } from "../../hooks/index.ts";
 import { type Reporter, withStep } from "../../report/reporter.ts";
 import { localBranchExists, REMOTE, trunkOf } from "../branches.ts";
 import { GroveError, stderrDetails } from "../errors.ts";
-import { gitOutput, runGit, runGitOrThrow, runTool } from "../git.ts";
+import { ghJson, record, text } from "../forge.ts";
+import { gitOutput, runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { listWorktrees, statusOf } from "../worktrees.ts";
 import { addWorktree } from "./add.ts";
@@ -20,7 +21,8 @@ import { addWorktree } from "./add.ts";
  * The division of labour is deliberate. `gh` answers only what git cannot —
  * which repository the head lives in, what the ref is called there, whether it
  * is a fork, what state the pull request is in — and every ref, remote and
- * branch after that is git, run by us. The worktree itself is not made here at
+ * branch after that is git, run by us. How `gh` is run and read is
+ * `core/forge.ts`, shared with the two other commands that ask it something. The worktree itself is not made here at
  * all: `pr/<n>` is created as a local branch and `addWorktree` takes it from
  * there, which is what buys the path rules, the collision and nesting
  * refusals, the setup run and the warn-rather-than-fail on a setup that broke.
@@ -144,69 +146,6 @@ export function prNumberOf(branch: string): number | undefined {
  */
 export function remoteFor(number: number): string {
   return `pr-${number}`;
-}
-
-/** `gh pr view` — the first two words of the call, which is how the errors name it. */
-function ghLabel(argv: readonly string[]): string {
-  return ["gh", ...argv.slice(0, 2)].join(" ");
-}
-
-/**
- * The one place a `gh` failure becomes a `GroveError`.
- *
- * `gh` missing is its own answer rather than a crash: everything else in grove
- * works without it, so the two features that need it get to say "install gh"
- * and point at where. Anything else is gh's own stderr, which is the useful
- * half — "no pull requests found", "not a GitHub repository".
- */
-async function runGh(argv: readonly string[], cwd: string): Promise<string> {
-  const result = await runTool(["gh", ...argv] as [string, ...string[]], { cwd });
-
-  if (result === null) {
-    throw new GroveError("gh", "this needs `gh`, which is not installed", {
-      hint: "https://cli.github.com — only `grove pr` and `grove prune --closed` use it",
-    });
-  }
-
-  if (result.code !== 0) {
-    throw new GroveError("gh", `${ghLabel(argv)} failed (exit ${result.code})`, {
-      details: stderrDetails(result.stderr),
-      hint: /GitHub host|default remote|not a git repository/i.test(result.stderr)
-        ? "gh could not tell which GitHub repository this is; try `gh repo set-default`"
-        : undefined,
-    });
-  }
-
-  return result.stdout;
-}
-
-/**
- * gh's stdout, parsed — the same reasoning as `runGh`, one step further out.
- *
- * What gh prints is as much somebody else's output as the exit code it prints
- * it with: a broken extension, a paginator, an auth notice on stdout. So an
- * answer we cannot read is gh disappointing us rather than a bug in this tool,
- * and it exits 10 with gh's own words instead of 1 with a `SyntaxError`.
- */
-async function ghJson(argv: readonly string[], cwd: string): Promise<unknown> {
-  const output = await runGh(argv, cwd);
-
-  try {
-    return JSON.parse(output);
-  } catch {
-    throw new GroveError("gh", `${ghLabel(argv)} answered with something that is not JSON`, {
-      details: stderrDetails(output),
-    });
-  }
-}
-
-/** gh's JSON, read defensively: a missing field is a shape we do not recognise. */
-function record(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function text(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }
 
 /**

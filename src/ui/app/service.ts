@@ -5,6 +5,11 @@ import { cloneRepo } from "../../core/commands/clone.ts";
 import { listWorktreeSummaries, type WorktreeSummary } from "../../core/commands/list.ts";
 import { openWorktree } from "../../core/commands/open.ts";
 import { checkoutPullRequest, listPullRequests, type PullRequest } from "../../core/commands/pr.ts";
+import {
+  type ExistingPullRequest,
+  proposalFor,
+  proposePullRequest,
+} from "../../core/commands/propose.ts";
 import { describePrune, type PruneResult, pruneWorktrees } from "../../core/commands/prune.ts";
 import {
   type RebaseBase,
@@ -25,6 +30,7 @@ import { existingUpstream, followUpstream } from "../../core/commands/upstream.t
 import { GroveError } from "../../core/errors.ts";
 import { type Commit, recentCommits } from "../../core/history.ts";
 import { deepestFirst, type RepoPaths, repoPaths } from "../../core/layout.ts";
+import { recoverLine } from "../../core/snapshot.ts";
 import { plural } from "../../core/text.ts";
 import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
 import {
@@ -41,7 +47,21 @@ import type { Reporter } from "../../report/reporter.ts";
  * Passed straight through, so the screen holds the answer without reaching past
  * this module for the shape of it — the same way it takes `WorktreeSummary`.
  */
-export type { PendingOpen, PruneResult };
+export type { ExistingPullRequest, PendingOpen, PruneResult };
+
+/**
+ * What `/propose` has to say before it asks: where the pull request goes, and
+ * whether the branch has to be published to get there — or the pull request
+ * that already exists, which turns the question into an answer.
+ */
+export type PendingPropose = {
+  readonly base: string;
+  /** Where a first push would send it, for the prompt that says so. */
+  readonly remote: string;
+  /** True when the branch is on no remote yet, so `y` is also its first push. */
+  readonly publish: boolean;
+  readonly existing?: ExistingPullRequest;
+};
 
 /**
  * What the screen is allowed to do: make a worktree, sync one, remove one, and
@@ -199,6 +219,22 @@ export type WorktreeService = {
    * one up, or found nothing to do at all.
    */
   readonly checkoutPr: (number: number) => Promise<string>;
+  /**
+   * What `/propose` would do to one worktree, read before the question.
+   *
+   * The base is the whole point of the prompt: a stacked branch goes onto its
+   * parent, and that is the fact worth reading before `y`. It asks the forge
+   * on the way, because a pull request that already exists is not a question
+   * — it is the answer, and the screen says so instead of asking.
+   */
+  readonly pendingPropose: (target: string) => Promise<PendingPropose>;
+  /**
+   * `grove propose <target>`: the branch pushed where `git push` sends it,
+   * and a pull request opened onto the base `pendingPropose` named, filled in
+   * from the commits. `--web`, `--draft` and a title of your own stay on the
+   * command line, where they have to be typed.
+   */
+  readonly propose: (target: string) => Promise<string>;
   /**
    * `target` omitted means every worktree — the app's `S`.
    *
@@ -478,8 +514,13 @@ export function createWorktreeService(
       if (result.changed === 0) return `${result.dir} had nothing to discard`;
 
       const tracked = result.changed - result.untracked;
+      // The way back, on the same line as what went: the sha is the whole of
+      // the undo, and the prompt promised a copy was kept — this is where it
+      // says which one.
+      const saved =
+        result.saved === undefined ? "" : ` — ${recoverLine(result.saved)} brings them back`;
 
-      return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}`;
+      return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}${saved}`;
     },
 
     setup: async (target) => {
@@ -547,6 +588,37 @@ export function createWorktreeService(
       }
 
       return `added pr/${number} — ${result.title}${suffix}`;
+    },
+
+    pendingPropose: async (target) => {
+      const proposal = await proposalFor(repo, cwd, { target });
+
+      return {
+        base: proposal.base,
+        remote: proposal.remote,
+        publish: proposal.status.upstream === undefined,
+        existing: proposal.existing,
+      };
+    },
+
+    propose: async (target) => {
+      // The command line's defaults: filled in from the commits, not a draft,
+      // no browser. The base is the stack's answer, which is the point.
+      const result = await proposePullRequest(
+        repo,
+        cwd,
+        { target, draft: false, web: false },
+        reporter,
+      );
+
+      if (!result.created) {
+        return `pull request ${result.number} already proposes ${result.branch} onto ${result.base} — ${result.url}`;
+      }
+
+      const number =
+        result.number === undefined ? "a pull request" : `pull request ${result.number}`;
+
+      return `opened ${number} for ${result.branch} onto ${result.base} — ${result.url ?? ""}`.trimEnd();
     },
 
     pendingCommands: () => pendingCommands(repo),

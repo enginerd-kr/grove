@@ -88,11 +88,12 @@ const BASE_ROWS = 8;
  * commands there are is ours. It is pinned to exactly how many there are, so
  * the menu is a list you read and never one you scroll — and adding a command
  * means raising this on purpose, having decided the list is still short enough
- * to be read whole. `rebase` made it eight and `upstream` nine, and nine is
- * where it stops: the next one is an argument for fewer commands rather than
- * a taller popup.
+ * to be read whole. `rebase` made it eight, `upstream` nine, and `propose` ten
+ * — the last one was argued in as the other half of `review`, which was
+ * already there, rather than as a tenth thing. Ten is where it stops: the next
+ * one is an argument for fewer commands rather than a taller popup.
  */
-const MENU_ROWS = 9;
+const MENU_ROWS = 10;
 
 /**
  * The rows the list keeps whatever else wants them.
@@ -235,6 +236,10 @@ const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
   upstream: [
     { keys: "y", action: "replace" },
     { keys: "n", action: "keep it" },
+  ],
+  propose: [
+    { keys: "y", action: "propose" },
+    { keys: "n", action: "leave it" },
   ],
 };
 

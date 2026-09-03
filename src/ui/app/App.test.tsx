@@ -66,6 +66,7 @@ function summary(overrides: Partial<WorktreeSummary> & { readonly dir: string })
     behind: 0,
     locked: false,
     rebasing: false,
+    setupStale: false,
     isDefault: false,
     publishRemote: "origin",
     current: false,
@@ -111,6 +112,7 @@ type Calls = {
   /** The targets `sync` was told to publish, apart from the syncs themselves. */
   readonly published: string[];
   readonly rebased: { target: string; base: RebaseBase }[];
+  readonly proposed: string[];
   pruned: number;
   readonly opened: { target: string; trust: boolean }[];
   readonly filledIn: string[];
@@ -134,6 +136,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     synced: [],
     published: [],
     rebased: [],
+    proposed: [],
     pruned: 0,
     opened: [],
     filledIn: [],
@@ -212,6 +215,14 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       rebase: async (target, base) => {
         calls.rebased.push({ target, base });
         return `${target} rebased onto origin/main`;
+      },
+      // Onto the trunk, already published, and no pull request yet: the
+      // question `/propose` asks over an ordinary row. The tests about the
+      // stack and about an existing pull request hand over answers of their own.
+      pendingPropose: async () => ({ base: "main", remote: "origin", publish: false }),
+      propose: async (target) => {
+        calls.proposed.push(target);
+        return `opened pull request 7 for ${target} onto main — https://forge/pull/7`;
       },
       // Nothing waiting by default, which is every repository with no
       // `.grove.toml` and every one whose file is already trusted: nothing runs
@@ -401,14 +412,46 @@ describe("describePending", () => {
     });
   });
 
-  test("`x` names both kinds apart, promises no undo, and is always the red question", () => {
-    // Never softened by the worktree being otherwise tidy: `x` is red whether it
-    // takes four files or one, because nothing it takes comes back.
+  test("`x` names both kinds apart, says a copy is kept, and asks in amber", () => {
+    // Amber and not red: what `x` takes is saved as a commit first, so it is
+    // a risk of the same kind as a force-push — recoverable, and worth a
+    // question — rather than the removal of a dirty worktree, which keeps
+    // nothing and stays red.
     const dirty = summary({ dir: "feat/login", dirty: true, changed: 4, untracked: 1 });
 
     expect(describePending({ kind: "reset", summary: dirty })).toEqual({
-      text: "discard 3 changes and 1 untracked file in feat/login? there is no undo",
-      colour: theme.danger,
+      text: "discard 3 changes and 1 untracked file in feat/login? a copy is kept for git stash apply",
+      colour: theme.warn,
+    });
+  });
+
+  test("`/propose` names the base, and the push that comes first", () => {
+    const stacked = summary({ dir: "feat/login-api" });
+
+    // The base is the sentence: a pull request onto the wrong one is the
+    // mistake the command exists to prevent.
+    expect(
+      describePending({
+        kind: "propose",
+        summary: stacked,
+        proposal: { base: "feat/login", remote: "origin", publish: false },
+      }),
+    ).toEqual({
+      text: "open a pull request for feat/login-api onto feat/login? what is ahead is pushed first",
+      colour: theme.warn,
+    });
+
+    // A branch on no remote is also being published, and the prompt names
+    // where — the same fact `s` puts on its question.
+    expect(
+      describePending({
+        kind: "propose",
+        summary: summary({ dir: "feat/search", upstream: undefined }),
+        proposal: { base: "main", remote: "origin", publish: true },
+      }),
+    ).toEqual({
+      text: "open a pull request for feat/search onto main? it is pushed to origin/feat/search first",
+      colour: theme.warn,
     });
   });
 
@@ -462,7 +505,7 @@ describe("describePending", () => {
       colour: theme.warn,
     });
     // Amber, not red: nothing is being thrown away, and the red is what says
-    // "there is no undo" everywhere else on this prompt.
+    // "this keeps no copy" everywhere else on this prompt.
     expect(describePending(target).colour).not.toBe(theme.danger);
   });
 
@@ -1527,7 +1570,7 @@ describe("the keys", () => {
    * it is the question in front of it: what goes, that nothing brings it back,
    * and a `y` spelled for what it is about to do.
    */
-  test("`x` asks in red before discarding, and `y` throws the changes away", async () => {
+  test("`x` asks before discarding, and `y` throws the changes away", async () => {
     const { service, calls } = stub({
       list: async () => [
         summary({ dir: "main", isDefault: true, current: true }),
@@ -1540,7 +1583,9 @@ describe("the keys", () => {
 
     ui.stdin.write("x");
     const asked = await settled(ui, (frame) =>
-      frame.includes("discard 2 changes and 1 untracked file in feat/login? there is no undo"),
+      frame.includes(
+        "discard 2 changes and 1 untracked file in feat/login? a copy is kept for git stash apply",
+      ),
     );
 
     // The word on the key bar is the word in the question. `y remove` under a
@@ -1573,7 +1618,7 @@ describe("the keys", () => {
 
     const after = await settled(ui, IN_LIST);
 
-    expect(after).not.toContain("there is no undo");
+    expect(after).not.toContain("a copy is kept");
     expect(calls.discarded).toEqual([]);
   });
 
@@ -1774,10 +1819,11 @@ describe("the keys", () => {
 
     ui.stdin.write("/");
     await settled(ui, (frame) => frame.includes("/sync-all"));
-    // `s` is in `setup`, `rebase`, `sync-all`, `upstream` and `refresh`, which
-    // is the whole of what a filter over a handful of short names can narrow to.
+    // `s` is in `setup`, `rebase`, `propose`, `sync-all`, `upstream` and
+    // `refresh`, which is the whole of what a filter over a handful of short
+    // names can narrow to.
     await press(ui, "s");
-    await settled(ui, (frame) => frame.includes(`5 of ${MENU_TOTAL}`));
+    await settled(ui, (frame) => frame.includes(`6 of ${MENU_TOTAL}`));
 
     await press(ui, keys.backspace);
     ui.stdin.write(keys.backspace);
@@ -2074,5 +2120,111 @@ describe("the rebase picker", () => {
 
     expect(frame).toContain("set-head");
     expect(IN_LIST(frame)).toBe(true);
+  });
+});
+
+describe("proposing a pull request", () => {
+  test("`/propose` asks with the base on the prompt, and `y` proposes the row", async () => {
+    const asked: string[] = [];
+    const { service, calls } = stub({
+      pendingPropose: async (target) => {
+        asked.push(target);
+        return { base: "feat/search", remote: "origin", publish: false };
+      },
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "propose");
+    const question = await settled(ui, (frame) =>
+      frame.includes("open a pull request for feat/login onto feat/search?"),
+    );
+
+    // Read for the row under the cursor, and the key bar spelled for it: `y`
+    // proposes, and `n` leaves the branch exactly where it is.
+    expect(asked).toEqual(["/repo/feat/login"]);
+    expect(question).toContain("y propose");
+    expect(question).toContain("n leave it");
+
+    ui.stdin.write("y");
+    await settled(ui, (frame) => IN_LIST(frame) && frame.includes("opened pull request 7"));
+
+    expect(calls.proposed).toEqual(["/repo/feat/login"]);
+  });
+
+  test("any key but `y` leaves it, and nothing reaches the forge", async () => {
+    const { service, calls } = stub();
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "propose");
+    await settled(ui, (frame) => frame.includes("open a pull request for feat/login onto main?"));
+
+    ui.stdin.write("n");
+    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("open a pull request"));
+
+    expect(calls.proposed).toEqual([]);
+  });
+
+  test("a branch that already has a pull request is an answer, not a question", async () => {
+    const { service, calls } = stub({
+      pendingPropose: async () => ({
+        base: "feat/search",
+        remote: "origin",
+        publish: false,
+        existing: { number: 12, url: "https://forge/pull/12", base: "main" },
+      }),
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "propose");
+    const frame = await settled(ui, (each) => each.includes("pull request 12 already proposes"));
+
+    // The number, the base it actually has, and the URL to go and look at —
+    // and the list back under it, with no `y` anywhere.
+    expect(frame).toContain("feat/login onto main");
+    expect(frame).toContain("https://forge/pull/12");
+    expect(IN_LIST(frame)).toBe(true);
+    expect(calls.proposed).toEqual([]);
+  });
+
+  test("`/propose` on a folder has no branch to propose, and does nothing", async () => {
+    const asked: string[] = [];
+    const { service, calls } = stub({
+      pendingPropose: async (target) => {
+        asked.push(target);
+        return { base: "main", remote: "origin", publish: false };
+      },
+    });
+    const ui = await opened_with(service);
+
+    await press(ui, keys.down);
+    await settled(ui, (frame) => /▸ +feat\//.test(frame));
+
+    await run(ui, "propose");
+    await settled(ui, (frame) => IN_LIST(frame));
+
+    expect(asked).toEqual([]);
+    expect(calls.proposed).toEqual([]);
+  });
+
+  test("a refusal before the question is a red line, not a dead session", async () => {
+    const { service, calls } = stub({
+      pendingPropose: async () => {
+        throw new GroveError("gh", "this needs `gh`, which is not installed", {
+          hint: "https://cli.github.com",
+        });
+      },
+    });
+    const ui = await opened_with(service);
+
+    await toLogin(ui);
+    await run(ui, "propose");
+    const frame = await settled(ui, (each) => each.includes("which is not installed"));
+
+    expect(frame).toContain("cli.github.com");
+    expect(IN_LIST(frame)).toBe(true);
+    expect(calls.proposed).toEqual([]);
   });
 });

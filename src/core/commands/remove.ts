@@ -1,6 +1,6 @@
 import { rmdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { failureFor, runTeardown, type TeardownResult } from "../../hooks/index.ts";
+import { clearApplied, failureFor, runTeardown, type TeardownResult } from "../../hooks/index.ts";
 import { type Reporter, withStep } from "../../report/reporter.ts";
 import { refuseTrunk } from "../branches.ts";
 import { GroveError } from "../errors.ts";
@@ -18,6 +18,7 @@ import {
   worktreeDir,
 } from "../worktrees.ts";
 import { prNumberOf, remoteFor } from "./pr.ts";
+import { discardedRef } from "./reset.ts";
 
 /**
  * `grove remove` — delete a worktree, after establishing that you meant it.
@@ -117,6 +118,12 @@ export async function removeWorktree(
       await pruneEmptyParents(worktreeBase(repo), target.path);
     },
   );
+
+  // The record of what this directory was filled in from goes with the
+  // directory. The branch stays, and a worktree `grove add` makes for it later
+  // is filled in afresh and records itself — until then there is nothing to
+  // be stale.
+  if (target.branch !== undefined) await clearApplied(repo.gitDir, target.branch);
 
   if (options.deleteBranch && target.branch !== undefined) {
     const outcome = await deleteBranch(
@@ -284,6 +291,10 @@ export async function deleteBranch(
 
   if (options.announce) reporter.info(`deleted branch ${branch}`);
   await dropPrRemote(bare, branch, reporter);
+  // The snapshot `reset` held for this branch goes with it: it was kept for
+  // a regret about a branch that is now gone on purpose. Absent is the
+  // ordinary case, and the object stays reachable by its sha either way.
+  await runGit(["update-ref", "-d", discardedRef(branch)], { cwd: bare });
 
   return { deleted: true };
 }

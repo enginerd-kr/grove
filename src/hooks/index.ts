@@ -20,6 +20,7 @@
  *
  * - `config.ts`   the files: what they say, and how the three of them stack up
  * - `trust.ts`    the record of having read it, kept out of the repository
+ * - `applied.ts`  the record of which version each worktree was filled in from
  * - `command.ts`  a command line, its environment, and the gate they pass
  * - `setup.ts`    `[setup]` — filling a new worktree in
  * - `teardown.ts` `[teardown]` — what to stop before the directory goes
@@ -29,8 +30,9 @@
  * themselves reach for the module they mean.
  */
 
+export { appliedFingerprints, clearApplied, isStale } from "./applied.ts";
 export { commandEnvFor, failureFor, type HookTarget, pendingCommands } from "./command.ts";
-export { HOOKS_FILE, type Hooks } from "./config.ts";
+export { HOOKS_FILE, type Hooks, readHooks } from "./config.ts";
 export { type PendingOpen, pendingOpen } from "./open.ts";
 export { describeSetup, runSetup, type SetupResult, trustAndRun } from "./setup.ts";
 export { repoHooks } from "./source.ts";

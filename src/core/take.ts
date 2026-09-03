@@ -4,6 +4,7 @@ import type { Reporter } from "../report/reporter.ts";
 import { GroveError } from "./errors.ts";
 import { entryExists } from "./fs.ts";
 import { runGit, runGitOrThrow } from "./git.ts";
+import { snapshotChanges } from "./snapshot.ts";
 import { plural } from "./text.ts";
 import { statusOf } from "./worktrees.ts";
 
@@ -56,26 +57,13 @@ export function describeTake(result: TakeResult): string {
 }
 
 /**
- * The snapshot, or nothing when there is nothing to snapshot.
- *
- * `git stash create` prints an empty line for a clean worktree, which is the
- * one case that is not a failure — it is the answer.
+ * The snapshot, or nothing when there is nothing to snapshot — the tracked
+ * changes alone, since the untracked files are moved rather than committed.
  */
-async function snapshot(worktree: string): Promise<string | undefined> {
-  const result = await runGit(["stash", "create", "grove: taken to another worktree"], {
-    cwd: worktree,
+function snapshot(worktree: string): Promise<string | undefined> {
+  return snapshotChanges(worktree, "grove: taken to another worktree", {
+    hint: "commit them yourself, then add the worktree without --take",
   });
-
-  if (result.code !== 0) {
-    throw new GroveError("git-failed", "could not snapshot the uncommitted changes", {
-      hint: "commit them yourself, then add the worktree without --take",
-      details: [result.stderr.trim()].filter((line) => line.length > 0),
-    });
-  }
-
-  const sha = result.stdout.trim();
-
-  return sha.length === 0 ? undefined : sha;
 }
 
 /**

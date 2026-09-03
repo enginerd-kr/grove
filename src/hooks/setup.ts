@@ -7,6 +7,7 @@ import { BARE_DIR, type RepoPaths } from "../core/layout.ts";
 import { plural } from "../core/text.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
+import { clearApplied, recordApplied } from "./applied.ts";
 import { type HookFailure, type HookTarget, runCommands, setupGate } from "./command.ts";
 import { configuredFiles, HOOKS_FILE, type Hooks, plannedCount, platformKeyFor } from "./config.ts";
 import { openWhatItAsksFor } from "./open.ts";
@@ -519,6 +520,18 @@ export async function runSetup(
           { untrusted, failed, allowed: options.open !== false },
           reporter,
         );
+
+  // Written down only when the whole file has been applied: commands held
+  // back for trust, or one that failed, leave the worktree filled in from the
+  // version it was already filled in from — so the record stays, and the
+  // badge that says "set this up again" stays with it. A project with no
+  // tracked file has nothing to be stale against, and forgets. See `applied.ts`.
+  if (target.branch !== undefined) {
+    if (hooks.fingerprint === undefined) await clearApplied(repo.gitDir, target.branch);
+    else if (!untrusted && failed === undefined) {
+      await recordApplied(repo.gitDir, target.branch, hooks.fingerprint);
+    }
+  }
 
   return {
     path: target.path,

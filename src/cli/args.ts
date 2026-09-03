@@ -63,6 +63,18 @@ export type GroveCommand =
       readonly setup: boolean;
       readonly trust: boolean;
     }
+  | {
+      readonly name: "propose";
+      /** Absent means the worktree the shell is standing in. */
+      readonly target?: string;
+      /** `--base`: where the pull request goes, over the recorded parent or the trunk. */
+      readonly base?: string;
+      readonly draft: boolean;
+      readonly title?: string;
+      readonly body?: string;
+      /** `--web`: push, then write the pull request in the browser. */
+      readonly web: boolean;
+    }
   | { readonly name: "list" }
   | { readonly name: "doctor" }
   | {
@@ -262,6 +274,25 @@ function buildCommand(
         pr: first,
         setup: !bool(values, "no-setup"),
         trust: bool(values, "trust"),
+      };
+    }
+    case "propose": {
+      const body = str(values, "body");
+      // A body with no title is half a pull request: gh wants both or
+      // neither, and guessing a title for somebody's body is not a thing to
+      // do quietly.
+      if (body !== undefined && str(values, "title") === undefined) {
+        return usageError(spec, "--body goes with --title; pass both, or neither");
+      }
+
+      return {
+        name: "propose",
+        target: first,
+        base: str(values, "base"),
+        draft: bool(values, "draft"),
+        title: str(values, "title"),
+        body,
+        web: bool(values, "web"),
       };
     }
     case "list":

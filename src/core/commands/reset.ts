@@ -1,6 +1,7 @@
 import { type Reporter, withStep } from "../../report/reporter.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
+import { recoverLine, snapshotChanges } from "../snapshot.ts";
 import { plural } from "../text.ts";
 import {
   LISTED,
@@ -24,6 +25,17 @@ import {
  * first so the answer can say what went, and it refuses a worktree in the middle
  * of a rebase — where `reset --hard` does not mean "undo my changes", it means
  * "leave the rebase half-applied and unrecoverable".
+ *
+ * And it keeps a copy. `git reset --hard` is the one thing in git with no
+ * reflog behind it: the commits a `--to` drops are still in `HEAD@{1}`, but an
+ * edit that was never committed is nowhere once the tree is rewritten, and
+ * `clean -fd` takes files git has never seen a copy of. So before either runs,
+ * what they are about to destroy is written as a snapshot commit — the same
+ * shape `git stash push -u` stores, see `core/snapshot.ts` — and its sha is
+ * named on the way out. `git stash apply <sha>` is the undo, and it needs
+ * nothing of grove's to work. The latest one per branch is also held under
+ * `refs/grove/discarded/<branch>`, so a regret next week finds a commit git's
+ * own housekeeping has not yet pruned.
  */
 
 export type ResetOptions = {
@@ -52,7 +64,21 @@ export type ResetResult = {
   readonly cleaned: boolean;
   /** Where it ended up, so a rewind can be found again in the reflog. */
   readonly head: string;
+  /**
+   * The snapshot commit holding what was discarded, in full.
+   *
+   * `git stash apply <sha>` brings it back — tracked changes, and the
+   * untracked files when `--clean` took them. Absent when nothing was taken
+   * that a snapshot could hold: a clean tree, or untracked files left where
+   * they were.
+   */
+  readonly saved?: string;
 };
+
+/** Where the latest snapshot of a branch's discarded changes is kept. */
+export function discardedRef(branch: string): string {
+  return `refs/grove/discarded/${branch}`;
+}
 
 /**
  * What a reset is about to take, or has taken, in words.
@@ -101,6 +127,18 @@ export async function resetWorktree(
   const before = await statusOf(target.path);
   const to = options.to ?? "HEAD";
 
+  // Before anything is touched, and refusing rather than carrying on without
+  // it: a reset that could not keep a copy is exactly the reset somebody will
+  // want the copy from. Only what is about to go is in it — the untracked
+  // files ride along when `--clean` is taking them, and stay out of it when
+  // they are staying on disk.
+  const saved = before.dirty
+    ? await snapshotChanges(target.path, `grove: discarded in ${dir}`, {
+        untracked: options.clean ? before.untracked : [],
+        hint: "commit or stash them yourself, then reset again",
+      })
+    : undefined;
+
   await withStep(
     reporter,
     { start: `resetting ${dir}`, done: `reset ${dir}`, failed: `could not reset ${dir}` },
@@ -111,6 +149,17 @@ export async function resetWorktree(
       if (options.clean) await runGitOrThrow(["clean", "-fd"], { cwd: target.path });
     },
   );
+
+  // Held by a ref only once the discard has happened, so a reset that failed
+  // leaves no record claiming something was thrown away. Best effort: the sha
+  // is named either way, and the ref is a courtesy to next week rather than the
+  // thing the recovery depends on.
+  if (saved !== undefined) {
+    if (target.branch !== undefined) {
+      await runGit(["update-ref", discardedRef(target.branch), saved], { cwd: target.path });
+    }
+    reporter.info(`the discarded changes are saved as a commit: ${recoverLine(saved)}`);
+  }
 
   // Only worth saying when they survived: `--clean` is opt-in on the command
   // line, and a worktree that is still dirty after a reset is a surprise.
@@ -131,5 +180,6 @@ export async function resetWorktree(
     untracked: before.untracked.length,
     cleaned: options.clean,
     head: head.stdout.trim(),
+    saved,
   };
 }

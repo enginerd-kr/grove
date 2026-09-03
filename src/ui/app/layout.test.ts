@@ -32,6 +32,7 @@ function wt(dir: string, overrides: Partial<WorktreeSummary> = {}): WorktreeSumm
     behind: 0,
     locked: false,
     rebasing: false,
+    setupStale: false,
     isDefault: false,
     current: false,
     ...overrides,

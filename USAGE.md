@@ -53,7 +53,7 @@ the worktree you ran `grove` from. `▸` is the cursor.
 | --- | --- |
 | remote | commits ahead / behind the branch's upstream |
 | main | commits ahead / behind the trunk |
-| state | `●` has uncommitted changes, `○` clean, then the age of the last commit |
+| state | `●` has uncommitted changes, `○` clean, then the age of the last commit. `merged` and `gone` mean the branch is finished with; `setup stale` means `.grove.toml` changed since the worktree was filled in |
 
 Below the list: files changed in the selected worktree, and (with `/log`) its
 recent commits. The bottom bar shows the keys available right now.
@@ -81,6 +81,18 @@ other worktrees' branches. Pick one, `enter`. Nothing is pushed. Uncommitted
 changes are carried through and put back; if the rebase conflicts, or the
 changes will not sit on the result, the whole thing is undone.
 
+**Open a pull request.** `/propose` asks the forge to open one for the
+selected worktree's branch. A branch added with `--on` goes onto the branch it
+sits on, so the second pull request of a stack does not show the first one's
+diff again; any other branch goes onto the trunk. The prompt names the base.
+`y` pushes the branch where `git push` would send it, a first push included,
+and opens the pull request filled in from the commits. A branch that already
+has one is reported instead. Requires `gh`.
+
+**Discard changes.** `x` throws away everything uncommitted in the selected
+worktree, untracked files included. What goes is saved as a commit first, and
+the line after `y` says how to get it back: `git stash apply <sha>`.
+
 **Remove.** `r`. The prompt lists what would be lost. `y` removes the worktree
 and keeps the branch. On a folder row, `r` removes every worktree in it.
 `/prune` removes every worktree badged `merged` or `gone` at once: the prompt
@@ -101,7 +113,7 @@ Every destructive action asks first. `y` confirms. Any other key cancels.
 | `enter` | copy the selected path |
 | `a` | add a worktree, branched from the selection |
 | `r` | remove the selection, or the whole folder |
-| `x` | discard uncommitted changes (shown only when there are any) |
+| `x` | discard uncommitted changes, keeping a copy (shown only when there are any) |
 | `s` | sync the selection |
 | `/` | command menu |
 | `y` / `n` | confirm / cancel |
@@ -119,6 +131,7 @@ Every destructive action asks first. `y` confirms. Any other key cancels.
 | `/open` | open the selection in the editor |
 | `/setup` | re-apply `.grove.toml` to the selection |
 | `/rebase` | rebase the selection onto a base you pick |
+| `/propose` | open a pull request for the selection, onto the branch it sits on |
 | `/sync-all` | sync every worktree |
 | `/prune` | remove the worktrees badged `merged` or `gone` |
 | `/review` | check out an open pull request |
@@ -240,9 +253,13 @@ untracked `.grove.local.toml` never need approval.
 ### Re-applying setup
 
 `a` applies `.grove.toml` as it was at the time. When the file changes later,
-run `/setup` on a worktree or `grove setup --all`. It is idempotent: `copy`
-overwrites from the trunk, `link` leaves existing entries, `run` is your own
-command.
+the rows filled in from the older version read `setup stale`: grove records
+which version each worktree was set up from, beside the branch in the bare
+repository's config, and compares it with the trunk's file on every refresh.
+Run `/setup` on a worktree or `grove setup --all` to catch them up. It is
+idempotent: `copy` overwrites from the trunk, `link` leaves existing entries,
+`run` is your own command. A worktree set up before this record existed shows
+no badge until its next setup.
 
 `run`, `teardown`, and `exec` commands receive `GROVE_ROOT`, `GROVE_WORKTREE`,
 and `GROVE_BRANCH`.
@@ -302,6 +319,7 @@ grove setup [target | --all]      # /setup
 grove sync [target | --all]       # s, /sync-all
 grove rebase [target]             # /rebase
 grove pr <number | url | branch>  # /review
+grove propose [target]            # /propose
 grove reset <target>              # x
 grove remove <target>             # r
 grove prune                       # /prune
@@ -380,6 +398,27 @@ worktree is exactly as it was: exit code 5. `--no-abort` keeps the half-finished
 state instead and prints the snapshot's sha, so `git stash apply <sha>` brings
 the changes back once the conflict is resolved.
 
+### propose
+
+Opens a pull request for a worktree's branch. The base is the branch `add
+--on` recorded it as sitting on, else the trunk; `--base <branch>` says
+otherwise. The branch is pushed first, where `git push` would send it: a
+branch on no remote is pushed with `-u`, one that is ahead is pushed plainly,
+and one that is behind its remote is refused until `sync` has caught it up.
+Uncommitted changes are warned about and left alone.
+
+| flag | |
+| --- | --- |
+| `--base <branch>` | open it onto `<branch>` |
+| `--draft` | open it as a draft |
+| `--title <text>` | the title; without it, and `--body`, both are filled in from the commits |
+| `--body <text>` | the body, beside `--title` |
+| `--web` | push, then write the pull request in the browser |
+
+A branch that already has an open pull request is reported with its number
+and base, and nothing is pushed. If that base is not the one the stack says,
+the `gh pr edit` that moves it is printed. Needs `gh`; exits `10` without it.
+
 ### remove / prune
 
 `remove` refuses unsafe worktrees unless `--force`. A worktree mid-rebase is
@@ -403,6 +442,14 @@ pull request. Needs `gh`; exits `10` without it, before anything is removed.
 
 `git reset --hard`. `--clean` also deletes untracked files. `--to <ref>` resets
 to another ref.
+
+What it discards is saved first, as a commit that touches no ref — the same
+shape `git stash push -u` stores, tracked changes and (with `--clean`) the
+untracked files — and the sha is printed: `git stash apply <sha>` brings it
+all back. The latest snapshot for a branch is also held under
+`refs/grove/discarded/<branch>`, so it survives git's own housekeeping; an
+earlier one stays reachable by its sha until git prunes unreferenced objects.
+The screen's `x` is `reset --clean`, and says the same line after `y`.
 
 ### exec
 
@@ -449,7 +496,9 @@ success is never to be inferred from what was printed on stderr.
 | --- | --- |
 | `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `setup` |
 | `add`'s `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
-| `list` | one row per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished` |
+| `list` | one row per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale` |
+| `propose` | `url`, `number`, `base`, `created` (false when one already existed), `pushed` |
+| `reset` | `saved`: the snapshot's sha, for `git stash apply` |
 | `sync` | exit `4` with nothing pushed means the branch is on no remote yet |
 | `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when it stays |
 

@@ -24,7 +24,7 @@ app/Menu.tsx      `/`: the commands with no key of their own, as a list to type 
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths, and one worktree's changed paths, as the trees they are
-app/service.ts    what the screens are allowed to do: add, sync, remove, discard, check out a PR
+app/service.ts    what the screens are allowed to do: add, sync, remove, discard, check out or propose a PR
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
 e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulated screen
@@ -217,6 +217,22 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   only tool besides git that any of this spawns, and it answers only what git cannot: which
   repository the head is on, what the ref is called there, and whether the pull request is still
   open.
+- **`/propose` is `/review`'s other half, and it asks first.** `review` brings somebody's pull request
+  here; `propose` sends the row's branch out as one, onto the branch `add --on` recorded it as sitting
+  on — the one fact about a stacked pull request that only grove has. The probe (`pendingPropose`)
+  reads the base and asks the forge whether a pull request already exists, so the `confirm` names
+  the base before `y` reaches anybody else's screen and an existing pull request is a message line
+  rather than a second question. It made the menu ten rows; `layout.ts` says why that is where it stops.
+- **`x` keeps a copy, and the prompt says so in amber.** `reset` snapshots what it discards as a
+  stash-shaped commit (`core/snapshot.ts`) before anything is touched, so the question moved from
+  red to amber — the same distinction the force-push prompt draws: recoverable is worth asking, not
+  worth alarm. The line after `y` carries the `git stash apply` that brings it back. Removing a dirty
+  worktree keeps no copy and stays red.
+- **`setup stale` is the one state word coloured amber.** `list.ts` compares the fingerprint each
+  worktree was last filled in from (`hooks/applied.ts`, kept beside the branch in the bare repo's
+  config) with the trunk's `.grove.toml` as it is now, and `StateCell` colours the word the way a
+  `↓` is coloured: something here is behind. It is the invitation to `/setup`, so it comes after
+  `merged`/`gone` — a finished worktree's setup is nobody's concern.
 - **`r` goes through a `confirm` whichever row it is on.** `Pending` covers a removal and a
   folder's worth of removals; the question is always "is this the row you meant", and the answer
   should not depend on how many rows are behind it. What `y` costs is spelled out before it is

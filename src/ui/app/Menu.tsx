@@ -39,6 +39,7 @@ export type CommandName =
   | "open"
   | "setup"
   | "rebase"
+  | "propose"
   | "sync-all"
   | "prune"
   | "review"
@@ -76,6 +77,13 @@ export function commandsFor(logOn: boolean): readonly MenuCommand[] {
     {
       name: "rebase",
       summary: "rebase the row under the cursor onto a base you pick, changes carried",
+    },
+    // The fourth row-aimed command, and `review`'s other half: that one
+    // brings somebody's pull request here, this sends the row's branch out as
+    // one — onto the branch it is stacked on, which is the part worth a key.
+    {
+      name: "propose",
+      summary: "open a pull request for the row under the cursor, onto the branch it sits on",
     },
     { name: "sync-all", summary: "sync every worktree, not just the row under the cursor" },
     { name: "prune", summary: "remove every worktree marked merged or gone, after asking" },

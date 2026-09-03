@@ -381,7 +381,9 @@ describeUi("the app", () => {
           await press(ui, keys.down, (frame) => selected(frame) === "login");
 
           const asked = (frame: string) =>
-            frame.includes("discard 1 untracked file in feat/login? there is no undo");
+            frame.includes(
+              "discard 1 untracked file in feat/login? a copy is kept for git stash apply",
+            );
 
           await press(ui, "x", asked);
           await press(ui, "n", (frame) => !asked(frame) && frame.includes("q quit"));

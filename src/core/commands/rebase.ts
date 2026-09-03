@@ -3,6 +3,7 @@ import { defaultBranch, fetchRemotes, localBranchExists, REMOTE, remoteRef } fro
 import { classifyGitError, GroveError, stderrDetails } from "../errors.ts";
 import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { recoverLine, snapshotChanges } from "../snapshot.ts";
 import { ancestry, readStack } from "../stack.ts";
 import { plural } from "../text.ts";
 import {
@@ -251,7 +252,9 @@ export async function rebaseWorktree(
   let stash: string | undefined;
   const changes = status.changed.length - status.untracked.length;
   if (status.dirty) {
-    stash = await snapshot(record.path);
+    stash = await snapshotChanges(record.path, "grove: carried through a rebase", {
+      hint: "commit them yourself, or rebase with --no-stash after stashing by hand",
+    });
     if (stash !== undefined) await runGitOrThrow(["reset", "--hard", "HEAD"], { cwd: record.path });
   }
   const carried = (restored: boolean): Pick<RebaseResult, "carried"> =>
@@ -444,29 +447,6 @@ function refExists(path: string, ref: string): Promise<boolean> {
 }
 
 /**
- * The snapshot, or nothing when there is nothing to snapshot.
- *
- * Empty output is git's answer for a tree whose only changes are untracked
- * files — `stash create` does not take those — and it is an answer, not a
- * failure: the rebase runs with them in place.
- */
-async function snapshot(path: string): Promise<string | undefined> {
-  const result = await runGit(["stash", "create", "grove: carried through a rebase"], {
-    cwd: path,
-  });
-  if (result.code !== 0) {
-    throw new GroveError("git-failed", "could not snapshot the uncommitted changes", {
-      hint: "commit them yourself, or rebase with --no-stash after stashing by hand",
-      details: stderrDetails(result.stderr),
-    });
-  }
-
-  const sha = result.stdout.trim();
-
-  return sha.length === 0 ? undefined : sha;
-}
-
-/**
  * Puts a snapshot back, and says whether it landed cleanly.
  *
  * `--index` first, so a change that was staged comes back staged. git
@@ -495,7 +475,7 @@ async function conflictedPaths(path: string): Promise<readonly string[]> {
 
 /** The one line that recovers changes this command could not put back itself. */
 function recover(stash: string): string {
-  return `the uncommitted changes are saved as a commit: git stash apply ${stash}`;
+  return `the uncommitted changes are saved as a commit: ${recoverLine(stash)}`;
 }
 
 /**

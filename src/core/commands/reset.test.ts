@@ -104,6 +104,8 @@ describe("grove reset", () => {
         untracked: 2,
         cleaned: false,
         head: before.slice(0, 7),
+        // The copy of what went — asserted by applying it, below.
+        saved: expect.any(String) as unknown as string,
       });
 
       // The tracked edit is gone and the branch has not moved.
@@ -139,6 +141,86 @@ describe("grove reset", () => {
       // No `-x`, so an ignored file survives both: it is not what "throw away
       // my changes" means, and git's own `clean` draws the line in the same place.
       expect(await pathExists(join(worktree, "ignored.txt"))).toBe(true);
+    });
+  });
+
+  test("keeps a copy of what it discards, and git stash apply brings it back", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "spike");
+      const worktree = join(repo.root, "spike");
+
+      await Bun.write(join(worktree, "app.txt"), "edited\n");
+      await Bun.write(join(worktree, "scratch.txt"), "never committed\n");
+      await mkdir(join(worktree, "junk"), { recursive: true });
+      await Bun.write(join(worktree, "junk", "output.bin"), "junk\n");
+
+      const outcome = await attemptReset(repo, "spike", { clean: true });
+      const result = succeeded(outcome);
+
+      // Everything is gone from the tree — that is what was asked for.
+      expect(await status(worktree)).toBe("");
+      expect(await pathExists(join(worktree, "scratch.txt"))).toBe(false);
+
+      // And the way back is said, with the sha, once, on stderr: the one
+      // line somebody needs from a discard they regret.
+      expect(result.saved).toMatch(/^[0-9a-f]{40}$/);
+      expect(outcome.log.err).toContain(
+        `· the discarded changes are saved as a commit: git stash apply ${result.saved}\n`,
+      );
+      // Held for the branch, so next week's regret finds it — and nowhere
+      // near `refs/stash`, which every worktree shares.
+      expect(
+        (await probeGit(worktree, ["rev-parse", "refs/grove/discarded/spike"])).stdout.trim(),
+      ).toBe(result.saved ?? "");
+      expect(
+        (await probeGit(worktree, ["rev-parse", "--verify", "--quiet", "refs/stash"])).code,
+      ).not.toBe(0);
+
+      // The claim itself, made good by git and not by grove: tracked and
+      // untracked alike come back.
+      expect((await probeGit(worktree, ["stash", "apply", result.saved ?? ""])).code).toBe(0);
+      expect(await Bun.file(join(worktree, "app.txt")).text()).toBe("edited\n");
+      expect(await Bun.file(join(worktree, "scratch.txt")).text()).toBe("never committed\n");
+      expect(await Bun.file(join(worktree, "junk", "output.bin")).text()).toBe("junk\n");
+
+      // A second discard replaces the branch's copy rather than piling up.
+      const again = succeeded(await attemptReset(repo, "spike", { clean: true }));
+      expect(again.saved).not.toBe(result.saved);
+      expect(
+        (await probeGit(worktree, ["rev-parse", "refs/grove/discarded/spike"])).stdout.trim(),
+      ).toBe(again.saved ?? "");
+    });
+  });
+
+  test("without --clean the copy holds the tracked changes and not the files that stay", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedWorktree(repo, "spike");
+      const worktree = join(repo.root, "spike");
+
+      // Untracked only: nothing is about to be destroyed, so nothing is kept
+      // and no line about a commit is printed.
+      await Bun.write(join(worktree, "scratch.txt"), "scratch\n");
+      const untouched = await attemptReset(repo, "spike");
+      expect(succeeded(untouched).saved).toBeUndefined();
+      expect(untouched.log.err.join("")).not.toContain("saved as a commit");
+
+      // A tracked edit beside it: the edit is kept, the untracked file is not
+      // in the copy — it is still on disk, where the reset left it.
+      await Bun.write(join(worktree, "app.txt"), "edited\n");
+      const result = succeeded(await attemptReset(repo, "spike"));
+      expect(result.saved).toMatch(/^[0-9a-f]{40}$/);
+      expect(await pathExists(join(worktree, "scratch.txt"))).toBe(true);
+
+      const parents = (
+        await probeGit(worktree, ["rev-list", "--parents", "-n", "1", result.saved ?? ""])
+      ).stdout
+        .trim()
+        .split(" ");
+      // Two parents — HEAD and the index — and no third: `stash create`'s
+      // own shape, since there were no untracked files to add to it.
+      expect(parents).toHaveLength(3);
     });
   });
 
@@ -316,8 +398,10 @@ describe("grove reset", () => {
       // No warning, because there is nothing a --clean would have taken either.
       expect(quiet.log.err.join("")).not.toContain("--clean");
       // The step still ran and still settled: "nothing to do" is a reset that
-      // happened, not one that was skipped.
+      // happened, not one that was skipped — and with nothing to keep, no
+      // line about a copy either.
       expect(quiet.log.err).toEqual(["· resetting spike\n", "✓ reset spike\n"]);
+      expect(nothing.saved).toBeUndefined();
 
       const names = ["f1", "f2", "f3", "f4", "f5", "f6", "f7"];
       for (const name of names) {

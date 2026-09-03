@@ -53,7 +53,7 @@ grove는 기존 `git clone` 안에서도 동작합니다. 새 워크트리는 �
 | --- | --- |
 | remote | 브랜치가 추적하는 원격 브랜치 대비 앞선 / 뒤처진 커밋 수 |
 | main | 트렁크 대비 앞선 / 뒤처진 커밋 수 |
-| state | `●` 커밋하지 않은 변경 있음, `○` 깨끗함, 그 뒤에 마지막 커밋의 시점 |
+| state | `●` 커밋하지 않은 변경 있음, `○` 깨끗함, 그 뒤에 마지막 커밋의 시점. `merged`와 `gone`은 브랜치가 끝났다는 뜻이고, `setup stale`은 워크트리를 채운 뒤 `.grove.toml`이 바뀌었다는 뜻 |
 
 목록 아래에는 선택한 워크트리에서 변경된 파일과, (`/log`를 켜면) 최근 커밋이
 보입니다. 하단 바는 지금 쓸 수 있는 키를 보여 줍니다.
@@ -80,6 +80,18 @@ push가 원격 히스토리를 덮어쓰게 되면 grove가 먼저 묻습니다.
 변경은 잠시 치워 두었다가 리베이스 뒤에 되돌려 놓습니다. 리베이스가 충돌하거나
 변경이 결과 위에 올라가지 않으면 전부 되돌립니다.
 
+**풀 리퀘스트 열기.** `/propose`는 선택한 워크트리의 브랜치로 풀 리퀘스트를
+열어 달라고 forge에 요청합니다. `--on`으로 추가한 브랜치는 자기가 올라앉은
+브랜치 위로 열리므로, 스택의 두 번째 풀 리퀘스트가 첫 번째의 diff를 다시 보여
+주지 않습니다. 그 밖의 브랜치는 트렁크 위로 열립니다. 프롬프트가 베이스를
+보여 줍니다. `y`를 누르면 `git push`가 보낼 곳으로 브랜치를 push하고(첫 push
+포함) 커밋 내용으로 채운 풀 리퀘스트를 엽니다. 이미 풀 리퀘스트가 있는
+브랜치는 대신 그 사실을 알려 줍니다. `gh`가 필요합니다.
+
+**변경 버리기.** `x`는 선택한 워크트리의 커밋하지 않은 변경을 추적되지 않는
+파일까지 모두 버립니다. 버리기 전에 커밋으로 저장해 두고, `y` 뒤의 줄이
+되찾는 법을 알려 줍니다: `git stash apply <sha>`.
+
 **제거.** `r`. 프롬프트가 잃게 될 것을 나열합니다. `y`는 워크트리를 제거하고
 브랜치는 남깁니다. 폴더 줄에서 `r`은 그 안의 모든 워크트리를 제거합니다.
 `/prune`은 `merged` 또는 `gone` 배지가 붙은 워크트리를 한 번에 제거합니다:
@@ -100,7 +112,7 @@ push가 원격 히스토리를 덮어쓰게 되면 grove가 먼저 묻습니다.
 | `enter` | 선택한 경로 복사 |
 | `a` | 선택에서 갈라진 워크트리 추가 |
 | `r` | 선택 또는 폴더 전체 제거 |
-| `x` | 커밋하지 않은 변경 버리기 (변경이 있을 때만 표시) |
+| `x` | 커밋하지 않은 변경 버리기, 사본은 남김 (변경이 있을 때만 표시) |
 | `s` | 선택 동기화 |
 | `/` | 명령 메뉴 |
 | `y` / `n` | 확인 / 취소 |
@@ -118,6 +130,7 @@ push가 원격 히스토리를 덮어쓰게 되면 grove가 먼저 묻습니다.
 | `/open` | 선택을 에디터에서 열기 |
 | `/setup` | 선택에 `.grove.toml` 다시 적용 |
 | `/rebase` | 선택을 고른 베이스 위로 리베이스 |
+| `/propose` | 선택의 풀 리퀘스트를 올라앉은 브랜치 위로 열기 |
 | `/sync-all` | 모든 워크트리 동기화 |
 | `/prune` | `merged` 또는 `gone` 배지가 붙은 워크트리 제거 |
 | `/review` | 열린 풀 리퀘스트 체크아웃 |
@@ -240,10 +253,13 @@ push되지 않음). 파일을 편집하면 승인이 취소됩니다. `config.to
 
 ### 셋업 다시 적용하기
 
-`a`는 그 시점의 `.grove.toml`을 적용합니다. 파일이 나중에 바뀌면 워크트리에서
-`/setup`을 실행하거나 `grove setup --all`을 실행하세요. 멱등적입니다: `copy`는
-트렁크에서 덮어쓰고, `link`는 기존 항목을 그대로 두며, `run`은 여러분의
-명령입니다.
+`a`는 그 시점의 `.grove.toml`을 적용합니다. 파일이 나중에 바뀌면 옛 버전으로
+채워진 줄에 `setup stale`이 붙습니다: grove는 각 워크트리가 어느 버전으로
+셋업되었는지를 bare 저장소의 config에 브랜치 옆에 기록해 두고, 새로 고칠
+때마다 트렁크의 파일과 비교합니다. 워크트리에서 `/setup`을 실행하거나 `grove
+setup --all`을 실행해서 따라잡으세요. 멱등적입니다: `copy`는 트렁크에서
+덮어쓰고, `link`는 기존 항목을 그대로 두며, `run`은 여러분의 명령입니다. 이
+기록이 생기기 전에 셋업된 워크트리는 다음 셋업 전까지 배지가 붙지 않습니다.
 
 `run`, `teardown`, `exec` 명령은 `GROVE_ROOT`, `GROVE_WORKTREE`,
 `GROVE_BRANCH`를 받습니다.
@@ -302,6 +318,7 @@ grove setup [target | --all]      # /setup
 grove sync [target | --all]       # s, /sync-all
 grove rebase [target]             # /rebase
 grove pr <number | url | branch>  # /review
+grove propose [target]            # /propose
 grove reset <target>              # x
 grove remove <target>             # r
 grove prune                       # /prune
@@ -380,6 +397,27 @@ fetch한 뒤:
 스냅샷의 sha를 출력하므로, 충돌을 해결한 뒤 `git stash apply <sha>`로 변경을
 되찾을 수 있습니다.
 
+### propose
+
+워크트리의 브랜치로 풀 리퀘스트를 엽니다. 베이스는 `add --on`이 기록한, 그
+브랜치가 올라앉은 브랜치이고, 없으면 트렁크입니다. `--base <branch>`로 달리
+정할 수 있습니다. 브랜치를 먼저 `git push`가 보낼 곳으로 push합니다: 어느
+원격에도 없는 브랜치는 `-u`로, 앞서 있는 브랜치는 그냥 push하고, 원격보다
+뒤처진 브랜치는 `sync`로 따라잡을 때까지 거부합니다. 커밋하지 않은 변경은
+경고만 하고 그대로 둡니다.
+
+| 플래그 | |
+| --- | --- |
+| `--base <branch>` | `<branch>` 위로 열기 |
+| `--draft` | 초안으로 열기 |
+| `--title <text>` | 제목; 이것과 `--body`가 없으면 둘 다 커밋에서 채움 |
+| `--body <text>` | 본문, `--title`과 함께 |
+| `--web` | push한 뒤 브라우저에서 풀 리퀘스트 작성 |
+
+이미 열린 풀 리퀘스트가 있는 브랜치는 번호와 베이스를 알려 주고 아무것도
+push하지 않습니다. 그 베이스가 스택이 말하는 것과 다르면, 옮기는 `gh pr edit`
+명령을 출력합니다. `gh`가 필요하며, 없으면 `10`으로 종료합니다.
+
 ### remove / prune
 
 `remove`는 `--force`가 없으면 안전하지 않은 워크트리를 거부합니다. 리베이스
@@ -402,6 +440,14 @@ fetch한 뒤:
 
 `git reset --hard`. `--clean`은 추적되지 않는 파일도 삭제합니다. `--to <ref>`는
 다른 ref로 리셋합니다.
+
+버리는 것은 먼저 저장합니다. 어떤 ref도 건드리지 않는 커밋 하나로, `git stash
+push -u`가 저장하는 것과 같은 모양입니다: 추적 중인 변경과 (`--clean`이면)
+추적되지 않는 파일까지. sha를 출력하므로 `git stash apply <sha>`로 전부
+되찾을 수 있습니다. 브랜치마다 가장 최근 스냅샷은 `refs/grove/discarded/<branch>`
+아래에도 붙잡아 두므로 git의 정리 작업을 견디고, 그 전 것은 git이 참조 없는
+객체를 지울 때까지 sha로 닿을 수 있습니다. 화면의 `x`는 `reset --clean`이고,
+`y` 뒤에 같은 줄을 보여 줍니다.
 
 ### exec
 
@@ -449,7 +495,9 @@ grove exec -- sh -c 'echo $GROVE_BRANCH'
 | --- | --- |
 | `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `setup` |
 | `add`의 `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
-| `list` | 워크트리마다 한 줄: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished` |
+| `list` | 워크트리마다 한 줄: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale` |
+| `propose` | `url`, `number`, `base`, `created` (이미 있었으면 false), `pushed` |
+| `reset` | `saved`: 스냅샷의 sha, `git stash apply`용 |
 | `sync` | 아무것도 push하지 않고 종료 코드 `4`이면 브랜치가 아직 어느 원격에도 없다는 뜻 |
 | `prune -n` | `entries[]`, 각각 `dir`, `reason`, 그리고 남는 경우 `skipped` |
 

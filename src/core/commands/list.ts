@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
+import { appliedFingerprints, isStale, readHooks } from "../../hooks/index.ts";
 import {
   type BranchState,
   branchStates,
@@ -11,7 +12,7 @@ import {
 } from "../branches.ts";
 import { contains, type RepoPaths } from "../layout.ts";
 import { readStack } from "../stack.ts";
-import { listWorktrees, statusOf, worktreeDir } from "../worktrees.ts";
+import { listWorktrees, statusOf, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 
 /** `grove list` — what is here, what state it is in, and where you are standing. */
 
@@ -39,6 +40,13 @@ const FILE_SAMPLE = 200;
  * nobody had to decide.
  */
 export type Finished = "gone" | "merged";
+
+/**
+ * The word the state column uses for a worktree filled in from an older
+ * `.grove.toml` than the trunk has now — one spelling, so the row that draws
+ * it in colour and the table that prints it agree on which word that is.
+ */
+export const STALE_SETUP = "setup stale";
 
 /**
  * Whether a branch has finished, and how — or nothing.
@@ -145,6 +153,16 @@ export type WorktreeSummary = {
    */
   readonly finished?: Finished;
   /**
+   * True when `.grove.toml` has changed since this worktree was last filled in
+   * from it — what `grove setup` catches up.
+   *
+   * Decided from two fingerprints, the one recorded when setup last completed
+   * here and the trunk's file as it is now, and only when both are known: a
+   * worktree with no record and a project with no tracked file are both
+   * `false`, not "probably". See `hooks/applied.ts`.
+   */
+  readonly setupStale: boolean;
+  /**
    * The branch this one was stacked on, when it was stacked on one.
    *
    * Absent for almost every row, which is what makes it worth showing: a stack
@@ -187,18 +205,44 @@ async function latestTouch(
   return known.length === 0 ? undefined : Math.max(...known);
 }
 
+/**
+ * The fingerprint of the project's `.grove.toml` as the trunk has it now, or
+ * nothing.
+ *
+ * Read off the trunk's worktree directly rather than through `repoHooks`,
+ * which would list the worktrees a second time to find it — this runs on the
+ * refresh tick, and the records are already in hand. Nothing when there is no
+ * trunk worktree, no tracked file, or a file that will not parse: a badge
+ * that could not be decided is not drawn, and the file's own refusal belongs
+ * to the command that runs it.
+ */
+async function currentFingerprint(
+  records: readonly WorktreeRecord[],
+  trunk: string,
+): Promise<string | undefined> {
+  const holder = records.find((record) => record.branch === trunk);
+  if (holder === undefined) return undefined;
+
+  try {
+    return (await readHooks(holder.path)).fingerprint;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function listWorktreeSummaries(
   repo: RepoPaths,
   cwd: string,
 ): Promise<readonly WorktreeSummary[]> {
-  const [records, trunk, stack, publishedTo] = await Promise.all([
+  const [records, trunk, stack, publishedTo, applied] = await Promise.all([
     listWorktrees(repo.gitDir),
     trunkOf(repo.gitDir),
     readStack(repo.gitDir),
     publishRemotes(repo.gitDir),
+    appliedFingerprints(repo.gitDir),
   ]);
   // After `trunk` is known, and once for every branch rather than per worktree.
-  const [drift, states, committed] = await Promise.all([
+  const [drift, states, committed, current] = await Promise.all([
     driftFrom(repo.gitDir, trunk.branch),
     // Against the remote's trunk rather than the local one, so a branch that
     // landed upstream reads as landed before anybody has pulled it down here.
@@ -207,6 +251,7 @@ export async function listWorktreeSummaries(
       repo.gitDir,
       records.map((record) => record.head).filter((head): head is string => head !== undefined),
     ),
+    currentFingerprint(records, trunk.branch),
   ]);
 
   const summaries = await Promise.all(
@@ -242,6 +287,7 @@ export async function listWorktreeSummaries(
           trunk.branch,
           record.branch === undefined ? undefined : states.get(record.branch),
         ),
+        setupStale: record.branch !== undefined && isStale(applied.get(record.branch), current),
         parent: record.branch === undefined ? undefined : stack.get(record.branch),
         publishRemote: record.branch === undefined ? undefined : publishedTo(record.branch),
         isDefault: record.branch === trunk.branch,
@@ -276,6 +322,10 @@ function stateParts(summary: WorktreeSummary, withDirty: boolean): string[] {
   // nothing left to do here, which is what `r` — or `grove prune` for all of
   // them at once — is for.
   if (summary.finished !== undefined) parts.push(summary.finished);
+  // After it, because a finished worktree is about to go and its setup is
+  // nobody's concern; for every other row this is the one word that names a
+  // thing to do — `/setup`, or `grove setup` — rather than a state to know.
+  if (summary.setupStale) parts.push(STALE_SETUP);
 
   return parts;
 }

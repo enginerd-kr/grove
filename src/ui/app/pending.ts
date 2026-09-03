@@ -2,7 +2,7 @@ import type { WorktreeSummary } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import { plural } from "../../core/text.ts";
 import { theme } from "../theme.ts";
-import type { PendingOpen, PruneResult, WorktreeService } from "./service.ts";
+import type { PendingOpen, PendingPropose, PruneResult, WorktreeService } from "./service.ts";
 
 /**
  * What a key is about to do that nobody should be able to do by accident, held
@@ -57,6 +57,16 @@ export type Pending =
       readonly kind: "trust-open";
       readonly summary: WorktreeSummary;
       readonly waiting: PendingOpen;
+    }
+  /**
+   * `/propose`: a pull request is about to be opened, onto the base the stack
+   * says. The one question here whose subject is other people's screens — a
+   * pull request is a request — and the base is the part worth reading first.
+   */
+  | {
+      readonly kind: "propose";
+      readonly summary: WorktreeSummary;
+      readonly proposal: PendingPropose;
     };
 
 /**
@@ -151,15 +161,34 @@ export function describePending(target: Pending): {
 
   // Both kinds, counted apart. `x` deletes untracked files too, and one of
   // those may be work git has never seen a copy of — folding it into "3
-  // changes" would be the sentence someone regrets having skimmed. Always red:
-  // discarding changes for good is a risk of a different kind from a removal,
-  // which leaves the branch and its commits where they were.
+  // changes" would be the sentence someone regrets having skimmed. Amber and
+  // not red any more, and the sentence says why: what goes is saved as a
+  // commit first, and the line after `y` names the `git stash apply` that
+  // brings it back. A removal of a dirty worktree stays red — it keeps no copy.
   if (target.kind === "reset") {
     const { dir, changed, untracked } = target.summary;
 
     return {
-      text: `discard ${describeDiscard(changed - untracked, untracked)} in ${dir}? there is no undo`,
-      colour: theme.danger,
+      text: `discard ${describeDiscard(changed - untracked, untracked)} in ${dir}? a copy is kept for git stash apply`,
+      colour: theme.warn,
+    };
+  }
+
+  // The base is the sentence. A pull request onto the wrong base is the
+  // mistake this command exists to prevent, so it is the one word the prompt
+  // has to be read for; the push is said too, since for a branch on no remote
+  // `y` is also its first push. Amber, like the other pushes: it reaches other
+  // people, and it can be closed.
+  if (target.kind === "propose") {
+    const { dir, branch } = target.summary;
+    const { base, remote, publish } = target.proposal;
+    const push = publish
+      ? `it is pushed to ${remote}/${branch} first`
+      : "what is ahead is pushed first";
+
+    return {
+      text: `open a pull request for ${dir} onto ${base}? ${push}`,
+      colour: theme.warn,
     };
   }
 
@@ -303,6 +332,16 @@ export function commitPending(
   // `y` is `--force`: the question named the remote being replaced.
   if (target.kind === "upstream") {
     return { label: `following ${target.url}`, run: () => service.upstream(target.url, true) };
+  }
+
+  // The real run decides the base again rather than being handed the prompt's:
+  // `grove propose` reads the stack when it runs, and the two agree because
+  // they are the same read.
+  if (target.kind === "propose") {
+    return {
+      label: `proposing ${target.summary.dir}`,
+      run: () => service.propose(target.summary.path),
+    };
   }
 
   // `y` here records having read the line that was on the row, which is what
