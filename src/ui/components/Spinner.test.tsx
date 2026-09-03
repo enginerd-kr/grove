@@ -35,6 +35,51 @@ async function drawn(instance: { readonly frames: string[] }, count: number): Pr
   return instance.frames.map(plain);
 }
 
+/**
+ * The spinner's clock, turned by hand.
+ *
+ * The tests that say which frame follows which cannot let the interval run:
+ * a tick's frame is drawn in a React scheduler task, not in the tick, and the
+ * scheduler hands the event loop back after 5ms of work. On a starved runner
+ * — the macOS shard, three times slower than ubuntu — the next tick came due
+ * in that gap, React folded both updates into one commit, and a glyph was
+ * never drawn. Nothing the component promises was broken; the test had
+ * assumed a frame per tick, which is the interval racing the renderer.
+ *
+ * So `setInterval` is captured instead of started, and `tick` calls what it
+ * captured once and waits for the frame that call produces before returning.
+ * Two updates can never be pending at once, and "one frame per tick, in
+ * order" is exactly what is asserted. `restore` puts the real one back;
+ * the timer handed to the component is real, so its `clearInterval` on
+ * unmount has something to clear.
+ */
+function clock() {
+  const real = globalThis.setInterval;
+  let callback: (() => void) | undefined;
+  globalThis.setInterval = ((fn: () => void) => {
+    callback = fn;
+    return real(() => {}, 2_000_000_000);
+  }) as typeof setInterval;
+
+  return {
+    async tick(instance: { readonly frames: string[] }, times = 1): Promise<void> {
+      for (let i = 0; i < times; i++) {
+        // The interval is started from an effect, which lands after the mount.
+        await waitFor(
+          () => (callback ? "started" : ""),
+          (frame) => frame === "started",
+        );
+        const before = instance.frames.length;
+        callback?.();
+        await drawn(instance, before + 1);
+      }
+    },
+    restore(): void {
+      globalThis.setInterval = real;
+    },
+  };
+}
+
 describe("Spinner", () => {
   test("starts on the first frame, with nothing else on the line", () => {
     const instance = render(<Spinner intervalMs={null} />);
@@ -64,24 +109,30 @@ describe("Spinner", () => {
   });
 
   test("advances one frame per interval, keeping the label", async () => {
+    const ticks = clock();
     const instance = render(<Spinner label="cloning" intervalMs={TICK} />);
     try {
-      expect((await drawn(instance, 4)).slice(0, 4)).toEqual(
+      await ticks.tick(instance, 3);
+      expect(instance.frames.map(plain).slice(0, 4)).toEqual(
         FRAMES.slice(0, 4).map((frame) => `${frame} cloning`),
       );
     } finally {
       instance.unmount();
+      ticks.restore();
     }
   });
 
   test("wraps back round to the first frame after the last", async () => {
+    const ticks = clock();
     const instance = render(<Spinner intervalMs={TICK} />);
     try {
       // Proof of the modulo rather than of the tenth tick: without it the
       // component would index past the end and draw nothing.
-      expect((await drawn(instance, 12)).slice(0, 12)).toEqual([...FRAMES, FRAMES[0], FRAMES[1]]);
+      await ticks.tick(instance, 11);
+      expect(instance.frames.map(plain).slice(0, 12)).toEqual([...FRAMES, FRAMES[0], FRAMES[1]]);
     } finally {
       instance.unmount();
+      ticks.restore();
     }
   });
 
@@ -123,6 +174,7 @@ describe("Spinner", () => {
   });
 
   test("unfreezing starts it moving again", async () => {
+    const ticks = clock();
     const instance = render(<Spinner intervalMs={null} />);
     try {
       await nextFrame(TICK * 4);
@@ -131,12 +183,11 @@ describe("Spinner", () => {
       instance.rerender(<Spinner intervalMs={TICK} />);
       const held = instance.frames.length;
 
-      expect((await drawn(instance, held + 2)).slice(held, held + 2)).toEqual([
-        FRAMES[1],
-        FRAMES[2],
-      ]);
+      await ticks.tick(instance, 2);
+      expect(instance.frames.map(plain).slice(held, held + 2)).toEqual([FRAMES[1], FRAMES[2]]);
     } finally {
       instance.unmount();
+      ticks.restore();
     }
   });
 
