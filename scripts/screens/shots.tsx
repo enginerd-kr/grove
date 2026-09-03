@@ -205,7 +205,7 @@ const add: Shot = {
 const menu: Shot = {
   name: "menu",
   columns: 112,
-  rows: 45,
+  rows: 48,
   title: "grove — / opens the command menu",
   async drive(session) {
     for (let step = 0; step < 4; step++) await session.press(keys.down);
