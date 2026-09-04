@@ -4,6 +4,11 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.5.2 — 2026-09-04
+
+- grove is on npm: `npm install -g @enginerd-kr/grove`, or `npx @enginerd-kr/grove` for a look without installing. It is the same binary the Homebrew tap serves, wrapped so npm can carry it — a small Node launcher in `@enginerd-kr/grove`, and the binary itself in one package per platform, `@enginerd-kr/grove-darwin-arm64` and its three siblings, which npm picks by os and cpu — so nothing arrives that Bun would have to run, and there is no install script to trust. Both channels are cut from the same tag by the release workflow, with npm's provenance attached. macOS and Linux, no Windows build
+- The update tip names the installer that put grove there — `npm install -g @enginerd-kr/grove@latest` on an npm install, `brew upgrade grove` on the tap's — rather than brew for everyone
+
 ## 0.5.1 — 2026-09-03
 
 - The list has a `pr` column: the forge's word on each row's open pull request. The number, then `✓` `✗` `·` for checks passed, failed or still running, then `draft`, `approved`, `changes requested` and `conflicts` as they apply — the four things that decide whether a branch is ready, each of which meant leaving for a browser tab. One `gh pr list` per refresh tick, read beside git rather than after it and never waited for, so the rows draw the moment git has them and the column fills in behind; every refusal — no `gh`, not GitHub, no network — is a column that is not drawn rather than a red line every minute, and `grove list` never asks the forge at all. A `pr/42` review worktree is matched by its number, so the row reviewing a pull request shows whether it is green too
