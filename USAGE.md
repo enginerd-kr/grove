@@ -27,7 +27,7 @@ This guide covers the screen first, then the commands.
 ## Install and first run
 
 ```bash
-brew install enginerd-kr/tap/grove
+brew install enginerd-kr/tap/grove   # or: npm install -g @enginerd-kr/grove
 mkdir myapp && cd myapp
 grove
 ```

@@ -38,6 +38,10 @@ In practice, grove is for keeping several branches alive at once: a feature, a h
 
 ```bash
 brew install enginerd-kr/tap/grove
+# or, with npm (macOS and Linux; needs Node 18+)
+npm install -g @enginerd-kr/grove
+# or run it without installing
+npx @enginerd-kr/grove
 ```
 
 ## Quick Start
@@ -140,5 +144,7 @@ bun run lint
 bun run typecheck
 bun run build
 bun run compile
+bun run npm:build
+bun run npm:smoke
 bun run screenshots
 ```

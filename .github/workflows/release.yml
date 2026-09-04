@@ -2,14 +2,17 @@ name: Release
 
 # A version tag is the release: pushing v0.1.0 checks that CI already passed on
 # the tagged tree, builds the four self-contained binaries the Homebrew tap
-# serves, smoke-tests the one this runner can execute, and publishes the GitHub
-# release whose assets the tap's formula points at.
+# serves, smoke-tests the one this runner can execute, publishes the GitHub
+# release whose assets the tap's formula points at, and bumps the tap. A second
+# job then wraps the same four binaries as npm packages — @enginerd-kr/grove
+# plus one package per platform — and publishes them with trusted publishing.
 on:
   push:
     tags:
       - "v*"
 
 # `gh release create` writes the release; nothing else needs more than read.
+# The npm job narrows this for itself and adds the OIDC token it publishes with.
 permissions:
   contents: write
 
@@ -67,6 +70,18 @@ jobs:
       - name: Compile binaries
         run: bash scripts/build-binaries.sh
 
+      # The npm job below wraps these same files, so it must not compile its
+      # own: a second build is a second chance to differ from what the tap
+      # serves. Uploaded before the smoke test on purpose — a failed smoke
+      # fails this job, and the npm job never starts. The artifact is a zip,
+      # and zip forgets the executable bit; scripts/build-npm.ts sets it again.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/compile/
+          if-no-files-found: error
+          retention-days: 7
+
       # Only the target this runner can execute. The darwin binaries are
       # verified by hand before the tap's formula learns a new version.
       - name: Smoke-test the linux binary
@@ -112,3 +127,72 @@ jobs:
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
               commit -am "grove ${GITHUB_REF_NAME#v}"
           git push
+
+  # npm gets the four binaries the release above holds, in five packages: one
+  # per platform holding bin/grove, and @enginerd-kr/grove, whose bin is a Node
+  # launcher that runs the one npm chose by os/cpu. scripts/build-npm.ts writes
+  # the five manifests from the root package.json, so the version the tag guard
+  # above accepted is the version every package carries.
+  #
+  # Published with npm trusted publishing: the job's OIDC token is the
+  # credential, and there is no NPM_TOKEN anywhere. The binding that lets it
+  # publish lives in each package's settings on npmjs.com and names this
+  # repository and this file by name — rename release.yml and publishing stops.
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      # The OIDC token npm exchanges for a short-lived publish credential.
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing arrived in npm 11.5.1. Node 24 ships a newer npm,
+      # but the floor is what matters, so say it and enforce it.
+      - name: Assert npm can do trusted publishing
+        run: |
+          need=11.5.1
+          have="$(npm --version)"
+          [ "$(printf '%s\n' "$need" "$have" | sort -V | head -1)" = "$need" ] \
+            || npm install -g "npm@>=$need"
+          npm --version
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist/compile
+
+      - name: Assemble the npm packages
+        run: bun scripts/build-npm.ts
+
+      # Through `npm pack` and the launcher, the way a user's install would run
+      # it. Only the target this runner can execute.
+      - name: Smoke-test the linux package through the launcher
+        run: bash scripts/smoke-npm.sh linux-x64
+
+      # Platform packages first: the main package pins them at this exact
+      # version, and an installer that found the main one before its binaries
+      # existed would install a launcher with nothing to launch. A version the
+      # registry already has is skipped rather than failed, so re-running this
+      # job after a flake finishes the set instead of stopping at the first
+      # package it published last time.
+      - name: Publish
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for pkg in grove-darwin-arm64 grove-darwin-x64 grove-linux-x64 grove-linux-arm64 grove; do
+            if npm view "@enginerd-kr/${pkg}@${v}" version >/dev/null 2>&1; then
+              echo "@enginerd-kr/${pkg}@${v} is already on the registry, skipping"
+              continue
+            fi
+            (cd "dist/npm/${pkg}" && npm publish --provenance --access public)
+          done

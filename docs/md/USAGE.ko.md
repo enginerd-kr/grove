@@ -27,7 +27,7 @@ grove는 git 워크트리를 관리합니다. `grove`를 실행하면 대화형 
 ## 설치와 첫 실행
 
 ```bash
-brew install enginerd-kr/tap/grove
+brew install enginerd-kr/tap/grove   # 또는: npm install -g @enginerd-kr/grove
 mkdir myapp && cd myapp
 grove
 ```

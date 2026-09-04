@@ -21,6 +21,8 @@
     "check": "biome ci . && tsc --noEmit",
     "ci": "bun run check && bash scripts/test.sh",
     "compile": "bash scripts/build-binaries.sh",
+    "npm:build": "bun scripts/build-npm.ts",
+    "npm:smoke": "bash scripts/smoke-npm.sh",
     "screenshots": "bun scripts/screens/shots.tsx",
     "demo": "bun scripts/screens/demo.ts"
   },
