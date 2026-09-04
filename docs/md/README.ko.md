@@ -38,6 +38,10 @@ Git 워크트리를 쓰면 저장소 하나가 여러 작업 디렉터리를 가
 
 ```bash
 brew install enginerd-kr/tap/grove
+# 또는 npm으로 (macOS, Linux; Node 18+)
+npm install -g @enginerd-kr/grove
+# 또는 설치 없이 실행
+npx @enginerd-kr/grove
 ```
 
 ## 빠른 시작
@@ -140,5 +144,7 @@ bun run lint
 bun run typecheck
 bun run build
 bun run compile
+bun run npm:build
+bun run npm:smoke
 bun run screenshots
 ```

@@ -40,6 +40,13 @@ jobs:
       - name: Typecheck
         run: bunx tsc --noEmit
 
+      # The npm launcher (npm/grove/bin/grove.js) is the one file in the tree
+      # that runs under Node rather than Bun. This proves it forwards
+      # arguments, the install channel and the exit status, without compiling
+      # anything; the runner's own Node stands in for the user's.
+      - name: Smoke-test the npm launcher
+        run: bash scripts/smoke-npm.sh --launcher-only
+
   # The in-process tier: pure logic, and real git called as a function. Two
   # shards, because this job is the long pole of every PR — the macOS runner
   # takes over two minutes to do what ubuntu does in one, and the e2e tier

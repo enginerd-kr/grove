@@ -10,6 +10,7 @@ import {
 import type { RebaseChoice } from "../../core/commands/rebase.ts";
 import type { StackResult } from "../../core/commands/stack.ts";
 import type { Commit } from "../../core/history.ts";
+import { upgradeHint } from "../../core/install-channel.ts";
 import { plural } from "../../core/text.ts";
 import type { LineStore } from "../../report/lines.ts";
 import { StatusBar } from "../components/StatusBar.tsx";
@@ -766,7 +767,7 @@ export function App({
         tips.push({
           kind: "info",
           text: `tip: grove v${latest} is out — this is v${version}`,
-          hint: "upgrade: brew upgrade grove",
+          hint: upgradeHint(),
         });
       }
       tips.push(...GENERAL_TIPS);

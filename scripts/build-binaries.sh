@@ -3,10 +3,15 @@
 # tap serves. Outputs dist/compile/<os>-<arch>/grove and dist/release/
 # grove-<os>-<arch>.tar.gz — each tarball holds a single file named `grove`,
 # which is exactly what the formula's `bin.install "grove"` expects.
+#
+# Usage: scripts/build-binaries.sh [target…]
+# No arguments builds all four; naming targets builds only those, for a local
+# check or a CI job that can only run one of them anyway.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 targets=(darwin-arm64 darwin-x64 linux-x64 linux-arm64)
+if [ $# -gt 0 ]; then targets=("$@"); fi
 
 rm -rf dist/compile dist/release
 mkdir -p dist/release

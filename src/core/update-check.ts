@@ -6,8 +6,9 @@ import { join } from "node:path";
  * three seconds of patience, and silence about every possible failure.
  *
  * Releases are the source of truth — the Homebrew formula is bumped from the
- * tag by CI — so the GitHub API answers for brew without invoking brew, which
- * is slow and only knows what its last `brew update` fetched. The answer lands
+ * tag by CI, and the npm packages are published from the same tag — so the
+ * GitHub API answers for both channels without invoking brew, which is slow
+ * and only knows what its last `brew update` fetched. The answer lands
  * in a cache file so every launch of the day can tip without a request, and so
  * a dead network costs one timeout per day rather than one per launch.
  *
