@@ -189,6 +189,8 @@ const add: Shot = {
     await session.press("a");
     await session.type("feat/paging");
     await session.press(keys.enter);
+    await session.until("y approve setup");
+    await session.press("y");
     // The settled spelling, not the ambiguous one: the step reads `running bun
     // install` while it runs and `ran bun install` once it has, and a wait on
     // `bun install` alone is satisfied by the first — so the picture was a
