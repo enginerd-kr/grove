@@ -4,6 +4,15 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.5.3 — 2026-09-05
+
+- Start new work from the latest fetched remote default branch with `grove add` or `a`. Press `A` or use `--from` to branch from local work; `--on` also remembers a stack parent. Default-branch sync now only fast-forwards, preserving diverged local commits.
+- PR review sync now receives the latest PR commits without rebasing or pushing. Use `sync --contribute` to rebase onto the PR's actual base and push a contribution. After a force-push, `pr --replace` saves existing commits and uncommitted changes before replacing the checkout.
+- `clone` applies project setup after checkout and asks before running unapproved commands. `clone -b` keeps the default branch alongside the requested branch. Choose `--config-source worktree` on `add`, `pr`, or `setup` to try a branch's setup configuration; copied and linked files still come from the default branch.
+- Setup reports pending, running, failed, ready, or stale status and detects changes to configuration and supported dependency files. Failed setup leaves the worktree available for `grove setup` to retry. Hooks and `exec` receive a worktree ID, port, service name, and database name; `PORT` and `COMPOSE_PROJECT_NAME` have per-worktree defaults.
+- `prune --forge-merged` uses GitHub's merge status to recognize squash-merged PRs when the local tip matches the PR head, keeping additional local work. `doctor` reports a missing default-branch worktree. Removing worktrees and discarding changes now better protect saved work and shared resources.
+- The interactive list refreshes local changes independently of remote and PR queries, stays responsive during slow network reads, and reports background fetch status. English and Korean guides now follow the full workflow from cloning to development, PR review, and cleanup, with advanced options grouped by task.
+
 ## 0.5.2 — 2026-09-04
 
 - grove is on npm: `npm install -g @enginerd-kr/grove`, or `npx @enginerd-kr/grove` for a look without installing. It is the same binary the Homebrew tap serves, wrapped so npm can carry it — a small Node launcher in `@enginerd-kr/grove`, and the binary itself in one package per platform, `@enginerd-kr/grove-darwin-arm64` and its three siblings, which npm picks by os and cpu — so nothing arrives that Bun would have to run, and there is no install script to trust. Both channels are cut from the same tag by the release workflow, with npm's provenance attached. macOS and Linux, no Windows build
