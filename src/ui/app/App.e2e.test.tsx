@@ -422,7 +422,7 @@ describeUi("the app", () => {
         const ui = await open(root);
 
         try {
-          await press(ui, "a", (frame) => frame.includes("new branch from main"));
+          await press(ui, "a", (frame) => frame.includes("new branch from remote main"));
 
           await press(ui, "topic", (frame) => frame.includes("topic"));
           await press(ui, keys.backspace, (frame) => !frame.includes("topic"));

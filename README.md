@@ -50,23 +50,24 @@ npx @enginerd-kr/grove
 grove clone https://github.com/org/repo.git
 cd repo
 
+# If setup was deferred: grove setup main
 grove add feat/login
 grove add fix/prod-crash
 grove
 ```
 
-grove clone creates a managed repository. grove add creates a branch worktree and applies .grove.toml. Running grove with no arguments opens the interactive manager.
+grove clone creates a managed repository with a default-branch worktree and applies its setup, asking before unapproved commands in a terminal. grove add creates a branch worktree and applies .grove.toml. Running grove with no arguments opens the interactive manager.
 
 ## Stuff You Do With Grove
 
 - **Start a branch without losing your current one.** grove add feat/search creates a real worktree in a predictable path.
 - **Branch after you already started typing.** grove add feat/search --take moves your uncommitted changes into the new worktree and leaves the old one clean.
 - **Stack one change on another.** grove add feat/step-2 --on feat/step-1 remembers the base, sync rebases through it, grove stack draws the whole chain, and grove propose --stack opens a pull request for every step onto the one below.
-- **Review a pull request in a real checkout.** grove pr 42 takes a number, a URL, or a branch name. Push from there, or sync, and the pull request updates.
+- **Review a pull request in a real checkout.** grove pr 42 takes a number, a URL, or a branch name. Sync there receives the PR head without rebasing or pushing. Use `grove sync pr/42 --contribute` to explicitly rebase and push a contribution.
 - **Contribute from a fork.** grove clone --upstream keeps your trunk following the original and sends your branches to your fork. Nothing to configure afterwards.
 - **Rebase onto a base you pick.** grove rebase lists the candidates, carries your uncommitted changes through, and undoes everything if it conflicts.
 - **Give every coding agent its own workspace.** agents/refactor, agents/tests, agents/ui-copy — no second clone.
-- **Stop rebuilding the same local setup.** .grove.toml copies .env, links dependency folders, sets the environment, runs the install, opens your editor.
+- **Stop rebuilding the same local setup.** .grove.toml copies .env, links dependency folders, assigns a worktree port and service name, runs the install, opens your editor.
 - **See the whole repository at once.** grove shows branches, dirty worktrees, sync drift, recent activity, each branch's pull request with its checks and review, and which worktrees were set up from an older .grove.toml.
 - **Discard without regret.** grove reset keeps what it throws away as a commit, and tells you the git stash apply that brings it back.
 - **Clear away what is finished.** grove prune removes the worktrees whose branch is gone or already merged, and can ask GitHub about pull requests closed without merging.
@@ -92,8 +93,7 @@ Add .grove.toml to the default branch:
 ```toml
 [setup]
 copy = [".env", "certs", "config/local.json"]
-link = ["node_modules"]
-env = { PORT = 3000, API_HOST = "http://localhost:3000" }
+env = { API_HOST = "http://localhost:3000" }
 run = ["bun install"]
 open = "code ."
 
@@ -105,13 +105,15 @@ Every new worktree is then filled in from it:
 
 - **copy** brings files or directories from the default branch's worktree. The trunk's copy wins. A pattern like packages/*/.env covers a package added next week.
 - **link** symlinks shared paths like dependency folders, and leaves what the worktree already has. Patterns work here too.
-- **env** reaches the setup commands.
-- **run** runs shell commands in the new worktree, in order.
+- **env** reaches the setup commands. `PORT` and `COMPOSE_PROJECT_NAME` default to workspace-assigned values; explicit config overrides them.
+- **run** runs shell commands in the new worktree, in order. Install dependencies separately in each worktree; share package-manager caches instead of `node_modules`.
 - **open** starts your editor.
 
 <p align="center">
   <img src="docs/screens/add.svg" alt="grove adding a worktree and applying .grove.toml setup steps" width="100%">
 </p>
+
+See [the workspace development cycle](USAGE.md#workspace-development-cycle) for review updates, setup recipes, runtime variables, and cleanup.
 
 ## Layout
 

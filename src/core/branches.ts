@@ -222,8 +222,9 @@ function refNames(stdout: string): readonly string[] {
  * `git cherry` compares patches rather than commits, which is the only way to
  * answer this after a rewrite: it prefixes with `-` each commit whose change is
  * already on `base` under a different sha, and with `+` each one that is not.
- * All `-` is exactly the trace a squash or a rebase leaves — the work landed,
- * and none of the commits carrying it survived to be reachable.
+ * All `-` detects equivalent individual patches, including rebases — the work landed,
+ * and none of the commits carrying it survived to be reachable. Multi-commit
+ * squashes need forge confirmation because their combined patch differs.
  *
  * An empty answer is *not* merged. A branch whose tip is unreachable from the
  * base always has commits of its own, so empty means git declined to compare

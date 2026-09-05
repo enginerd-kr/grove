@@ -85,7 +85,7 @@ describe("what setup records", () => {
       expect(fresh.map((summary) => [summary.dir, summary.setupStale])).toEqual([
         // The trunk was never filled in through grove, so nothing is known
         // about it — and nothing is claimed.
-        ["main", false],
+        ["main", true],
         ["feat/login", false],
       ]);
 
@@ -94,7 +94,7 @@ describe("what setup records", () => {
       await fixture.configure('[setup]\ncopy = [".env", ".env.local"]\n');
       const moved = await listWorktreeSummaries(repo, repo.root);
       expect(moved.map((summary) => [summary.dir, summary.setupStale])).toEqual([
-        ["main", false],
+        ["main", true],
         ["feat/login", true],
       ]);
 
@@ -127,7 +127,7 @@ describe("what setup records", () => {
       const untrusted = await setUp(fixture);
       expect(untrusted.untrusted).toBe(true);
       expect((await appliedFingerprints(repo.gitDir)).get(branch)).toBe(first);
-      expect((await listWorktreeSummaries(repo, repo.root))[1]?.setupStale).toBe(true);
+      expect((await listWorktreeSummaries(repo, repo.root))[1]?.setupState).toBe("pending");
     });
   });
 

@@ -515,7 +515,20 @@ async function checkLinks({ repo, worktrees }: Context): Promise<Finding | undef
   };
 }
 
+async function checkTrunkWorktree({ repo, worktrees }: Context): Promise<Finding | undefined> {
+  const trunk = await trunkOf(repo.gitDir).catch(() => undefined);
+  if (!trunk || worktrees.some((record) => record.branch === trunk.branch)) return undefined;
+  return {
+    check: "missing-trunk-worktree",
+    severity: "warning",
+    summary: `no ${trunk.branch} worktree supplies shared setup files`,
+    details: ["copy and link need the default branch's worktree"],
+    fix: [`grove add ${trunk.branch}`, `grove setup ${trunk.branch}`],
+  };
+}
+
 const CHECKS: readonly Check[] = [
+  checkTrunkWorktree,
   checkFetchRefspec,
   checkRemoteTracking,
   checkOriginHead,

@@ -1083,11 +1083,8 @@ export function checkedPath(key: "copy" | "link", value: string): string {
 /**
  * Reads the repository's `.grove.toml`, with its paths checked.
  *
- * **The trunk's copy, not the worktree being set up.** Both were tenable and
- * this one is uniform: a branch cut last month has no file in it, and reading
- * the local copy would mean the repository was configured for the worktrees
- * made after Tuesday and not the ones made before. It is also where copies come
- * from already, so there is one rule here rather than two.
+ * The caller selects a checkout; source.ts defaults to trunk and honors the
+ * branch's explicit worktree configuration choice.
  *
  * Paths are checked here rather than at the point of use, so a file with an
  * unusable path in it is refused as a whole: a run that copied two of three

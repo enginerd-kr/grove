@@ -7,9 +7,10 @@ import {
   type Trunk,
   trunkOf,
 } from "../branches.ts";
-import { GroveError } from "../errors.ts";
+import { GroveError, isGroveError } from "../errors.ts";
 import { gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { reviewOf } from "../review.ts";
 import { ancestry, clearParent, readStack, type Stack, setParent, stackOrder } from "../stack.ts";
 import { toLines } from "../text.ts";
 import {
@@ -20,6 +21,7 @@ import {
   type WorktreeRecord,
   worktreeDir,
 } from "../worktrees.ts";
+import { checkoutPullRequest, pullRequestBase } from "./pr.ts";
 
 /**
  * `grove sync` — fetch, then bring worktrees up to date with the default branch.
@@ -38,6 +40,8 @@ import {
  */
 
 export type SyncOptions = {
+  /** Explicitly rebase and push a review branch onto its PR base. */
+  readonly contribute?: boolean;
   /** Which worktree. Omitted means the one you are standing in. */
   readonly target?: string;
   readonly all: boolean;
@@ -149,7 +153,54 @@ export async function syncWorktrees(
     // Resolved inside the loop rather than up front, because the answer depends
     // on what the branches above this one have just become: a parent that was
     // rebased two iterations ago is where this one is going.
-    const base = await baseFor(repo, target.branch, trunk, stack, reporter);
+    const review =
+      target.branch === undefined ? undefined : await reviewOf(repo.gitDir, target.branch);
+    // Legacy review branches predate metadata but have an explicit PR remote.
+    const legacy = /^pr\/(\d+)$/.exec(target.branch ?? "");
+    const tracking = legacy ? (await statusOf(target.path)).upstream : undefined;
+    const reviewNumber =
+      review?.number ??
+      (tracking?.startsWith(`pr-${legacy?.[1]}/`) ? Number(legacy?.[1]) : undefined);
+    if (reviewNumber !== undefined && !options.contribute) {
+      try {
+        if (target.rebasing)
+          throw new GroveError("refused", "a rebase is already in progress here");
+        const result = await checkoutPullRequest(
+          repo,
+          cwd,
+          {
+            pr: review?.url ?? String(reviewNumber),
+            setup: false,
+            trust: false,
+            open: false,
+          },
+          reporter,
+        );
+        outcomes.push({
+          path: target.path,
+          dir: worktreeDir(repo.root, target.path),
+          branch: target.branch,
+          kind: result.updated === "unchanged" ? "up-to-date" : "fast-forwarded",
+          onto: result.upstream,
+        });
+      } catch (error) {
+        if (!isGroveError(error)) throw error;
+        outcomes.push({
+          path: target.path,
+          dir: worktreeDir(repo.root, target.path),
+          branch: target.branch,
+          kind: "skipped",
+          reason: `${error.message}${error.hint ? `; ${error.hint}` : ""}`,
+        });
+      }
+      continue;
+    }
+    const base =
+      reviewNumber !== undefined && options.contribute
+        ? {
+            onto: `${trunk.remote}/${await pullRequestBase(repo, review?.url ?? String(reviewNumber))}`,
+          }
+        : await baseFor(repo, target.branch, trunk, stack, reporter);
 
     outcomes.push(await syncOne(target, repo.root, trunk, base, options, reporter));
   }
@@ -381,30 +432,15 @@ async function syncOne(
     });
   };
 
-  /**
-   * The default branch: a fast-forward when it is merely behind, `pull
-   * --rebase` when it has commits of its own.
-   *
-   * The commits are the deciding fact. A commit sitting only on the local
-   * trunk — and never on the remote one, which is the line `rebaseOnto` draws
-   * — already happened: somebody made it, it is theirs, and a tool that
-   * refused to sync until it was disowned would be demanding an undo of an
-   * event. So it is carried: replayed on top of what the remote gained, then
-   * pushed back **plainly**. No force spelling is ever aimed at the trunk —
-   * after the rebase the branch is strictly ahead, so a plain push suffices,
-   * and if the remote is protected the refusal arrives as a warning while the
-   * local rebase stands, the same way a contended feature branch is reported.
-   */
+  // Keep the reference checkout fast-forward only; local commits stay in place.
   if (record.branch === trunk.branch) {
     const ff = await runGit(["merge", "--ff-only", onto], { cwd: record.path });
     if (ff.code === 0) return stamp(await settle(record, name, before, step, "fast-forwarded"));
 
-    const conflicted = await rebaseOnto(onto);
-    if (conflicted) return conflicted;
-
-    const published = await publish(record, name, onto, options, reporter, { force: false });
-
-    return stamp({ ...(await settle(record, name, before, step, "rebased")), ...published });
+    step.fail(`${name} cannot fast-forward`);
+    return skip(
+      "the trunk has diverged; move local commits to a feature branch or explicitly rebase it",
+    );
   }
 
   /**

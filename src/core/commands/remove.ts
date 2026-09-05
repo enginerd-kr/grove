@@ -7,6 +7,8 @@ import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase } from "../layout.ts";
+import { reviewOf } from "../review.ts";
+import { releaseRuntime } from "../runtime.ts";
 import { forgetBranch, readStack } from "../stack.ts";
 import {
   LISTED,
@@ -107,6 +109,7 @@ export async function removeWorktree(
       // `--force` is what lets git delete a dirty tree, so `discardDirty` needs
       // it too — the refusals grove itself makes were already decided above.
       const forced = options.force || options.discardDirty === true;
+      await releaseRuntime(repo, target.path);
       await runGitOrThrow(["worktree", "remove", ...(forced ? ["--force"] : []), target.path], {
         cwd: repo.gitDir,
       });
@@ -123,7 +126,12 @@ export async function removeWorktree(
   // directory. The branch stays, and a worktree `grove add` makes for it later
   // is filled in afresh and records itself — until then there is nothing to
   // be stale.
-  if (target.branch !== undefined) await clearApplied(repo.gitDir, target.branch);
+  if (target.branch !== undefined) {
+    await clearApplied(repo.gitDir, target.branch);
+    await runGit(["config", "--unset-all", `branch.${target.branch}.grovesetupstate`], {
+      cwd: repo.gitDir,
+    });
+  }
 
   if (options.deleteBranch && target.branch !== undefined) {
     const outcome = await deleteBranch(
@@ -282,6 +290,7 @@ export async function deleteBranch(
   reporter: Reporter,
 ): Promise<{ readonly deleted: boolean; readonly kept?: string }> {
   const stack = await readStack(bare);
+  const review = await reviewOf(bare, branch);
   const result = await runGit(["branch", options.force ? "-D" : "-d", branch], { cwd: bare });
   if (result.code !== 0) return { deleted: false, kept: `git -C ${bare} branch -D ${branch}` };
 
@@ -290,7 +299,7 @@ export async function deleteBranch(
   }
 
   if (options.announce) reporter.info(`deleted branch ${branch}`);
-  await dropPrRemote(bare, branch, reporter);
+  await dropPrRemote(bare, review ? `pr/${review.number}` : branch, reporter);
   // The snapshot `reset` held for this branch goes with it: it was kept for
   // a regret about a branch that is now gone on purpose. Absent is the
   // ordinary case, and the object stays reachable by its sha either way.

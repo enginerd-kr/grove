@@ -40,7 +40,10 @@ const COMPANIONS: Readonly<Record<string, readonly string[]>> = {
 
 /** A value the flag will accept, so a `run` command is what comes back. */
 function argvFor(spec: SubcommandSpec, flag: FlagSpec): readonly string[] {
-  const written = flag.type === "string" ? [`--${flag.name}`, "value"] : [`--${flag.name}`];
+  const written =
+    flag.type === "string"
+      ? [`--${flag.name}`, flag.name === "config-source" ? "worktree" : "value"]
+      : [`--${flag.name}`];
   const companion = COMPANIONS[`${spec.name} --${flag.name}`] ?? [];
 
   return [spec.name, ...written, ...companion, ...requiredArgs(spec)];

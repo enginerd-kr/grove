@@ -6,6 +6,8 @@ import {
   type SetupResult,
   trustAndRun,
 } from "../../hooks/index.ts";
+import { type ConfigSource, setConfigSource } from "../../hooks/source.ts";
+import { recordSetupState } from "../../hooks/state.ts";
 import { type Reporter, withStep } from "../../report/reporter.ts";
 import {
   defaultBranch,
@@ -17,7 +19,7 @@ import {
 } from "../branches.ts";
 import { GroveError } from "../errors.ts";
 import { pathExists } from "../fs.ts";
-import { gitSucceeds, runGitOrThrow } from "../git.ts";
+import { gitOutput, gitSucceeds, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { contains, worktreePathFor } from "../layout.ts";
 import { readStack, setParent, wouldCycle } from "../stack.ts";
@@ -27,6 +29,7 @@ import { listWorktrees, type WorktreeRecord, worktreeDir } from "../worktrees.ts
 /** `grove add` — give a branch a worktree, creating the branch if it does not exist. */
 
 export type AddOptions = {
+  readonly configSource?: ConfigSource;
   readonly branch: string;
   /** Base for a branch that does not exist yet. Defaults to the remote's default. */
   readonly from?: string;
@@ -80,6 +83,9 @@ export type AddOptions = {
 };
 
 export type AddResult = {
+  /** Actual starting ref and commit for a newly created branch. */
+  readonly base?: string;
+  readonly baseSha?: string;
   readonly path: string;
   /**
    * Relative to the root, `/`-separated — the name the list uses.
@@ -131,6 +137,24 @@ export async function addWorktree(
     // of `--on` — the branch was cut from wherever it was cut from, and where
     // it goes back to is a fact this command can still record.
     if (parent !== undefined) await setParent(repo.gitDir, options.branch, parent);
+    if (options.configSource !== undefined) {
+      await setConfigSource(repo, options.branch, options.configSource);
+      if (options.setup) {
+        const took =
+          source !== undefined && source !== path
+            ? await takeChanges(source, path, reporter)
+            : undefined;
+        const setup = await setUpWorktree(
+          repo,
+          path,
+          options.branch,
+          options.trust ? undefined : await repoHooks(repo, path),
+          reporter,
+          options.open,
+        );
+        return { ...existing, parent, setup, took };
+      }
+    }
     if (source === undefined || source === path) return { ...existing, parent };
 
     return { ...existing, parent, took: await takeChanges(source, path, reporter) };
@@ -145,12 +169,19 @@ export async function addWorktree(
   // afterwards would mean a directory on disk that the same command refused.
   // The file is the trunk's, which is why it can be read before this branch has
   // a worktree at all.
-  const hooks = options.setup ? await repoHooks(repo) : undefined;
+  if (options.setup && options.configSource !== "worktree") await repoHooks(repo);
 
   // `origin` rather than `source`: where the *branch* comes from, which in a
   // command that can also be moving another worktree's changes across is not
   // the only thing something could be the source of.
   const origin = await resolveSource(repo.gitDir, options, reporter);
+
+  const baseSha =
+    origin.kind === "new"
+      ? (await gitOutput(["rev-parse", `${origin.base}^{commit}`], { cwd: repo.gitDir })).trim()
+      : undefined;
+  if (origin.kind === "new")
+    reporter.info(`starting from ${origin.base} (${baseSha?.slice(0, 12)})`);
 
   await withStep(
     reporter,
@@ -161,13 +192,26 @@ export async function addWorktree(
     },
     // `git worktree add` creates intermediate directories itself, so a nested
     // path needs no mkdir of ours.
-    () => runGitOrThrow(argsFor(origin, options, path), { cwd: repo.gitDir }),
+    () =>
+      runGitOrThrow(
+        argsFor(
+          origin.kind === "new" && baseSha ? { ...origin, base: baseSha } : origin,
+          options,
+          path,
+        ),
+        { cwd: repo.gitDir },
+      ),
   );
+
+  await recordSetupState(repo.gitDir, options.branch, "pending");
 
   // Written before the push rather than after it: a remote that refused the
   // branch says nothing about which branch it was cut from, and a stack whose
   // record depended on the network would be one that quietly is not a stack.
   if (parent !== undefined) await setParent(repo.gitDir, options.branch, parent);
+
+  if (options.configSource !== undefined)
+    await setConfigSource(repo, options.branch, options.configSource);
 
   const pushFailure = `created the worktree, but pushing ${options.branch} failed`;
   const pushedTo = options.push
@@ -180,12 +224,12 @@ export async function addWorktree(
   // the filling-in happens on top of them.
   const took = source === undefined ? undefined : await take(source, path, dir, reporter);
 
-  const setup = hooks
+  const setup = options.setup
     ? await setUpWorktree(
         repo,
         path,
         options.branch,
-        options.trust ? undefined : hooks,
+        options.trust ? undefined : await repoHooks(repo, path),
         reporter,
         options.open,
       )
@@ -196,6 +240,7 @@ export async function addWorktree(
     dir,
     branch: options.branch,
     source: origin.kind,
+    ...(origin.kind === "new" ? { base: origin.base, baseSha } : {}),
     upstream: upstreamOf(origin, options.branch, pushedTo),
     alreadyPresent: false,
     parent,

@@ -31,6 +31,8 @@ export type GlobalOptions = {
 export type GroveCommand =
   | {
       readonly name: "clone";
+      readonly setup?: boolean;
+      readonly trust?: boolean;
       readonly url: string;
       readonly dir?: string;
       readonly branch?: string;
@@ -44,6 +46,7 @@ export type GroveCommand =
     }
   | {
       readonly name: "add";
+      readonly configSource?: "trunk" | "worktree";
       readonly branch: string;
       readonly from?: string;
       /** `--on`: the branch this one is stacked on, recorded as well as used as the base. */
@@ -58,6 +61,8 @@ export type GroveCommand =
     }
   | {
       readonly name: "pr";
+      readonly configSource?: "trunk" | "worktree";
+      readonly replace?: boolean;
       /** As typed: a number, a URL, or a branch. `gh` resolves it, so we do not. */
       readonly pr: string;
       readonly setup: boolean;
@@ -87,6 +92,7 @@ export type GroveCommand =
   | { readonly name: "doctor" }
   | {
       readonly name: "setup";
+      readonly configSource?: "trunk" | "worktree";
       /** Absent, and without `--all`, means the worktree the shell is standing in. */
       readonly target?: string;
       readonly all: boolean;
@@ -100,6 +106,7 @@ export type GroveCommand =
     }
   | {
       readonly name: "prune";
+      readonly forgeMerged?: boolean;
       /** `--gone`/`--merged`; absent means both. */
       readonly only?: "gone" | "merged";
       /** `--closed`: also ask `gh` for pull requests closed without merging. */
@@ -139,6 +146,7 @@ export type GroveCommand =
     }
   | {
       readonly name: "sync";
+      readonly contribute?: boolean;
       readonly target?: string;
       readonly all: boolean;
       readonly abortOnConflict: boolean;
@@ -235,11 +243,18 @@ function buildCommand(
   /** Every missing-argument refusal, named for the argument rather than the flag. */
   const needs = (what: string): CliCommand => usageError(spec, `${spec.name} needs ${what}`);
 
+  const configSource = str(values, "config-source");
+  if (configSource !== undefined && configSource !== "trunk" && configSource !== "worktree") {
+    return usageError(spec, "--config-source takes trunk or worktree");
+  }
+
   switch (spec.name) {
     case "clone": {
       if (first === undefined) return needs("a repository URL");
       return {
         name: "clone",
+        ...(bool(values, "no-setup") ? { setup: false } : {}),
+        ...(bool(values, "trust") ? { trust: true } : {}),
         url: first,
         dir: second,
         branch: str(values, "branch"),
@@ -265,6 +280,7 @@ function buildCommand(
 
       return {
         name: "add",
+        ...(configSource === undefined ? {} : { configSource }),
         branch: first,
         from,
         on,
@@ -279,6 +295,8 @@ function buildCommand(
       if (first === undefined) return needs("a pull request");
       return {
         name: "pr",
+        ...(configSource === undefined ? {} : { configSource }),
+        ...(bool(values, "replace") ? { replace: true } : {}),
         pr: first,
         setup: !bool(values, "no-setup"),
         trust: bool(values, "trust"),
@@ -326,6 +344,7 @@ function buildCommand(
     case "setup":
       return {
         name: "setup",
+        ...(configSource === undefined ? {} : { configSource }),
         target: first,
         all: bool(values, "all"),
         trust: bool(values, "trust"),
@@ -343,6 +362,7 @@ function buildCommand(
 
       return {
         name: "prune",
+        ...(bool(values, "forge-merged") ? { forgeMerged: true } : {}),
         // Both, or neither, is the same request as the default: the two are
         // halves of one question, and asking for both halves is asking the
         // question.
@@ -391,6 +411,7 @@ function buildCommand(
     case "sync":
       return {
         name: "sync",
+        ...(bool(values, "contribute") ? { contribute: true } : {}),
         target: first,
         all: bool(values, "all"),
         abortOnConflict: !bool(values, "no-abort"),

@@ -19,6 +19,12 @@ import type { PendingOpen, PendingPropose, PruneResult, WorktreeService } from "
  * can be undone.
  */
 export type Pending =
+  | {
+      readonly kind: "trust-setup";
+      readonly open?: boolean;
+      readonly branch: string;
+      readonly commands: readonly string[];
+    }
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
   | {
       readonly kind: "many";
@@ -81,11 +87,17 @@ export type Pending =
  * costs a prompt in front of something harmless, or — the direction that
  * matters — no prompt in front of something that is not.
  */
+function isReview(summary: WorktreeSummary): boolean {
+  if (summary.review) return true;
+  const number = /^pr\/(\d+)$/.exec(summary.branch ?? "")?.[1];
+  return number !== undefined && summary.upstream?.startsWith(`pr-${number}/`) === true;
+}
+
 export function wouldForcePush(summary: WorktreeSummary): boolean {
   // The trunk is the one branch `sync` pushes plainly: after its rebase it is
   // strictly ahead, so there is nothing on the remote to overwrite. A detached
   // HEAD has no branch to move at all.
-  if (summary.isDefault || summary.branch === undefined) return false;
+  if (isReview(summary) || summary.isDefault || summary.branch === undefined) return false;
 
   // Both of these `sync` skips before it touches anything, so a prompt here
   // would stand in front of a command that is about to decline — which is the
@@ -121,7 +133,7 @@ export function wouldForcePush(summary: WorktreeSummary): boolean {
  * at the remote, and the trunk always has one.
  */
 export function wouldPublish(summary: WorktreeSummary): boolean {
-  if (summary.isDefault || summary.branch === undefined) return false;
+  if (isReview(summary) || summary.isDefault || summary.branch === undefined) return false;
   if (summary.dirty || summary.rebasing) return false;
 
   return summary.upstream === undefined;
@@ -165,6 +177,13 @@ export function describePending(target: Pending): {
   // not red any more, and the sentence says why: what goes is saved as a
   // commit first, and the line after `y` names the `git stash apply` that
   // brings it back. A removal of a dirty worktree stays red — it keeps no copy.
+  if (target.kind === "trust-setup") {
+    return {
+      text: `set up ${target.branch}? approve: ${target.commands.map((line) => JSON.stringify(line)).join("; ")}`,
+      colour: theme.warn,
+    };
+  }
+
   if (target.kind === "reset") {
     const { dir, changed, untracked } = target.summary;
 
@@ -295,6 +314,14 @@ export function commitPending(
   target: Pending,
   service: WorktreeService,
 ): { readonly label: string; readonly run: () => Promise<string> } {
+  if (target.kind === "trust-setup") {
+    return {
+      label: `setting up ${target.branch}`,
+      run: () =>
+        target.open ? service.trustAndRun(target.branch) : service.setup(target.branch, true),
+    };
+  }
+
   if (target.kind === "reset") {
     return {
       label: `discarding changes in ${target.summary.dir}`,

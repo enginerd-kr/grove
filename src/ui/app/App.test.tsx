@@ -974,7 +974,7 @@ describe("the add prompt", () => {
   async function prompting(service: WorktreeService) {
     const ui = await opened_with(service);
     ui.stdin.write("a");
-    await settled(ui, (frame) => frame.includes("new branch from main"));
+    await settled(ui, (frame) => frame.includes("new branch from remote main"));
 
     return ui;
   }
@@ -1001,7 +1001,7 @@ describe("the add prompt", () => {
 
     // And the name that was built is the name that was asked for — the prompt
     // is not a display of one string over a different one.
-    expect(calls.added).toEqual([{ branch: "aXbc", from: "main" }]);
+    expect(calls.added).toEqual([{ branch: "aXbc", from: undefined }]);
   });
 
   test("the caret stops at both ends rather than wrapping round", async () => {
@@ -1095,7 +1095,7 @@ describe("the add prompt", () => {
 
     await press(ui, keys.enter);
     await settled(ui, (each) => each.includes("added plain"));
-    expect(calls.added).toEqual([{ branch: "plain", from: "main" }]);
+    expect(calls.added).toEqual([{ branch: "plain", from: undefined }]);
   });
 
   // The failure this prevents: `a` opening the prompt and the very next
@@ -1105,7 +1105,7 @@ describe("the add prompt", () => {
     const ui = await prompting(service);
 
     ui.stdin.write("s");
-    await settled(ui, (frame) => /new branch from main\s+s/.test(frame));
+    await settled(ui, (frame) => /new branch from remote main\s+s/.test(frame));
 
     expect(calls.synced).toEqual([]);
   });
@@ -1124,12 +1124,12 @@ describe("the add prompt", () => {
     expect(IN_LIST(ui.frame())).toBe(true);
   });
 
-  test("a new branch starts from the worktree the cursor is on", async () => {
+  test("A explicitly starts from the selected worktree", async () => {
     const { service, calls } = stub();
     const ui = await opened_with(service);
 
     await toLogin(ui);
-    ui.stdin.write("a");
+    ui.stdin.write("A");
     // Said on the prompt, not left to be discovered from the result: `a` on one
     // row and `a` on another start the branch in different places.
     await settled(ui, (frame) => frame.includes("new branch from feat/login"));
@@ -1155,7 +1155,7 @@ describe("the add prompt", () => {
 
     ui.stdin.write("a");
     const frame = await settled(ui, (each) => each.includes("new branch"));
-    expect(frame).not.toContain("new branch from");
+    expect(frame).toContain("new branch from remote");
 
     await press(ui, "fix/crash");
     await settled(ui, (each) => each.includes("fix/crash"));
@@ -1172,7 +1172,7 @@ describe("the add prompt", () => {
     ui.stdin.write(keys.down);
     await settled(ui, (frame) => /▸ +feat\//.test(frame));
     ui.stdin.write("a");
-    await settled(ui, (frame) => frame.includes("new branch feat/"));
+    await settled(ui, (frame) => frame.includes("new branch from remote main   feat/"));
 
     // Typed straight on the end, which is what a caret parked at `value.length`
     // is for — reaching for `a` on a folder is how you say "another one of
@@ -1193,7 +1193,7 @@ describe("the add prompt", () => {
    * terminal, so it prints them and skips; the screen just made the worktree
    * itself, so it runs them right after, the way `--trust` would.
    */
-  test("`a` runs the commands the new worktree's file wants to run", async () => {
+  test("`a` asks before running the new worktree setup", async () => {
     const { service, calls } = stub({
       pendingCommands: async () => ["bun install", "./scripts/postinstall.sh"],
     });
@@ -1204,11 +1204,14 @@ describe("the add prompt", () => {
     await press(ui, "feat/new");
     await settled(ui, (frame) => frame.includes("feat/new"));
     await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("approve:"));
+    expect(calls.trusted).toEqual([]);
+    await press(ui, "y");
     await settled(ui, (frame) => frame.includes("1 run in"));
 
     // The worktree was made, and the commands ran right after it — nothing
     // asked, because the keystroke that made it was the asking.
-    expect(calls.added).toEqual([{ branch: "feat/new", from: "main" }]);
+    expect(calls.added).toEqual([{ branch: "feat/new", from: undefined }]);
     expect(calls.trusted).toEqual(["feat/new"]);
   });
 
@@ -1368,7 +1371,7 @@ describe("the keys", () => {
     // And it is a real value, not decoration — enter from here adds it.
     ui.stdin.write(keys.enter);
     await settled(ui, (frame) => !frame.includes("enter add"));
-    expect(calls.added).toEqual([{ branch: "feat/pasted", from: "main" }]);
+    expect(calls.added).toEqual([{ branch: "feat/pasted", from: undefined }]);
   });
 
   test("`enter` copies the path of whatever the cursor is on, folder included", async () => {
@@ -1820,6 +1823,9 @@ describe("the keys", () => {
     await settled(ui, (frame) => /▸ +34/.test(frame));
 
     await press(ui, keys.enter);
+    await settled(ui, (frame) => frame.includes("approve:"));
+    expect(calls.trusted).toEqual([]);
+    await press(ui, "y");
     await settled(ui, (frame) => frame.includes("1 run in"));
 
     expect(calls.checkedOut).toEqual([34]);

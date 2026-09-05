@@ -201,6 +201,10 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
  * added without deciding what its two keys say.
  */
 const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
+  "trust-setup": [
+    { keys: "y", action: "approve setup" },
+    { keys: "n", action: "skip" },
+  ],
   one: [
     { keys: "y", action: "remove" },
     { keys: "n", action: "keep" },

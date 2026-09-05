@@ -192,7 +192,7 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
     });
   }, 90_000);
 
-  test("`grove sync` in that worktree goes back to the pull request too, whatever pushDefault says", async () => {
+  test("`grove sync --contribute` explicitly updates the PR, whatever pushDefault says", async () => {
     await withForge(async (forge) => {
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
@@ -211,7 +211,14 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
         syncWorktrees(
           forge.repo,
           forge.repo.root,
-          { target: "pr/42", all: false, abortOnConflict: true, push: true, publish: false },
+          {
+            target: "pr/42",
+            all: false,
+            abortOnConflict: true,
+            push: true,
+            publish: false,
+            contribute: true,
+          },
           reporter,
         ),
       );
@@ -407,7 +414,7 @@ describe.skipIf(!POSIX)("running it again", () => {
       // commits are yours. The other one — a `pr/42` somebody else made — reads
       // almost the same and is told apart by the hint, below.
       expect(error.hint).toBe(
-        "they are yours — push them, or throw them away: grove reset pr/42 --to pr-42/fix/crash",
+        "the PR may have been force-pushed, or these commits are local; grove pr 42 --replace saves them before replacing the checkout",
       );
 
       // Nothing was lost: the branch is where it was, and so is the file.

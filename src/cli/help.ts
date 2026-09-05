@@ -59,14 +59,21 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "Clones <url> as a bare repository and checks out its default branch as",
       "the first worktree. The result is one directory holding .bare and a",
       "sibling worktree per branch, created under the current directory.",
+      "Setup runs after checkout; unapproved commands wait for confirmation.",
     ],
     flags: [
+      { name: "no-setup", type: "boolean", summary: "create the worktrees without project setup" },
+      {
+        name: "trust",
+        type: "boolean",
+        summary: "approve the project setup commands and run them",
+      },
       {
         name: "branch",
         short: "b",
         type: "string",
         placeholder: "<name>",
-        summary: "check out <name> first instead of the remote's default branch",
+        summary: "also check out <name> beside the default branch",
       },
       {
         name: "upstream",
@@ -132,6 +139,12 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     ],
     flags: [
       {
+        name: "config-source",
+        type: "string",
+        placeholder: "<trunk|worktree>",
+        summary: "setup recipe source; files still come from trunk",
+      },
+      {
         name: "from",
         type: "string",
         placeholder: "<base>",
@@ -141,7 +154,7 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         name: "on",
         type: "string",
         placeholder: "<branch>",
-        summary: "stack the branch on <branch>, and remember that it sits there",
+        summary: "stack on <branch> and remember the parent",
       },
       {
         name: "no-fetch",
@@ -162,7 +175,7 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       {
         name: "trust",
         type: "boolean",
-        summary: "run .grove.toml's commands, recording that you have read them",
+        summary: "approve and run .grove.toml's commands",
       },
     ],
   },
@@ -188,6 +201,17 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     ],
     flags: [
       {
+        name: "config-source",
+        type: "string",
+        placeholder: "<trunk|worktree>",
+        summary: "setup recipe source; files still come from trunk",
+      },
+      {
+        name: "replace",
+        type: "boolean",
+        summary: "save local work and replace a rewritten PR",
+      },
+      {
         name: "no-setup",
         type: "boolean",
         summary: "skip the copies, links, and commands .grove.toml asks for",
@@ -195,7 +219,7 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       {
         name: "trust",
         type: "boolean",
-        summary: "run .grove.toml's commands, recording that you have read them",
+        summary: "approve and run .grove.toml's commands",
       },
     ],
   },
@@ -340,11 +364,17 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "checkout that needs it.",
     ],
     flags: [
+      {
+        name: "config-source",
+        type: "string",
+        placeholder: "<trunk|worktree>",
+        summary: "setup recipe source; files still come from trunk",
+      },
       { name: "all", type: "boolean", summary: "fill in every worktree instead of one" },
       {
         name: "trust",
         type: "boolean",
-        summary: "run .grove.toml's commands, recording that you have read them",
+        summary: "approve and run .grove.toml's commands",
       },
     ],
   },
@@ -403,6 +433,11 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "you are standing in is reported and left exactly where it is.",
     ],
     flags: [
+      {
+        name: "forge-merged",
+        type: "boolean",
+        summary: "include forge-confirmed merges at this head; needs gh",
+      },
       { name: "gone", type: "boolean", summary: "only the ones the remote no longer has" },
       { name: "merged", type: "boolean", summary: "only the ones the trunk already has" },
       {
@@ -476,14 +511,20 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
     args: "[target]",
     summary: "fetch, then bring a worktree up to date with the default branch",
     description: [
-      "Fast-forwards the default branch's worktree, or — when it has commits",
-      "of its own — rebases them on top and pushes plainly. Every other one is",
+      "Fast-forwards the default branch, refusing divergence. Review worktrees",
+      "receive the PR head without rebase or push; --contribute explicitly",
+      "rebases and pushes them onto their PR base. Development branches are",
       "rebased onto its own remote first and then onto the default branch, and",
       "the result is force-pushed back with --force-with-lease. Stops without",
       "changing anything if the worktree is dirty. A branch that is on no remote",
       "yet is rebased and reported, and pushed only with --publish.",
     ],
     flags: [
+      {
+        name: "contribute",
+        type: "boolean",
+        summary: "explicitly rebase and push a review branch onto its PR base",
+      },
       { name: "all", type: "boolean", summary: "sync every worktree instead of one" },
       {
         name: "publish",

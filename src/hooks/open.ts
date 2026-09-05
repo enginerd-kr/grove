@@ -121,7 +121,7 @@ export async function openWhatItAsksFor(
   try {
     const code = await openShell(command, {
       cwd: target.path,
-      env: commandEnvFor(repo, target, hooks.env),
+      env: await commandEnvFor(repo, target, hooks.env),
     });
 
     // `undefined` is the line still running, which is what opening something

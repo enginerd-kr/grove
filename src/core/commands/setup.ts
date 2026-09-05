@@ -6,6 +6,7 @@ import {
   type SetupResult,
   trustAndRun,
 } from "../../hooks/index.ts";
+import { type ConfigSource, setConfigSource } from "../../hooks/source.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import { GroveError } from "../errors.ts";
 import { contains, type RepoPaths } from "../layout.ts";
@@ -38,6 +39,7 @@ import { listWorktrees, resolveTarget, type WorktreeRecord } from "../worktrees.
  */
 
 export type SetupCommandOptions = {
+  readonly configSource?: ConfigSource;
   /** Which worktree. Omitted, and without `--all`, means the one you are standing in. */
   readonly target?: string;
   readonly all: boolean;
@@ -54,20 +56,13 @@ export async function setUpWorktrees(
   const worktrees = await listWorktrees(repo.gitDir);
   const targets = chooseTargets(worktrees, repo.root, cwd, options);
 
-  // Read once for the whole run, and handed to each worktree. Not merely a
-  // saved read: with `--all` this is the difference between eleven worktrees
-  // filled in from one file and eleven filled in from whatever the file said
-  // when each of their turns came round, which for a run somebody is editing
-  // the file during is a repository in two states.
-  //
-  // Not read at all when `--trust` was passed: that path records the file's
-  // fingerprint and then reads it back, so handing it a copy from before the
-  // record would be trusting one version and running another.
-  const shared = options.trust ? undefined : await repoHooks(repo);
-
   const results: SetupResult[] = [];
   for (const record of targets) {
-    results.push(await setUpOne(repo, record, shared, reporter));
+    if (options.configSource !== undefined && record.branch !== undefined) {
+      await setConfigSource(repo, record.branch, options.configSource);
+    }
+    const hooks = options.trust ? undefined : await repoHooks(repo, record.path);
+    results.push(await setUpOne(repo, record, hooks, reporter));
   }
 
   return results;

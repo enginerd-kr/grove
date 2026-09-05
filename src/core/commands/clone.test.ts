@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
 import { trunkOf } from "../branches.ts";
@@ -166,7 +166,7 @@ describe("grove clone", () => {
       const narrated = outcome.log.err.join("");
       expect(narrated).toContain("✓ cloned");
       expect(narrated).toContain("✓ fetched refs");
-      expect(narrated).toContain("· app is ready");
+      expect(narrated).toContain("· app created");
       // The fixture has no `.grove.toml`, so there is nothing this clone should
       // be offering to run — the warning that says otherwise is a real one.
       expect(narrated).not.toContain("wants to run");
@@ -185,7 +185,7 @@ describe("grove clone", () => {
     });
   }, 30_000);
 
-  test("a chosen branch is checked out first, and only that one", async () => {
+  test("a chosen branch is checked out beside the default branch", async () => {
     await withTempRepo(async (temp) => {
       const result = succeeded(
         await attemptClone(temp.work, temp.originUrl, { dir: "app", branch: "feat/login" }),
@@ -195,7 +195,7 @@ describe("grove clone", () => {
 
       // The two branch fields part company here, which is the whole point of
       // there being two: `defaultBranch` is still what the remote calls default
-      // even though nothing checked it out, and `branch` is what was asked for.
+      // and both it and the requested branch have worktrees.
       expect(result).toEqual({
         root,
         gitDir: join(root, ".bare"),
@@ -206,8 +206,8 @@ describe("grove clone", () => {
 
       // The branch's own shape on disk: `feat/login` is a directory inside `feat`.
       expect(await Bun.file(join(root, "feat", "login", "login.txt")).text()).toBe("login\n");
-      expect(await Bun.file(join(root, "main", "app.txt")).exists()).toBe(false);
-      expect(await localBranches(join(root, ".bare"))).toEqual(["feat/login"]);
+      expect(await Bun.file(join(root, "main", "app.txt")).exists()).toBe(true);
+      expect(await localBranches(join(root, ".bare"))).toEqual(["feat/login", "main"]);
       // HEAD follows the branch that has a worktree, not the remote's default —
       // it has to name a ref that survives the pruning above.
       expect((await probeGit(join(root, ".bare"), ["symbolic-ref", "HEAD"])).stdout).toBe(
@@ -287,6 +287,18 @@ describe("grove clone, when it cannot", () => {
       expect(await pathExists(join(temp.work, "app"))).toBe(false);
     });
   }, 30_000);
+
+  test("a failed second checkout restores a pre-existing empty directory", async () => {
+    await withTempRepo(async (temp) => {
+      const root = join(temp.work, "existing");
+      await mkdir(root);
+      refused(await attemptClone(temp.work, temp.originUrl, { dir: "existing", branch: "nope" }));
+      expect(await readdir(root)).toEqual([]);
+      expect(
+        succeeded(await attemptClone(temp.work, temp.originUrl, { dir: "existing" })).defaultBranch,
+      ).toBe("main");
+    });
+  });
 
   test("a directory with something in it is refused rather than clobbered", async () => {
     await withTempRepo(async (temp) => {

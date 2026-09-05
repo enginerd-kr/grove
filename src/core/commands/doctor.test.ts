@@ -72,7 +72,7 @@ describe("a repository with nothing wrong", () => {
       expect(diagnosis.gitDir).toBe(join(root, ".bare"));
       expect(diagnosis.kind).toBe("managed");
       // A clean report says how much it is claiming.
-      expect(diagnosis.checked).toBe(10);
+      expect(diagnosis.checked).toBe(11);
       // The two the report exists for: the header is what turns three messages
       // into one, and "what version?" is the first of the three.
       expect(diagnosis.grove).toBe(version);
@@ -85,7 +85,7 @@ describe("a repository with nothing wrong", () => {
           `${root}  (managed)`,
           `grove ${version} · git ${diagnosis.git}`,
           "",
-          "nothing to report — 10 checks, all clean",
+          "nothing to report — 11 checks, all clean",
         ].join("\n"),
       );
     });
@@ -213,9 +213,9 @@ describe("directories and worktrees that disagree", () => {
       expect(failureFor(diagnosis)).toBeUndefined();
       expect(diagnosis.findings[0]?.details[0]).toContain("feat/login");
       expect(diagnosis.findings[0]?.fix).toEqual([`git -C ${repo.gitDir} worktree prune`]);
-      // The tally counts it, even though it does not fail: "1 warning, out of 10
+      // The tally counts it, even though it does not fail: "1 warning, out of 11
       // checks" is the report saying it looked and found something untidy.
-      expect(formatDiagnosis(diagnosis)).toContain("1 warning, out of 10 checks");
+      expect(formatDiagnosis(diagnosis)).toContain("1 warning, out of 11 checks");
     });
   });
 
@@ -387,7 +387,7 @@ describe("the printed report", () => {
       expect(report).toContain("! 1 directory left behind by a pruned worktree");
       // The fix is a line to paste, marked with the arrow that starts it.
       expect(report).toContain(`    → git -C ${bare} config remote.origin.fetch`);
-      expect(report).toContain("1 problem and 1 warning, out of 10 checks");
+      expect(report).toContain("1 problem and 1 warning, out of 11 checks");
 
       // The error is what decides the exit code, and the warning beside it does
       // not change the count: "1 problem" is one, not two.

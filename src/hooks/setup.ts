@@ -12,6 +12,7 @@ import { type HookFailure, type HookTarget, runCommands, setupGate } from "./com
 import { configuredFiles, HOOKS_FILE, type Hooks, plannedCount, platformKeyFor } from "./config.ts";
 import { openWhatItAsksFor } from "./open.ts";
 import { repoHooks, sourceWorktree } from "./source.ts";
+import { recordSetupState, setupFingerprint } from "./state.ts";
 import { trust } from "./trust.ts";
 
 /**
@@ -108,7 +109,7 @@ export async function trustAndRun(
   const hooks = await repoHooks(repo, target.path);
   if (hooks.fingerprint !== undefined) await trust(repo.gitDir, hooks.fingerprint);
 
-  return runSetup(repo, target, options, reporter);
+  return runSetup(repo, target, { ...options, hooks }, reporter);
 }
 
 /** In words, for the line a command prints when it is done. */
@@ -380,7 +381,7 @@ async function matchPattern(pattern: string, source: string): Promise<readonly s
  * worktree and there is one. The screen's configure question raises: it was
  * asked for this.
  */
-export async function runSetup(
+async function applySetup(
   repo: RepoPaths,
   target: HookTarget,
   options: SetupOptions,
@@ -434,6 +435,7 @@ export async function runSetup(
     const source = await sourceWorktree(repo, target.path);
 
     if (source.kind === "none") {
+      missing.push(...wanted.map((item) => item.path));
       reporter.warn(
         `no worktree for ${source.trunk ?? "the default branch"}, so there is nothing to take ` +
           `${plural(wanted.length, "path")} from`,
@@ -547,4 +549,29 @@ export async function runSetup(
     failed,
     untrusted,
   };
+}
+
+/** Persist partial outcomes so a created checkout never implies a ready environment. */
+export async function runSetup(
+  repo: RepoPaths,
+  target: HookTarget,
+  options: SetupOptions,
+  reporter: Reporter,
+): Promise<SetupResult> {
+  if (target.branch) await recordSetupState(repo.gitDir, target.branch, "running");
+  try {
+    const hooks = options.hooks ?? (await repoHooks(repo, target.path));
+    const fingerprint = await setupFingerprint(hooks, target.path);
+    const result = await applySetup(repo, target, { ...options, hooks }, reporter);
+    const state = result.failed
+      ? "failed"
+      : result.untrusted || result.missing.length > 0
+        ? "pending"
+        : "ready";
+    if (target.branch) await recordSetupState(repo.gitDir, target.branch, state, fingerprint);
+    return result;
+  } catch (error) {
+    if (target.branch) await recordSetupState(repo.gitDir, target.branch, "failed");
+    throw error;
+  }
 }

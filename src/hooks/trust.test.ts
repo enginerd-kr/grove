@@ -64,7 +64,7 @@ describe("trust", () => {
     });
   });
 
-  test("trusting new contents replaces the old answer", async () => {
+  test("independently approved recipes remain trusted", async () => {
     await withTempRepo(async (repo) => {
       const bare = await bareRepo(repo.root, "trust.git");
       const first = fingerprintOf("first");
@@ -74,7 +74,7 @@ describe("trust", () => {
       await trust(bare, second);
 
       expect(await isTrusted(bare, second)).toBe(true);
-      expect(await isTrusted(bare, first)).toBe(false);
+      expect(await isTrusted(bare, first)).toBe(true);
     });
   });
 

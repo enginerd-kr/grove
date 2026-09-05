@@ -52,7 +52,7 @@ describe("grove clone", () => {
     });
   }, 30_000);
 
-  test("-b checks out another branch first, and only that one", async () => {
+  test("-b checks out another branch beside the default worktree", async () => {
     await withTempRepo(async (temp) => {
       const result = await runCli(["clone", temp.originUrl, "app", "-b", "feat/login"], {
         cwd: temp.work,
@@ -89,7 +89,7 @@ describe("grove clone", () => {
         worktree: join(root, "main"),
       });
       expect(result.stdout).not.toContain("ready");
-      expect(result.stderr).toContain("is ready");
+      expect(result.stderr).toContain("created");
     });
   }, 30_000);
 

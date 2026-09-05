@@ -5,7 +5,7 @@ import { deepestFirst, type RepoPaths } from "../layout.ts";
 import { plural } from "../text.ts";
 import { listWorktrees } from "../worktrees.ts";
 import { type Finished, listWorktreeSummaries, type WorktreeSummary } from "./list.ts";
-import { closedOnForge, type ForgeCandidate } from "./pr.ts";
+import { closedOnForge, type ForgeCandidate, mergedOnForge } from "./pr.ts";
 import { deleteBranch, removeWorktree } from "./remove.ts";
 import { describeDiscard } from "./reset.ts";
 
@@ -46,6 +46,8 @@ import { describeDiscard } from "./reset.ts";
 export type PruneReason = Finished | "closed";
 
 export type PruneOptions = {
+  /** Include forge-confirmed merges, including multi-commit squash merges. */
+  readonly forgeMerged?: boolean;
   /** Only one kind of finished. Absent means both, which is the usual answer. */
   readonly only?: Finished;
   /**
@@ -138,6 +140,7 @@ async function closedByForge(
   repo: RepoPaths,
   summaries: readonly WorktreeSummary[],
   reporter: Reporter,
+  merged = false,
 ): Promise<readonly Candidate[]> {
   const heads = new Map(
     (await listWorktrees(repo.gitDir)).map((record) => [record.path, record.head] as const),
@@ -159,16 +162,16 @@ async function closedByForge(
       start: `asking gh about ${plural(candidates.length, "branch", "branches")}`,
       done: (found) =>
         found.size === 0
-          ? "no pull request closed without merging"
-          : `closed without merging: ${[...found.keys()].join(", ")}`,
-      failed: "gh could not say which pull requests were closed",
+          ? `no ${merged ? "merged" : "closed"} pull request at these heads`
+          : `${merged ? "merged" : "closed without merging"}: ${[...found.keys()].join(", ")}`,
+      failed: `gh could not say which pull requests were ${merged ? "merged" : "closed"}`,
     },
-    () => closedOnForge(repo, candidates),
+    () => (merged ? mergedOnForge(repo, candidates) : closedOnForge(repo, candidates)),
   );
 
   return asked
     .filter((summary) => closed.has(summary.branch))
-    .map((summary) => ({ summary, reason: "closed" as const }));
+    .map((summary) => ({ summary, reason: merged ? ("merged" as const) : ("closed" as const) }));
 }
 
 export async function pruneWorktrees(
@@ -203,7 +206,9 @@ export async function pruneWorktrees(
 
   const closed = options.closed ? await closedByForge(repo, summaries, reporter) : [];
 
-  const ordered = [...finished, ...closed].toSorted((a, b) =>
+  const merged = options.forgeMerged ? await closedByForge(repo, summaries, reporter, true) : [];
+
+  const ordered = [...finished, ...closed, ...merged].toSorted((a, b) =>
     deepestFirst(a.summary.dir, b.summary.dir),
   );
 

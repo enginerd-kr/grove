@@ -216,7 +216,7 @@ export type WorktreeService = {
    * about them once, and a key that copied files and then declined to install
    * anything would leave a worktree in the state this exists to get it out of.
    */
-  readonly setup: (target: string) => Promise<string>;
+  readonly setup: (target: string, trust?: boolean) => Promise<string>;
   /**
    * The open pull requests, for the popup to pick one from.
    *
@@ -327,7 +327,7 @@ export type WorktreeService = {
    * `.grove.toml` and every one whose file is already trusted — `add` already
    * ran those.
    */
-  readonly pendingCommands: () => Promise<readonly string[]>;
+  readonly pendingCommands: (target?: string) => Promise<readonly string[]>;
   /**
    * Records the file as read, then runs what it says.
    *
@@ -552,13 +552,8 @@ export function createWorktreeService(
       return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}${saved}`;
     },
 
-    setup: async (target) => {
-      const results = await setUpWorktrees(
-        repo,
-        cwd,
-        { target, all: false, trust: true },
-        reporter,
-      );
+    setup: async (target, trust = false) => {
+      const results = await setUpWorktrees(repo, cwd, { target, all: false, trust }, reporter);
       const only = results[0];
       if (only === undefined) return "nothing to set up";
 
@@ -652,7 +647,13 @@ export function createWorktreeService(
       return `opened ${number} for ${result.branch} onto ${result.base} — ${result.url ?? ""}`.trimEnd();
     },
 
-    pendingCommands: () => pendingCommands(repo),
+    pendingCommands: async (target) => {
+      const record =
+        target === undefined
+          ? undefined
+          : resolveTarget(target, await listWorktrees(repo.gitDir), { root: repo.root, cwd });
+      return pendingCommands(repo, record?.path);
+    },
 
     pendingPrune: () =>
       pruneWorktrees(

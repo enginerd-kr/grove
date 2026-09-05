@@ -144,7 +144,7 @@ function failure(outcomes: readonly SyncOutcome[]): GroveError {
 }
 
 describe("grove sync", () => {
-  test("fast-forwards the default branch, and rebases then plainly pushes it when it has commits of its own", async () => {
+  test("fast-forwards the default branch and preserves divergent local commits", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
       const main = join(repo.root, "main");
@@ -175,25 +175,14 @@ describe("grove sync", () => {
       await commitIn(main, "local.txt", "local\n");
       await commitOnOrigin(temp, "main", "remote-two.txt", "two\n");
 
+      const before = await head(main);
       const rebase = await attemptSync(repo, { target: "main" });
-
-      expect(succeeded(rebase)).toEqual([
-        {
-          path: main,
-          dir: "main",
-          branch: "main",
-          kind: "rebased",
-          pushed: true,
-          onto: "origin/main",
-        },
-      ]);
-      expect(failureFor(succeeded(rebase))).toBeUndefined();
-
-      expect(await Bun.file(join(main, "remote-two.txt")).text()).toBe("two\n");
+      expect(succeeded(rebase)[0]).toMatchObject({ branch: "main", kind: "skipped" });
+      expect(failureFor(succeeded(rebase))?.code).toBe("refused");
+      expect(await head(main)).toBe(before);
+      expect(await Bun.file(join(main, "remote-two.txt")).exists()).toBe(false);
       expect(await Bun.file(join(main, "local.txt")).text()).toBe("local\n");
-      // Pushed plainly, and the origin has exactly what the worktree has.
-      expect(await head(temp.originPath, "main")).toBe(await head(main));
-      expect(rebase.log.err.join("")).toContain("✓ pushed main");
+      expect(await head(temp.originPath, "main")).not.toBe(before);
     });
   });
 

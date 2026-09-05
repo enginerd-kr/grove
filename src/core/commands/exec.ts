@@ -85,7 +85,7 @@ export async function execInWorktrees(
     const step = reporter.step(`${command} in ${dir}`);
     const result = await runTool([command, ...rest], {
       cwd: record.path,
-      env: commandEnvFor(repo, { path: record.path, branch: record.branch }, []),
+      env: await commandEnvFor(repo, { path: record.path, branch: record.branch }, []),
     });
 
     // The same PATH answers for every worktree, so this is a fact about the run

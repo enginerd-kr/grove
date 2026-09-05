@@ -1,6 +1,13 @@
-import { mkdir, rm } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
-import { HOOKS_FILE, pendingCommands } from "../../hooks/index.ts";
+import { mkdir, rm, rmdir } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+import {
+  HOOKS_FILE,
+  pendingCommands,
+  runSetup,
+  type SetupResult,
+  trustAndRun,
+} from "../../hooks/index.ts";
+import { recordSetupState } from "../../hooks/state.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import {
   defaultBranch,
@@ -35,6 +42,8 @@ import { followUpstream, type UpstreamResult } from "./upstream.ts";
  */
 
 export type CloneOptions = {
+  readonly setup?: boolean;
+  readonly trust?: boolean;
   readonly url: string;
   /** Directory name for the repo folder; defaults to the URL's last segment. */
   readonly dir?: string;
@@ -48,10 +57,11 @@ export type CloneOptions = {
 };
 
 export type CloneResult = {
+  readonly setup?: readonly SetupResult[];
   readonly root: string;
   readonly gitDir: string;
   readonly defaultBranch: string;
-  /** The branch that got the first worktree. */
+  /** The requested checkout; the trunk is always created first. */
   readonly branch: string;
   readonly worktree: string;
   /** What `--upstream` set, when it was given. */
@@ -87,6 +97,8 @@ export async function cloneRepo(
   // Remember whether we are the ones creating it, so a failure cleans up after
   // itself without deleting a directory the user had already made.
   const rootExisted = await pathExists(root);
+  const createdPaths: string[] = [];
+  let wroteGitFile = false;
   let trunk = "";
   let branch = "";
 
@@ -119,24 +131,57 @@ export async function cloneRepo(
     branch = options.branch ?? trunk;
 
     const worktree = join(root, worktreeRelPath(branch));
+    wroteGitFile = true;
     await Bun.write(paths.gitFile, GIT_FILE_CONTENTS);
-    await createFirstWorktree(paths.gitDir, branch, worktree);
-    await pruneUnusedHeads(paths.gitDir, branch);
+    createdPaths.push(join(root, worktreeRelPath(trunk)));
+    await createFirstWorktree(paths.gitDir, trunk, join(root, worktreeRelPath(trunk)));
+    if (branch !== trunk) {
+      createdPaths.push(worktree);
+      await createFirstWorktree(paths.gitDir, branch, worktree);
+    }
+    await pruneUnusedHeads(paths.gitDir, new Set([trunk, branch]));
 
-    reporter.info(`${relative(cwd, root) || root} is ready`);
-    await sayWhatTheFileWants(paths, worktree, reporter);
+    reporter.info(`${relative(cwd, root) || root} created`);
   } catch (error) {
     // A partial `.bare` is worse than nothing: discovery would find it, every
     // command would then fail obscurely, and re-running clone would refuse
     // because the directory is no longer empty. Removing it makes clone
     // idempotent — the second attempt behaves like the first.
-    await rm(rootExisted ? paths.gitDir : root, { recursive: true, force: true });
+    if (rootExisted) {
+      for (const path of createdPaths.toReversed()) {
+        await rm(path, { recursive: true, force: true });
+        for (let parent = dirname(path); parent !== root; parent = dirname(parent)) {
+          try {
+            await rmdir(parent);
+          } catch {
+            break;
+          }
+        }
+      }
+      if (wroteGitFile) await rm(paths.gitFile, { force: true });
+      await rm(paths.gitDir, { recursive: true, force: true });
+    } else await rm(root, { recursive: true, force: true });
     throw error;
   }
 
   const worktree = join(root, worktreeRelPath(branch));
   const result = { root, gitDir: paths.gitDir, defaultBranch: trunk, branch, worktree };
-  if (options.upstream === undefined) return result;
+  const bootstrap = async (completed: CloneResult): Promise<CloneResult> => {
+    if (options.setup === false) return completed;
+    const setup: SetupResult[] = [];
+    for (const name of new Set([trunk, branch])) {
+      const target = { path: join(root, worktreeRelPath(name)), branch: name };
+      setup.push(
+        options.trust
+          ? await trustAndRun(paths, target, reporter, { opens: false })
+          : await runSetup(paths, target, { opens: false }, reporter),
+      );
+    }
+    if (setup[0]?.untrusted)
+      await sayWhatTheFileWants(paths, join(root, worktreeRelPath(trunk)), reporter);
+    return setup.some((item) => item.planned > 0) ? { ...completed, setup } : completed;
+  };
+  if (options.upstream === undefined) return bootstrap(result);
 
   // Outside the cleanup above on purpose: the clone is done and correct, and
   // a mistyped `--upstream` is not a reason to delete it. The failure carries
@@ -144,7 +189,7 @@ export async function cloneRepo(
   try {
     const upstream = await followUpstream(paths, { url: options.upstream, force: false }, reporter);
 
-    return { ...result, upstream };
+    return bootstrap({ ...result, upstream });
   } catch (error) {
     if (isGroveError(error)) {
       throw new GroveError(error.code, error.message, {
@@ -157,21 +202,7 @@ export async function cloneRepo(
   }
 }
 
-/**
- * Says what the repository's `.grove.toml` wants to run, and runs none of it.
- *
- * The first worktree is the one nothing sets up, and both halves of that are
- * deliberate. `copy` and `link` have nothing to say here — this worktree *is*
- * the one everything else is copied from. And `run` is a command that arrived
- * with a repository downloaded ten seconds ago, which is the worst moment there
- * has ever been to decide it may execute: nobody has read it yet.
- *
- * So it is said rather than done. Not saying it was the old behaviour and it
- * was wrong for a different reason than it looked: with the configuration in
- * git config, a fresh clone genuinely had none. A tracked file arrives with the
- * checkout, so from here on the file is there and staying quiet about it would
- * mean the only people who ever find out are the ones who go looking.
- */
+/** Show the unapproved bootstrap recipe after the checkout has been preserved. */
 async function sayWhatTheFileWants(
   paths: RepoPaths,
   worktree: string,
@@ -183,7 +214,7 @@ async function sayWhatTheFileWants(
   const where = relative(paths.root, join(worktree, HOOKS_FILE));
   const what = commands.map((command) => JSON.stringify(command)).join(", ");
 
-  reporter.warn(`${where} wants to run ${what} — nothing has; read it, then run it yourself`);
+  reporter.warn(`${where} wants to run ${what} — review it; grove setup applies it after approval`);
 }
 
 async function configureRemote(bare: string, reporter: Reporter): Promise<void> {
@@ -213,6 +244,7 @@ async function createFirstWorktree(bare: string, branch: string, path: string): 
   }
 
   await runGitOrThrow(["worktree", "add", path, branch], { cwd: bare });
+  await recordSetupState(bare, branch, "pending");
 
   // `clone --bare` copies the heads without any branch.<name>.remote config, so
   // this branch would have no upstream: `git status` would not say "up to date
@@ -243,9 +275,9 @@ async function createFirstWorktree(bare: string, branch: string, path: string): 
  * `remove` may leave a branch behind deliberately — that is where unpushed
  * commits live — so this is the starting state, not a permanent invariant.
  */
-async function pruneUnusedHeads(bare: string, keep: string): Promise<void> {
+async function pruneUnusedHeads(bare: string, keep: ReadonlySet<string>): Promise<void> {
   for (const branch of await localBranches(bare)) {
-    if (branch === keep) continue;
+    if (keep.has(branch)) continue;
 
     await runGitOrThrow(["update-ref", "-d", `refs/heads/${branch}`], { cwd: bare });
   }

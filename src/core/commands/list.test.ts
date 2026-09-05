@@ -76,6 +76,7 @@ describe("what the table says", () => {
           rebasing: false,
           finished: undefined,
           setupStale: false,
+          setupState: "ready",
           publishRemote: "origin",
           isDefault: true,
           current: false,
@@ -100,6 +101,7 @@ describe("what the table says", () => {
           // work still on it is not something to offer to clear away.
           finished: undefined,
           setupStale: false,
+          setupState: "pending",
           publishRemote: "origin",
           isDefault: false,
           current: false,
@@ -109,7 +111,7 @@ describe("what the table says", () => {
       // The table is a rendering of exactly those, and the padding is part of
       // it: the columns line up because every row is padded to the widest.
       expect(formatWorktreeTable(clean)).toBe(
-        ["  main        main        clean", "  feat/login  feat/login  clean"].join("\n"),
+        ["  main        main        clean", "  feat/login  feat/login  setup pending"].join("\n"),
       );
 
       const login = join(root, "feat", "login");
@@ -137,6 +139,7 @@ describe("what the table says", () => {
           rebasing: false,
           finished: undefined,
           setupStale: false,
+          setupState: "pending",
           publishRemote: "origin",
           isDefault: false,
           // `*` marks where you are standing, which is what people open this
@@ -149,7 +152,9 @@ describe("what the table says", () => {
       expect(dirty[0]?.current).toBe(false);
 
       expect(formatWorktreeTable(dirty)).toBe(
-        ["  main        main        clean", "* feat/login  feat/login  dirty"].join("\n"),
+        ["  main        main        clean", "* feat/login  feat/login  dirty, setup pending"].join(
+          "\n",
+        ),
       );
     });
   });

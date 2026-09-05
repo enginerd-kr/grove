@@ -55,6 +55,7 @@ import { useWorktreeSelection } from "./useWorktreeSelection.ts";
  */
 
 type Props = {
+  readonly initialSetup?: boolean;
   readonly service: WorktreeService;
   /** Shown in the header; the repository the keystrokes act on. */
   readonly repoRoot: string;
@@ -108,7 +109,10 @@ const TIP_ROTATE_MS = 60_000;
 // slot always has more than one thing to say and rotation is never a no-op.
 const GENERAL_TIPS: readonly Message[] = [
   { kind: "info", text: "tip: h and l don't stop at the first fold — they keep going" },
-  { kind: "info", text: "tip: a starts the new branch from wherever the cursor is" },
+  {
+    kind: "info",
+    text: "tip: a starts from the latest trunk; A branches from the selected worktree",
+  },
   { kind: "info", text: "tip: r on a folder removes every worktree under it, after one question" },
   { kind: "info", text: "tip: s syncs the row under the cursor, / sync-all syncs every one" },
   {
@@ -144,6 +148,7 @@ const GENERAL_TIPS: readonly Message[] = [
 ];
 
 export function App({
+  initialSetup = false,
   service,
   repoRoot,
   store,
@@ -406,33 +411,20 @@ export function App({
     [busy, service],
   );
 
-  /**
-   * What follows an `a` that made a worktree whose file wants to run commands.
-   *
-   * Run here and not asked about, unlike `grove add` on the command line: that
-   * surface has to behave the same in a pipe as under a terminal, so it prints
-   * the commands and skips them. The screen just made the worktree itself, so
-   * there is nothing left to confirm — the commands run the same way `--trust`
-   * would make them.
-   *
-   * Nothing runs when the file has no commands, which is every ordinary
-   * repository.
-   */
+  /** Offer unapproved commands after creating a development or review checkout. */
   const runPendingCommands = useCallback(
     async (branch: string) => {
       try {
-        const commands = await service.pendingCommands();
+        const commands = await service.pendingCommands(branch);
         if (commands.length === 0) return;
 
-        await perform(`running ${plural(commands.length, "command")}`, () =>
-          service.trustAndRun(branch),
-        );
+        setMode({ kind: "confirm", target: { kind: "trust-setup", branch, commands, open: true } });
       } catch {
         // The worktree is made and its files are in place; failing to work out
         // whether there were commands to run is not worth a second red line.
       }
     },
-    [service, perform],
+    [service],
   );
 
   /**
@@ -517,6 +509,11 @@ export function App({
         if (live) setMode({ kind: "list" });
       }
 
+      if (initialSetup && live) {
+        const worktrees = await service.list();
+        const main = worktrees.find((row) => row.isDefault);
+        if (main) await runPendingCommands(main.branch ?? main.path);
+      }
       const latest = await update;
       if (!live) return;
       // One slot, several claims: whatever already owns the line — an error,
@@ -539,7 +536,7 @@ export function App({
     return () => {
       live = false;
     };
-  }, [refresh, checkUpdate]);
+  }, [refresh, checkUpdate, initialSetup, service, runPendingCommands]);
 
   // Jumps the slot to a random tip in the pool, never the one just shown —
   // unless something else has claimed the slot since, in which case there is
@@ -671,7 +668,16 @@ export function App({
         // nothing to fill in about one.
         case "setup":
           if (!selected) return;
-          return void perform(`filling in ${selected.dir}`, () => service.setup(selected.path));
+          return void askThen(
+            "reading setup",
+            async () => {
+              const commands = await service.pendingCommands(selected.path);
+              return commands.length
+                ? { kind: "trust-setup", branch: selected.path, commands }
+                : undefined;
+            },
+            () => void perform(`filling in ${selected.dir}`, () => service.setup(selected.path)),
+          );
         // The third row-aimed command, and the one whose question has more
         // than two answers — so it opens a popup rather than a `confirm`.
         case "rebase":
@@ -701,6 +707,7 @@ export function App({
     [
       perform,
       beginOpen,
+      askThen,
       beginRebase,
       beginPropose,
       beginSyncAll,
@@ -935,19 +942,16 @@ export function App({
       );
     }
 
-    // On a folder, `a` starts the name where the cursor already is: reaching for
-    // it there is how you say "another one of these".
-    //
-    // And it starts the *branch* where the cursor is too. Branching off the
-    // remote's default was right when there was nothing to point at, but the
-    // cursor is already pointing at something: the worktree you are looking at
-    // when you decide you want another one is almost always the one you want to
-    // carry on from, unpushed commits and all. A folder is not a branch and a
-    // detached HEAD has no name to pass, so both fall back to the default.
-    if (input === "a") {
+    // Preserve a folder prefix for both actions; only A uses the selected local base.
+    if (input === "a" || input === "A") {
       const value = current?.kind === "group" ? current.key : "";
 
-      return setMode({ kind: "add", value, caret: value.length, from: selected?.branch });
+      return setMode({
+        kind: "add",
+        value,
+        caret: value.length,
+        from: input === "A" ? selected?.branch : undefined,
+      });
     }
     if (input === "r" && selected) {
       return setMode({ kind: "confirm", target: { kind: "one", summary: selected } });
@@ -1216,7 +1220,9 @@ export function App({
         <Box borderStyle="round" borderColor={theme.accent} paddingX={1}>
           <Text wrap="truncate">
             <Text dimColor>
-              {mode.from === undefined ? "new branch " : `new branch from ${mode.from}   `}
+              {mode.from === undefined
+                ? `new branch from remote ${trunkName}   `
+                : `new branch from ${mode.from}   `}
             </Text>
             <Text color={theme.accent}>{mode.value.slice(0, mode.caret)}</Text>
             {/* The caret is drawn as the block over the character it sits on,

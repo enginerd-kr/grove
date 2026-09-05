@@ -76,7 +76,7 @@ latest attempt failed. `/refresh` rereads local worktrees immediately.
 
 **Create a branch.** `a`, type a name, `enter`. grove creates the branch and
 worktree, applies `.grove.toml`, opens your editor, and copies `cd <path>` to
-the clipboard. The branch is cut from the selected worktree. On a folder row,
+the clipboard. The branch is cut from the fetched remote trunk. `A` explicitly branches from the selected local worktree. On a folder row,
 the name starts with the folder prefix filled in.
 
 **Jump to a worktree.** Select it, `enter`. The path is on the clipboard.
@@ -111,7 +111,7 @@ and keeps the branch. On a folder row, `r` removes every worktree in it.
 names them, and the branches stay.
 
 **Review a pull request.** `/review`, pick one, `enter`. It checks out as
-`pr/<number>`. `git push` from there updates the PR, and so does `s`.
+`pr/<number>`. `s` receives the latest PR head without rebasing or pushing. `git push` explicitly updates the PR; `grove sync pr/42 --contribute` also rebases onto the PR base before pushing.
 Requires `gh`.
 
 Every destructive action asks first. `y` confirms. Any other key cancels.
@@ -178,8 +178,7 @@ default branch declares how to fill one in. Every `a` / `grove add` applies it.
 ```toml
 [setup]
 copy = [".env", "certs", "config/local.json"]
-link = ["node_modules"]
-env  = { PORT = 3000 }
+env  = { API_HOST = "http://localhost:3000" }
 run  = ["bun install"]
 open = "code ."
 
@@ -268,10 +267,12 @@ untracked `.grove.local.toml` never need approval.
 the rows filled in from the older version read `setup stale`: grove records
 which version each worktree was set up from, beside the branch in the bare
 repository's config, and compares it with the trunk's file on every refresh.
-Run `/setup` on a worktree or `grove setup --all` to catch them up. It is
-idempotent: `copy` overwrites from the trunk, `link` leaves existing entries,
-`run` is your own command. A worktree set up before this record existed shows
-no badge until its next setup.
+Run `/setup` on a worktree or `grove setup --all` to catch them up. Re-running it refreshes files: `copy` overwrites from the trunk, `link` leaves
+existing entries, and `run` executes again. Make your commands safe to repeat.
+Keep per-worktree `.env` overrides outside copied paths if they must survive setup. Worktrees whose setup was never recorded have unknown readiness. New worktrees
+record `pending`, `running`, `failed`, `ready`, or `stale`, including skipped
+setup and approval still pending. Local config and dependency manifests/lockfiles
+are included in readiness fingerprints independently of command approval.
 
 `run`, `teardown`, and `exec` commands receive `GROVE_ROOT`, `GROVE_WORKTREE`,
 and `GROVE_BRANCH`.
@@ -311,7 +312,7 @@ forge holds, so the URL is typed once by somebody who knows it.
 
 From then on `a` cuts from `upstream/main`, `s` rebases onto it and pushes
 to your fork, and `merged` means merged into theirs. `grove pr` fetches the
-pull request from the trunk's remote, and a `pr/<n>` worktree always pushes
+pull request from the trunk's remote, and an explicit push from a `pr/<n>` worktree always goes
 back to the pull request, whatever `pushDefault` says. `doctor` reports an
 `upstream` remote the trunk does not follow yet, and a trunk that tracks a
 remote nothing has been fetched from.
@@ -371,8 +372,9 @@ carries it along.
 
 Fetches, then:
 
-- **default branch**: fast-forward, or rebase local commits and push.
-- **every other branch**: rebase onto its remote, then onto the trunk, then
+- **default branch**: fast-forward only; divergence is refused and local commits stay.
+- **review branch**: receive the PR head, fast-forward only, without pushing.
+- **development branch**: rebase onto its remote, then onto the trunk, then
   push with `--force-with-lease`.
 
 A dirty worktree aborts before anything runs. A conflicted rebase is aborted
@@ -385,7 +387,7 @@ it is meant to stay local, and reports nothing. See
 [Remotes and forks](#remotes-and-forks) for which remote that is.
 
 The screen confirms before a force-push and before a first push. The CLI does
-neither.
+neither. Review worktrees only receive PR updates unless `--contribute` is explicit.
 
 ### rebase
 
@@ -561,7 +563,8 @@ run. An agent passing `--trust` is exactly what it guards against. Approve
 the file once, as yourself: `y` when the screen asks, or `grove setup --trust`
 in a terminal. The approval is stored in the repository, so every later
 `grove add` on this machine runs the commands without being asked, from an
-agent or not.
+agent or not. Distinct approved recipe hashes are retained, so approving a
+branch-specific recipe does not revoke approval of the trunk recipe.
 
 A typical agent loop, once the file has been approved:
 
@@ -623,3 +626,80 @@ Not bugs:
 - Not a package manager. Setup commands are yours.
 - Not a secret manager. `.grove.toml` is committed. Secrets go in the local
   layers.
+
+## Workspace development cycle
+
+1. `grove clone <url>` creates `.bare/` and the default-branch worktree, and
+   applies setup. A terminal shows unapproved commands for approval. Use
+   `grove setup main` later to finish, or `--no-setup` to defer everything.
+   `clone -b feature` also creates the default worktree as the shared source.
+2. `grove add feat/task` fetches and starts a new branch from the remote trunk.
+   The UI's `a` does the same. `A` starts from the selected local branch;
+   CLI `--from <ref>` is the equivalent. `--on <branch>` records a stack parent.
+   The result reports the actual `base` ref and `baseSha` for new branches.
+3. Setup installs dependencies per worktree. `node_modules` and build output
+   should not be linked across branches that can have different dependencies.
+   `copy` overwrites matching destination paths on every setup, and reports them.
+4. `grove propose` publishes a development branch and opens its PR.
+5. `grove pr 42` creates a separate review checkout. Re-running it, or syncing
+   that checkout, receives the latest PR head without rebasing or pushing.
+   PR repository URL, number, base, head branch and last fetched head SHA are
+   remembered locally and appear as `review` metadata in `grove list --json`.
+   Its `drift` counts commits ahead/behind the actual PR base; the screen
+   shows those counts alongside the review base.
+6. If the author rewrites history, update refuses to discard local work.
+   `grove pr 42 --replace` saves the previous committed head under
+   `refs/grove/review-backups/42/…` and uncommitted changes as a snapshot, then
+   replaces the checkout. JSON reports `updated: "replaced"`, the committed
+   `backup` ref and the `saved` snapshot SHA when there were local changes.
+   The output gives recovery instructions. A stopped
+   rebase or a reset that would overwrite untracked/ignored paths is refused.
+   To contribute, explicitly use `grove sync pr/42 --contribute` (rebase onto
+   the PR's base and push) or `git push` (push only).
+7. After merging, `grove prune -n --forge-merged` includes forge-confirmed
+   merges, even when several commits were squashed and the branch remains.
+   `grove prune --forge-merged` runs teardown and removes eligible worktrees.
+   The PR head must exactly match the local tip; later local commits stay.
+   Dirty, locked, current and mid-rebase worktrees stay, and branches are kept
+   unless `--delete-branch` is requested. `--closed` additionally finds declined PRs.
+8. `grove sync main` fast-forwards the reference checkout. A diverged main is
+   refused; move its local work to a feature branch or explicitly rebase it.
+
+### Testing a branch's setup recipe
+
+By default, setup reads the trunk's configuration. To validate configuration
+changes in a feature or PR, use one of:
+
+```bash
+grove add feat/setup --config-source worktree
+grove pr 42 --config-source worktree
+grove setup feat/setup --config-source worktree
+```
+
+The choice is remembered per branch for subsequent setup, open and teardown.
+The target checkout supplies `.grove.toml` and `.grove.local.toml`; the global
+layer still applies. Commands from a different tracked recipe require approval.
+`copy` and `link` continue to read from the default-branch worktree. Restore the
+normal recipe with `grove setup feat/setup --config-source trunk`.
+`grove setup --all` asks separately for distinct unapproved recipes.
+`grove doctor` reports a missing default worktree and how to recreate it.
+
+### Running several worktrees
+
+Setup, open, teardown, and `grove exec` receive:
+
+| variable | meaning |
+| --- | --- |
+| `GROVE_ROOT`, `GROVE_WORKTREE`, `GROVE_BRANCH` | workspace, checkout and branch |
+| `GROVE_WORKTREE_ID` | stable identity across branch and directory renames |
+| `GROVE_PORT` | port allocated uniquely among this workspace's worktrees |
+| `GROVE_SERVICE_NAME` | unique service/Compose name |
+| `GROVE_DATABASE_NAME` | unique database name for your setup script |
+
+`PORT` and `COMPOSE_PROJECT_NAME` default to the allocated values; explicit
+`[setup.env]` or `[teardown.env]` values override those defaults. Database
+creation is the project's responsibility. For example, a setup script can use
+`GROVE_DATABASE_NAME` when creating a database or generating its connection URL.
+Port assignments do not bind sockets or reserve ports against unrelated apps or
+other workspaces. Assignments are reused and released when Grove removes the
+worktree. Grove stores runtime claims inside the repository's Git directory.

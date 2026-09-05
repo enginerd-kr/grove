@@ -142,3 +142,22 @@ describe("grove add", () => {
     });
   }, 60_000);
 });
+
+test("a failed setup returns exit 9 with the created checkout and failed readiness intact", async () => {
+  await withTempRepo(async (temp) => {
+    const repo = await managedRepo(temp);
+    await Bun.write(join(repo.root, "main", ".grove.toml"), '[setup]\nrun = ["exit 7"]\n');
+    const result = await runCli(["add", "feat/setup-failure", "--trust", "--json"], {
+      cwd: repo.root,
+    });
+    expect(result.exitCode).toBe(ExitCode.setupFailed);
+    const made = JSON.parse(result.stdout);
+    expect(made.setup.failed.code).toBe(7);
+    expect(await Bun.file(join(made.path, ".git")).exists()).toBe(true);
+    const listed = await runCli(["list", "--json"], { cwd: repo.root });
+    expect(
+      JSON.parse(listed.stdout).find((row: { branch: string }) => row.branch === made.branch)
+        .setupState,
+    ).toBe("failed");
+  });
+});

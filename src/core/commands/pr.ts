@@ -1,12 +1,15 @@
 import type { SetupResult } from "../../hooks/index.ts";
+import type { ConfigSource } from "../../hooks/source.ts";
 import { type Reporter, withStep } from "../../report/reporter.ts";
 import { localBranchExists, REMOTE, trunkOf } from "../branches.ts";
 import { GroveError, stderrDetails } from "../errors.ts";
 import { ghJson, record, text } from "../forge.ts";
 import { gitOutput, runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
+import { recordReview, reviewBranch, reviewOf as storedReview } from "../review.ts";
 import { listWorktrees, statusOf } from "../worktrees.ts";
 import { addWorktree } from "./add.ts";
+import { resetWorktree } from "./reset.ts";
 
 /**
  * `grove pr` — give a pull request a worktree you can build in.
@@ -67,11 +70,13 @@ type PrDetail = {
   readonly state: PrState;
   readonly isDraft: boolean;
   readonly headRefName: string;
+  readonly base: string;
   readonly headOwner: string;
   readonly headRepo: string;
 };
 
 export type PrOptions = {
+  readonly configSource?: ConfigSource;
   /**
    * As typed: a number, a URL, or the branch it was proposed from.
    *
@@ -79,6 +84,8 @@ export type PrOptions = {
    * back out of its answer — so the spellings people actually use cost nothing.
    */
   readonly pr: string;
+  /** Replace a rewritten PR after saving local commits and changes. */
+  readonly replace?: boolean;
   /** Copy, link and run whatever `.grove.toml` asks for. On by default. */
   readonly setup: boolean;
   /** Record the trunk's `.grove.toml` commands as read, and run them. */
@@ -97,7 +104,7 @@ export type PrResult = {
    * re-deriving it, the way `path`, `reset` and `rename` do.
    */
   readonly dir: string;
-  /** Always `pr/<number>`: the directory is the branch, the same as everywhere else. */
+  /** Starts as pr/<number>; recorded reviews retain their identity after rename. */
   readonly branch: string;
   readonly number: number;
   readonly title: string;
@@ -110,7 +117,9 @@ export type PrResult = {
   readonly upstream?: string;
   /** False when there is nothing on the far end to push back to. */
   readonly pushable: boolean;
-  readonly updated: "created" | "fast-forwarded" | "unchanged";
+  readonly updated: "created" | "fast-forwarded" | "unchanged" | "replaced";
+  readonly backup?: string;
+  readonly saved?: string;
   readonly alreadyPresent: boolean;
   readonly setup?: SetupResult;
 };
@@ -421,19 +430,24 @@ const STATE_FIELDS = ["number", "state", "headRefOid"].join(",");
  * A `pr/<n>` branch is asked about by its number rather than by name, since
  * the name is ours and the forge has never heard it.
  */
-async function closedAt(repo: RepoPaths, candidate: ForgeCandidate): Promise<number | undefined> {
-  const number = prNumberOf(candidate.branch);
+async function closedAt(
+  repo: RepoPaths,
+  candidate: ForgeCandidate,
+  state: "CLOSED" | "MERGED" = "CLOSED",
+): Promise<number | undefined> {
+  const review = await storedReview(repo.gitDir, candidate.branch);
+  const number = review?.number ?? prNumberOf(candidate.branch);
   const argv =
     number === undefined
       ? ["pr", "list", "--head", candidate.branch, "--state", "closed", "--json", STATE_FIELDS]
-      : ["pr", "view", String(number), "--json", STATE_FIELDS];
+      : ["pr", "view", review?.url ?? String(number), "--json", STATE_FIELDS];
 
   const parsed: unknown = await ghJson(argv, repo.root);
   const rows = Array.isArray(parsed) ? parsed : [parsed];
 
   for (const entry of rows) {
     const row = record(entry);
-    if (text(row.state) !== "CLOSED" || text(row.headRefOid) !== candidate.head) continue;
+    if (text(row.state) !== state || text(row.headRefOid) !== candidate.head) continue;
     if (typeof row.number === "number") return row.number;
   }
 
@@ -465,6 +479,26 @@ export async function closedOnForge(
   return closed;
 }
 
+/** Exact head matching excludes commits added locally after a PR was merged. */
+export async function mergedOnForge(
+  repo: RepoPaths,
+  candidates: readonly ForgeCandidate[],
+): Promise<ReadonlyMap<string, number>> {
+  const answers = await Promise.all(
+    candidates.map((candidate) => closedAt(repo, candidate, "MERGED")),
+  );
+  const merged = new Map<string, number>();
+  for (const [index, candidate] of candidates.entries()) {
+    const number = answers[index];
+    if (number !== undefined) merged.set(candidate.branch, number);
+  }
+  return merged;
+}
+
+export async function pullRequestBase(repo: RepoPaths, pr: string): Promise<string> {
+  return (await detailOf(repo, pr)).base;
+}
+
 async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
   const row = record(await ghJson(["pr", "view", pr, "--json", PR_FIELDS], repo.root));
   const state = text(row.state);
@@ -476,6 +510,7 @@ async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
     state: state === "MERGED" || state === "CLOSED" ? state : "OPEN",
     isDraft: row.isDraft === true,
     headRefName: text(row.headRefName),
+    base: text(row.baseRefName) || (await trunkOf(repo.gitDir)).branch,
     headOwner: text(record(row.headRepositoryOwner).login),
     headRepo: text(record(row.headRepository).name),
   };
@@ -543,7 +578,12 @@ async function headUrl(repo: RepoPaths, detail: PrDetail): Promise<string> {
  * from the worktree mean "send it back to the pull request", which is the only
  * thing it could sensibly mean there. Nothing global is touched to achieve it.
  */
-async function configureRemote(repo: RepoPaths, detail: PrDetail, url: string): Promise<void> {
+async function configureRemote(
+  repo: RepoPaths,
+  detail: PrDetail,
+  url: string,
+  branch: string,
+): Promise<void> {
   const remote = remoteFor(detail.number);
   const head = detail.headRefName;
   const known = await runGit(["remote", "get-url", remote], { cwd: repo.gitDir });
@@ -555,7 +595,7 @@ async function configureRemote(repo: RepoPaths, detail: PrDetail, url: string): 
 
   for (const [key, value] of [
     [`remote.${remote}.fetch`, `+refs/heads/${head}:refs/remotes/${remote}/${head}`],
-    [`remote.${remote}.push`, `refs/heads/${branchFor(detail.number)}:refs/heads/${head}`],
+    [`remote.${remote}.push`, `refs/heads/${branch}:refs/heads/${head}`],
     // A pull request is a branch, and a fork's tags are nobody's business here.
     [`remote.${remote}.tagOpt`, "--no-tags"],
   ] as const) {
@@ -581,6 +621,10 @@ async function pruneOrphanRemotes(repo: RepoPaths): Promise<void> {
     if (match?.[1] === undefined) continue;
 
     if (await localBranchExists(repo.gitDir, branchFor(Number(match[1])))) continue;
+    const owners = await runGit(["config", "--get-regexp", "^branch\\..*\\.pushremote$"], {
+      cwd: repo.gitDir,
+    });
+    if (owners.stdout.split("\n").some((line) => line.endsWith(` ${remote}`))) continue;
 
     await runGit(["remote", "remove", remote], { cwd: repo.gitDir });
   }
@@ -636,26 +680,15 @@ async function fetchHead(repo: RepoPaths, detail: PrDetail, reporter: Reporter):
   return { sha: sha.trim() };
 }
 
-/**
- * Brings `pr/<n>` to the head, or refuses — and never resets.
- *
- * One rule covers three situations, which is why it is one rule: equal is
- * nothing to do, an ancestor fast-forwards, and anything else necessarily
- * carries commits the head does not have. Those commits are either the
- * reviewer's own or the ones a force-push withdrew, and grove does not throw
- * away either on your behalf — `grove reset --to` is the spelling for that, and
- * it has to be typed.
- *
- * The same rule is what answers "somebody already has a branch called `pr/42`":
- * an unrelated branch is not an ancestor, so it is refused here rather than
- * being quietly checked out as if it were the pull request.
- */
+/** Fast-forward by default; explicit replacement preserves commits and local changes. */
 async function reconcileBranch(
   repo: RepoPaths,
   detail: PrDetail,
   head: Head,
-): Promise<"created" | "fast-forwarded" | "unchanged"> {
-  const branch = branchFor(detail.number);
+  replace: boolean,
+  reporter: Reporter,
+  branch: string,
+): Promise<{ updated: PrResult["updated"]; backup?: string; saved?: string }> {
   const remote = remoteFor(detail.number);
   const ref = `refs/heads/${branch}`;
   const current = await runGit(["rev-parse", "--verify", "--quiet", ref], { cwd: repo.gitDir });
@@ -666,14 +699,35 @@ async function reconcileBranch(
     // whatever the sha happened to be reachable from.
     await runGitOrThrow(["branch", "--no-track", branch, head.sha], { cwd: repo.gitDir });
 
-    return "created";
+    return { updated: "created" };
   }
 
-  if (current.stdout.trim() === head.sha) return "unchanged";
+  if (current.stdout.trim() === head.sha) return { updated: "unchanged" };
 
   const ancestor = await runGit(["merge-base", "--is-ancestor", ref, head.sha], {
     cwd: repo.gitDir,
   });
+
+  if (replace) {
+    const backup = `refs/grove/review-backups/${detail.number}/${Date.now()}-${crypto.randomUUID()}`;
+    await runGitOrThrow(["update-ref", backup, current.stdout.trim()], { cwd: repo.gitDir });
+    reporter.info(`previous review commits saved: ${backup}`);
+    let savedChanges: string | undefined;
+    const holder = (await listWorktrees(repo.gitDir)).find((wt) => wt.branch === branch);
+    if (holder) {
+      const saved = await resetWorktree(
+        repo,
+        repo.root,
+        { target: holder.path, to: head.sha, clean: true },
+        reporter,
+      );
+      savedChanges = saved.saved;
+      if (saved.saved) reporter.info(`restore local changes: git stash apply ${saved.saved}`);
+    } else {
+      await runGitOrThrow(["branch", "-f", branch, head.sha], { cwd: repo.gitDir });
+    }
+    return { updated: "replaced", backup, saved: savedChanges };
+  }
 
   if (ancestor.code !== 0) {
     const tracking = await runGit(["config", "--get", `branch.${branch}.remote`], {
@@ -692,7 +746,7 @@ async function reconcileBranch(
         : `${branch} is already a branch here, and it is not pull request ${detail.number}`,
       {
         hint: mine
-          ? `they are yours — push them, or throw them away: grove reset ${branch} --to ${remote}/${detail.headRefName}`
+          ? `the PR may have been force-pushed, or these commits are local; grove pr ${detail.number} --replace saves them before replacing the checkout`
           : `rename it: git -C ${repo.gitDir} branch -m ${branch} <another name>`,
       },
     );
@@ -707,7 +761,7 @@ async function reconcileBranch(
   if (holder === undefined) {
     await runGitOrThrow(["branch", "-f", branch, head.sha], { cwd: repo.gitDir });
 
-    return "fast-forwarded";
+    return { updated: "fast-forwarded" };
   }
 
   const status = await statusOf(holder.path);
@@ -721,7 +775,7 @@ async function reconcileBranch(
 
   await runGitOrThrow(["merge", "--ff-only", head.sha], { cwd: holder.path });
 
-  return "fast-forwarded";
+  return { updated: "fast-forwarded" };
 }
 
 export async function checkoutPullRequest(
@@ -753,7 +807,9 @@ export async function checkoutPullRequest(
   }
   if (detail.isDraft) reporter.info(`pull request ${detail.number} is still a draft`);
 
-  await configureRemote(repo, detail, await headUrl(repo, detail));
+  const branch =
+    (await reviewBranch(repo.gitDir, detail.url, detail.number)) ?? branchFor(detail.number);
+  await configureRemote(repo, detail, await headUrl(repo, detail), branch);
   const head = await fetchHead(repo, detail, reporter);
 
   if (head.remote === undefined) {
@@ -762,8 +818,22 @@ export async function checkoutPullRequest(
     );
   }
 
-  const branch = branchFor(detail.number);
-  const updated = await reconcileBranch(repo, detail, head);
+  const reconciled = await reconcileBranch(
+    repo,
+    detail,
+    head,
+    options.replace === true,
+    reporter,
+    branch,
+  );
+  const { updated } = reconciled;
+  await recordReview(repo.gitDir, branch, {
+    number: detail.number,
+    url: detail.url,
+    base: detail.base,
+    head: `${detail.headOwner}:${detail.headRefName}`,
+    headSha: head.sha,
+  });
 
   if (head.remote !== undefined) {
     // Re-asserted every run rather than only on creation: both are idempotent,
@@ -798,6 +868,7 @@ export async function checkoutPullRequest(
       fetch: false,
       push: false,
       setup: options.setup,
+      configSource: options.configSource,
       trust: options.trust,
       open: options.open,
       take: false,
@@ -825,7 +896,7 @@ export async function checkoutPullRequest(
     // `origin/<branch>` for an existing branch whatever it actually tracks.
     upstream: head.remote === undefined ? undefined : `${head.remote}/${detail.headRefName}`,
     pushable: head.remote !== undefined,
-    updated,
+    ...reconciled,
     alreadyPresent: result.alreadyPresent,
     setup: result.setup,
   };

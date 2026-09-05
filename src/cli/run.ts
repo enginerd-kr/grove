@@ -144,8 +144,13 @@ async function chooseBase(
  * Nothing is asked where nothing is gated: a file already trusted here, or
  * commands out of a layer you wrote yourself, ran already.
  */
-async function askAboutCommands(repo: RepoPaths, ask: Ask, reporter: Reporter): Promise<boolean> {
-  const commands = await pendingCommands(repo);
+async function askAboutCommands(
+  repo: RepoPaths,
+  ask: Ask,
+  reporter: Reporter,
+  path?: string,
+): Promise<boolean> {
+  const commands = await pendingCommands(repo, path);
   if (commands.length === 0) return false;
 
   for (const command of commands) reporter.info(`  ${command}`);
@@ -169,7 +174,7 @@ async function offerSetup(
   reporter: Reporter,
   open: boolean,
 ): Promise<SetupResult | undefined> {
-  if (!(await askAboutCommands(repo, ask, reporter))) {
+  if (!(await askAboutCommands(repo, ask, reporter, target.path))) {
     reporter.info(`skipped — \`grove setup ${target.branch ?? ""} --trust\` runs them later`);
     return undefined;
   }
@@ -224,9 +229,20 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       // options the core function takes, which is why it is spread rather than
       // copied field by field.
       const { name, ...options } = command;
-      const result = await cloneRepo(cwd, options, reporter);
+      let result = await cloneRepo(cwd, options, reporter);
+      if (result.setup?.some((item) => item.untrusted) && ask) {
+        const repo = await findRepoRoot(result.root);
+        if (await askAboutCommands(repo, ask, reporter)) {
+          result = {
+            ...result,
+            setup: await setUpWorktrees(repo, result.root, { all: true, trust: true }, reporter),
+          };
+        }
+      }
 
       report(result, () => reporter.out(`${display(cwd, result.worktree)}\t${result.branch}`));
+      const failed = setupFailure(result.setup ?? []);
+      if (failed) throw failed;
       return;
     }
 
@@ -242,16 +258,17 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
     case "add": {
       const { name, ...options } = command;
       const repo = await findRepoRoot(cwd, global.repo);
-      const result = await addWorktree(repo, cwd, { ...options, open: canOpen }, reporter);
+      let result = await addWorktree(repo, cwd, { ...options, open: canOpen }, reporter);
 
       if (result.setup?.untrusted && ask) {
-        await offerSetup(
+        const setup = await offerSetup(
           repo,
           { path: result.path, branch: result.branch },
           ask,
           reporter,
           canOpen,
         );
+        if (setup) result = { ...result, setup };
       }
       if (result.alreadyPresent) reporter.info(`${command.branch} already has a worktree`);
       // Said out loud rather than left to be discovered: `--take` emptied a
@@ -261,33 +278,40 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       }
 
       report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.branch}`));
+      const failed = setupFailure(result.setup ? [result.setup] : []);
+      if (failed) throw failed;
       return;
     }
 
     case "pr": {
       const { name, ...options } = command;
       const repo = await findRepoRoot(cwd, global.repo);
-      const result = await checkoutPullRequest(repo, cwd, { ...options, open: canOpen }, reporter);
+      let result = await checkoutPullRequest(repo, cwd, { ...options, open: canOpen }, reporter);
 
       if (result.setup?.untrusted && ask) {
-        await offerSetup(
+        const setup = await offerSetup(
           repo,
           { path: result.path, branch: result.branch },
           ask,
           reporter,
           canOpen,
         );
+        if (setup) result = { ...result, setup };
       }
       // A worktree that was already there is only "nothing happened" when the
       // branch did not move either; catching up with the pull request is the
       // outcome, and the same line has to say which of the two it was.
-      if (result.updated === "fast-forwarded") {
+      if (result.updated === "replaced") {
+        reporter.info(`${result.branch} replaced; previous commits saved at ${result.backup}`);
+      } else if (result.updated === "fast-forwarded") {
         reporter.info(`${result.branch} caught up with pull request ${result.number}`);
       } else if (result.alreadyPresent) {
         reporter.info(`${result.branch} already has a worktree`);
       }
 
       report(result, () => reporter.out(`${display(cwd, result.path)}\t${result.branch}`));
+      const failed = setupFailure(result.setup ? [result.setup] : []);
+      if (failed) throw failed;
       return;
     }
 
@@ -405,10 +429,25 @@ export async function runCommand(command: GroveCommand, context: CommandContext)
       // rather than resumed because it is idempotent — `copy` takes the trunk's
       // version again and `link` leaves what is there — and the commands are
       // what was waiting.
-      if (results.some((result) => result.untrusted) && ask) {
-        if (await askAboutCommands(repo, ask, reporter)) {
-          results = await setUpWorktrees(repo, cwd, { ...options, trust: true }, reporter);
+      if (ask) {
+        const approved: SetupResult[] = [];
+        for (const result of results) {
+          if (
+            result.untrusted &&
+            ((await pendingCommands(repo, result.path)).length === 0 ||
+              (await askAboutCommands(repo, ask, reporter, result.path)))
+          ) {
+            approved.push(
+              ...(await setUpWorktrees(
+                repo,
+                cwd,
+                { target: result.path, all: false, trust: true },
+                reporter,
+              )),
+            );
+          } else approved.push(result);
         }
+        results = approved;
       }
 
       report(results, () =>

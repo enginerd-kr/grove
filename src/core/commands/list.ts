@@ -1,6 +1,8 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { appliedFingerprints, isStale, readHooks } from "../../hooks/index.ts";
+import { repoHooks } from "../../hooks/source.ts";
+import { type SetupState, setupFingerprint, setupStates } from "../../hooks/state.ts";
 import {
   type BranchState,
   branchStates,
@@ -10,7 +12,9 @@ import {
   publishRemotes,
   trunkOf,
 } from "../branches.ts";
+import { runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { reviewOf } from "../review.ts";
 import { readStack } from "../stack.ts";
 import { listWorktrees, statusOf, type WorktreeRecord, worktreeDir } from "../worktrees.ts";
 import type { BranchPullRequest } from "./pr.ts";
@@ -74,6 +78,8 @@ function finishedWith(
 }
 
 export type WorktreeSummary = {
+  readonly setupState?: SetupState;
+  readonly review?: import("../review.ts").Review & { readonly drift?: Drift };
   readonly path: string;
   readonly dir: string;
   /** Absent when the worktree is on a detached HEAD. */
@@ -245,12 +251,13 @@ export async function listWorktreeSummaries(
   repo: RepoPaths,
   cwd: string,
 ): Promise<readonly WorktreeSummary[]> {
-  const [records, trunk, stack, publishedTo, applied] = await Promise.all([
+  const [records, trunk, stack, publishedTo, applied, readiness] = await Promise.all([
     listWorktrees(repo.gitDir),
     trunkOf(repo.gitDir),
     readStack(repo.gitDir),
     publishRemotes(repo.gitDir),
     appliedFingerprints(repo.gitDir),
+    setupStates(repo.gitDir),
   ]);
   // After `trunk` is known, and once for every branch rather than per worktree.
   const [drift, states, committed, current] = await Promise.all([
@@ -268,8 +275,38 @@ export async function listWorktreeSummaries(
   const summaries = await Promise.all(
     records.map(async (record) => {
       const status = await statusOf(record.path);
+      const setup = record.branch === undefined ? undefined : readiness.get(record.branch);
+      let setupState = setup?.state;
+      if (setup?.state === "ready" && setup.fingerprint) {
+        try {
+          const hooks = await repoHooks(repo, record.path);
+          if ((await setupFingerprint(hooks, record.path)) !== setup.fingerprint)
+            setupState = "stale";
+        } catch {
+          setupState = "stale";
+        }
+      }
 
+      const review =
+        record.branch === undefined ? undefined : await reviewOf(repo.gitDir, record.branch);
+      let reviewDrift: Drift | undefined;
+      if (review && record.head) {
+        const compared = await runGit(
+          [
+            "rev-list",
+            "--left-right",
+            "--count",
+            `${trunk.remote}/${review.base}...${record.head}`,
+          ],
+          { cwd: repo.gitDir },
+        );
+        if (compared.code === 0) {
+          const [behind, ahead] = compared.stdout.trim().split(/\s+/).map(Number);
+          if (behind !== undefined && ahead !== undefined) reviewDrift = { behind, ahead };
+        }
+      }
       return {
+        review: review ? { ...review, drift: reviewDrift } : undefined,
         path: record.path,
         dir: worktreeDir(repo.root, record.path),
         branch: record.branch,
@@ -298,7 +335,12 @@ export async function listWorktreeSummaries(
           trunk.branch,
           record.branch === undefined ? undefined : states.get(record.branch),
         ),
-        setupStale: record.branch !== undefined && isStale(applied.get(record.branch), current),
+        setupState,
+        setupStale:
+          setupState === "stale" ||
+          (setupState === undefined &&
+            record.branch !== undefined &&
+            isStale(applied.get(record.branch), current)),
         parent: record.branch === undefined ? undefined : stack.get(record.branch),
         publishRemote: record.branch === undefined ? undefined : publishedTo(record.branch),
         isDefault: record.branch === trunk.branch,
@@ -337,6 +379,12 @@ function stateParts(summary: WorktreeSummary, withDirty: boolean): string[] {
   // nobody's concern; for every other row this is the one word that names a
   // thing to do — `/setup`, or `grove setup` — rather than a state to know.
   if (summary.setupStale) parts.push(STALE_SETUP);
+  else if (!summary.finished && summary.setupState && summary.setupState !== "ready")
+    parts.push(`setup ${summary.setupState}`);
+  if (summary.review) {
+    const { number, base, drift } = summary.review;
+    parts.push(`review #${number} → ${base}${drift ? ` ↑${drift.ahead} ↓${drift.behind}` : ""}`);
+  }
 
   return parts;
 }

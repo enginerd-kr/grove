@@ -60,7 +60,9 @@ export async function awaitingTrust(
   return gated && fingerprint !== undefined && !(await isTrusted(bare, fingerprint));
 }
 
-/** Records these contents as read and agreed to. Replaces any earlier answer. */
+/** Remember each explicitly approved recipe independently. */
 export async function trust(bare: string, fingerprint: string): Promise<void> {
-  await runGitOrThrow(["config", "--replace-all", TRUST_KEY, fingerprint], { cwd: bare });
+  if (!(await isTrusted(bare, fingerprint))) {
+    await runGitOrThrow(["config", "--add", TRUST_KEY, fingerprint], { cwd: bare });
+  }
 }

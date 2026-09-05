@@ -72,7 +72,7 @@ grove는 기존 `git clone` 안에서도 동작합니다. 새 워크트리는 �
 
 **브랜치 만들기.** `a`, 이름 입력, `enter`. grove가 브랜치와 워크트리를
 만들고, `.grove.toml`을 적용하고, 에디터를 열고, `cd <path>`를 클립보드에
-복사합니다. 브랜치는 선택한 워크트리에서 갈라집니다. 폴더 줄에서는 이름에
+복사합니다. 브랜치는 최신 원격 trunk에서 갈라집니다. `A`는 선택한 로컬 브랜치에서 분기합니다. 폴더 줄에서는 이름에
 폴더 접두사가 미리 채워집니다.
 
 **워크트리로 이동.** 선택하고 `enter`. 경로가 클립보드에 들어갑니다.
@@ -106,7 +106,7 @@ push가 원격 히스토리를 덮어쓰게 되면 grove가 먼저 묻습니다.
 프롬프트가 이름을 보여 주고, 브랜치는 남습니다.
 
 **풀 리퀘스트 리뷰.** `/review`, 하나 고르고, `enter`. `pr/<number>`로
-체크아웃됩니다. 거기서 `git push`하면 PR이 갱신되고, `s`도 마찬가지입니다.
+체크아웃됩니다. `s`는 PR head만 받아오며, `git push`는 PR 원본에 명시적으로 변경을 보냅니다.
 `gh`가 필요합니다.
 
 파괴적인 동작은 모두 먼저 묻습니다. `y`가 확인입니다. 다른 키는 취소합니다.
@@ -118,7 +118,8 @@ push가 원격 히스토리를 덮어쓰게 되면 grove가 먼저 묻습니다.
 | `↑` `↓` / `k` `j` | 이동 |
 | `←` `→` / `h` `l` | 폴더 접기 또는 펼치기; 폴더 밖으로 또는 안으로 |
 | `enter` | 선택한 경로 복사 |
-| `a` | 선택에서 갈라진 워크트리 추가 |
+| `a` | 최신 원격 trunk에서 워크트리 추가 |
+| `A` | 선택한 로컬 브랜치에서 분기 |
 | `r` | 선택 또는 폴더 전체 제거 |
 | `x` | 커밋하지 않은 변경 버리기, 사본은 남김 (변경이 있을 때만 표시) |
 | `s` | 선택 동기화 |
@@ -175,8 +176,8 @@ myapp/
 ```toml
 [setup]
 copy = [".env", "certs", "config/local.json"]
-link = ["node_modules"]
-env  = { PORT = 3000 }
+
+env  = { API_HOST = "http://localhost:3000" }
 run  = ["bun install"]
 open = "code ."
 
@@ -366,8 +367,9 @@ cd "$(grove path feat/login)"
 
 fetch한 뒤:
 
-- **기본 브랜치**: fast-forward하거나, 로컬 커밋을 리베이스하고 push.
-- **그 외 모든 브랜치**: 원격 위로 리베이스하고, 트렁크 위로 리베이스하고,
+- **기본 브랜치**: fast-forward만 수행하며 갈라진 로컬 커밋은 보존하고 거부.
+- **PR 리뷰 브랜치**: PR head만 갱신. rebase·push는 `--contribute`로 명시.
+- **개발 브랜치**: 원격 위로 리베이스하고, 트렁크 위로 리베이스하고,
   `--force-with-lease`로 push.
 
 변경이 있는 워크트리는 아무것도 실행하기 전에 중단합니다. 충돌한 리베이스는
@@ -613,3 +615,36 @@ fetch refspec이 없는 bare 클론, 아무것도 fetch되지 않은 원격을 �
 - 패키지 관리자가 아닙니다. 셋업 명령은 여러분의 것입니다.
 - 비밀 관리자가 아닙니다. `.grove.toml`은 커밋됩니다. 비밀은 로컬 겹에
   두세요.
+
+## bare 워크스페이스 개발 주기
+
+`clone`은 기본 브랜치 워크트리를 만들고 셋업을 적용합니다. 미승인 명령은
+터미널에서 확인 후 실행하며, `grove setup main`으로 나중에 마칠 수 있습니다.
+`clone -b feature`도 main 워크트리를 함께 유지합니다.
+
+- `grove add`와 화면의 `a`: fetch한 원격 trunk에서 새 작업을 시작합니다.
+  `A`는 선택한 로컬 브랜치에서 분기하며, CLI에서는 `--from`을 사용합니다.
+  `--on`은 stack 부모까지 기록합니다.
+- PR 리뷰 워크트리의 `sync`: PR head만 갱신합니다. rebase와 push는
+  `grove sync pr/42 --contribute`로 명시하며 PR의 실제 base를 사용합니다.
+  PR이 force-push되었다면 `grove pr 42 --replace`로 기존 커밋과 변경을
+  보존한 뒤 교체할 수 있습니다. 복구 방법은 출력에 표시됩니다.
+- `--config-source worktree`: add, pr, setup에서 대상 브랜치의 셋업 파일을
+  검증합니다. 선택은 기억되며 copy/link 원본은 main입니다.
+  `--config-source trunk`로 되돌립니다.
+- 의존성은 워크트리마다 설치합니다. `node_modules` 공유 대신 패키지 관리자
+  캐시를 활용합니다. copy는 재실행 시 대상 값을 덮어쓰므로 별도 로컬 값은
+  복사 대상과 다른 파일에 둡니다.
+- 준비 상태는 `pending / running / failed / ready / stale`로 기록합니다.
+  설정 및 의존성 manifest/lockfile이 바뀌면 stale 상태가 됩니다.
+- hooks와 exec에 `GROVE_PORT`, `GROVE_SERVICE_NAME`, `GROVE_DATABASE_NAME`,
+  `GROVE_WORKTREE_ID`를 제공합니다. `PORT`와 `COMPOSE_PROJECT_NAME` 기본값도
+  자동 설정됩니다. 포트는 같은 워크스페이스 안에서 구분하며 다른 앱의 소켓까지
+  예약하지는 않습니다. DB 생성은 프로젝트 셋업 스크립트가 담당합니다.
+- `grove prune -n --forge-merged`로 squash merge를 포함한 정리 후보를
+  확인합니다. 실제 제거는 `-n`을 빼고 실행합니다. PR head와 로컬 tip이
+  정확히 일치해야 하며 미커밋 변경 등이 있는 워크트리는 유지합니다.
+- `grove sync main`은 fast-forward만 수행합니다. 갈라진 로컬 커밋은 보존하고
+  별도 처리를 안내합니다.
+
+상세 명령은 [영문 개발 주기](../../USAGE.md#workspace-development-cycle)를 참고하세요.

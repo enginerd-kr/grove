@@ -1,6 +1,7 @@
 import { GroveError } from "../core/errors.ts";
 import { runShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
+import { runtimeEnv } from "../core/runtime.ts";
 import { plural, toLines } from "../core/text.ts";
 import type { Reporter } from "../report/reporter.ts";
 import {
@@ -140,13 +141,17 @@ export function failureFor(result: { readonly failed?: HookFailure }): GroveErro
  * command and not its environment, because `env` is where a token ends up and a
  * token belongs in no scrollback.
  */
-export function commandEnvFor(
+export async function commandEnvFor(
   repo: RepoPaths,
   target: HookTarget,
   env: readonly HookEnv[],
-): Record<string, string> {
+): Promise<Record<string, string>> {
+  const runtime = await runtimeEnv(repo, target.path);
   return {
+    PORT: runtime.GROVE_PORT ?? "",
+    COMPOSE_PROJECT_NAME: runtime.GROVE_SERVICE_NAME ?? "",
     ...Object.fromEntries(env.map(({ name, value }) => [name, value])),
+    ...runtime,
     GROVE_ROOT: repo.root,
     GROVE_WORKTREE: target.path,
     GROVE_BRANCH: target.branch ?? "",
@@ -209,7 +214,7 @@ export async function runCommands(
     return { ran: [], untrusted };
   }
 
-  const commandEnv = commandEnvFor(repo, target, env);
+  const commandEnv = commands.length > 0 ? await commandEnvFor(repo, target, env) : {};
 
   // Which file the line was written in, said out loud only where there is more
   // than one it could have been — see `namesSources`. It goes on the step and
