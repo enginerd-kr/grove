@@ -7,135 +7,118 @@
 
 # grove
 
-**Worktrees that arrive ready.**
+**A working folder for every branch, with project setup automated.**
 
-grove is a Git worktree manager with project-defined setup. Clone once, branch freely, and let .grove.toml turn each new worktree into a usable development environment.
+grove is a Git worktree manager. Clone a repository once, then develop and review pull requests in separate folders. Configure `.grove.toml` to copy local files and install dependencies whenever you create a worktree.
 
 [![ci](https://github.com/enginerd-kr/grove/actions/workflows/ci.yml/badge.svg)](https://github.com/enginerd-kr/grove/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![release](https://img.shields.io/github/v/release/enginerd-kr/grove?color=brightgreen)](https://github.com/enginerd-kr/grove/releases)
 
-[Install](#install) · [Quick Start](#quick-start) · [Project Setup](#project-setup-grovetoml) · [Development](#development)
+[Install](#install) · [Quick start](#quick-start) · [User guide](USAGE.md) · [Development](#development)
 
 [English](README.md) · [한국어](docs/md/README.ko.md)
 
 </div>
 
 <p align="center">
-  <img src="docs/screens/demo.gif" alt="18-second demo: adding a worktree, .grove.toml setting it up, and syncing it back under the trunk" width="100%">
+  <img src="docs/screens/demo.gif" alt="18-second demo: creating a worktree, applying .grove.toml setup, and incorporating changes from the default branch" width="100%">
 </p>
-
-## What Is This, Really?
-
-Git worktrees let one repository have many working directories. grove turns that into a managed workspace.
-
-- one bare clone stores the repository once
-- every branch gets its own predictable directory
-
-In practice, grove is for keeping several branches alive at once: a feature, a hotfix, a review branch, an experiment, and a coding-agent sandbox, each in its own ready-to-run directory.
 
 ## Install
 
 ```bash
 brew install enginerd-kr/tap/grove
-# or, with npm (macOS and Linux; needs Node 18+)
+# or install with npm (macOS and Linux; Node 18+)
 npm install -g @enginerd-kr/grove
-# or run it without installing
-npx @enginerd-kr/grove
 ```
 
-## Quick Start
+To run without installing, use `npx @enginerd-kr/grove`.
+
+## Quick start
+
+Replace the URL below with your repository's URL.
 
 ```bash
 grove clone https://github.com/org/repo.git
 cd repo
-
-# If setup was deferred: grove setup main
 grove add feat/login
-grove add fix/prod-crash
-grove
+cd feat/login
 ```
 
-grove clone creates a managed repository with a default-branch worktree and applies its setup, asking before unapproved commands in a terminal. grove add creates a branch worktree and applies .grove.toml. Running grove with no arguments opens the interactive manager.
+Edit code and commit with Git as usual inside `feat/login`. If the project has
+setup commands, grove shows them and asks for approval before running them for
+the first time. You can create worktrees without a setup file, too.
 
-## Stuff You Do With Grove
+Run `grove` anywhere in the workspace to see all your worktrees. Press `a` to
+start a new task or `s` to sync the selected worktree.
 
-- **Start a branch without losing your current one.** grove add feat/search creates a real worktree in a predictable path.
-- **Branch after you already started typing.** grove add feat/search --take moves your uncommitted changes into the new worktree and leaves the old one clean.
-- **Stack one change on another.** grove add feat/step-2 --on feat/step-1 remembers the base, sync rebases through it, grove stack draws the whole chain, and grove propose --stack opens a pull request for every step onto the one below.
-- **Review a pull request in a real checkout.** grove pr 42 takes a number, a URL, or a branch name. Sync there receives the PR head without rebasing or pushing. Use `grove sync pr/42 --contribute` to explicitly rebase and push a contribution.
-- **Contribute from a fork.** grove clone --upstream keeps your trunk following the original and sends your branches to your fork. Nothing to configure afterwards.
-- **Rebase onto a base you pick.** grove rebase lists the candidates, carries your uncommitted changes through, and undoes everything if it conflicts.
-- **Give every coding agent its own workspace.** agents/refactor, agents/tests, agents/ui-copy — no second clone.
-- **Stop rebuilding the same local setup.** .grove.toml copies .env, links dependency folders, assigns a worktree port and service name, runs the install, opens your editor.
-- **See the whole repository at once.** grove shows branches, dirty worktrees, sync drift, recent activity, each branch's pull request with its checks and review, and which worktrees were set up from an older .grove.toml.
-- **Discard without regret.** grove reset keeps what it throws away as a commit, and tells you the git stash apply that brings it back.
-- **Clear away what is finished.** grove prune removes the worktrees whose branch is gone or already merged, and can ask GitHub about pull requests closed without merging.
+## Everyday workflow
 
-## Why Not Just git worktree?
+These examples run from `repo/`.
 
-Raw git worktree is powerful, but the day-to-day is still manual:
+| Task | Command |
+| --- | --- |
+| Start a new task | `grove add feat/login` |
+| Open a PR for your work | `grove propose feat/login` |
+| Sync a development branch | `grove sync feat/login` |
+| Review someone else's PR | `grove pr 42` |
+| Update a PR review worktree | `grove sync pr/42` |
+| Preview finished worktrees to remove | `grove prune -n` |
 
-- choosing where each branch directory belongs
-- remembering which folder has uncommitted changes
-- keeping every branch synced with its remote and default branch
-- copying ignored files like .env, certs, or local config into every new checkout
-- deciding whether dependencies should be installed again or shared through symlinks
+`propose` and `pr` require the GitHub CLI, `gh`. `propose` handles the first push
+for a new branch. To publish a branch with `sync` before opening a PR, add
+`--publish`.
 
-grove makes those choices repeatable. Branch feat/login becomes feat/login/, the UI shows what changed, and the repository itself describes how a fresh worktree becomes usable.
+**On a development branch, `sync` rebases and pushes.** On a PR review worktree,
+it receives the latest PR commits. On the default branch, it only fast-forwards.
+See [how sync works](USAGE.md#what-does-sync-do) for the differences.
 
-## Project Setup (.grove.toml)
+## How are the folders organized?
 
-A repository can carry its own setup recipe. It is tracked and reviewed like any other file, so a fresh clone is set up before anybody explains how.
+```text
+repo/             # Workspace: run grove here
+  .bare/          # Git repository shared by all worktrees
+  .git            # File pointing to the Git repository
+  main/           # Default branch and shared setup files
+  feat/login/     # Login feature development
+  pr/42/          # PR #42 review
+```
 
-Add .grove.toml to the default branch:
+Edit and commit inside a worktree such as `main/`, `feat/login/`, or `pr/42/`.
+`main` is an example default branch name; use `master` or another name if that
+is what your repository uses. New tasks start from the latest remote default
+branch. You do not need to update local `main` or enter its folder first.
+
+## Configure project setup once
+
+Put the project's preparation steps in `.grove.toml` on the default branch.
+This minimal example is for a Bun project. Replace `run` with your project's
+install command.
 
 ```toml
 [setup]
-copy = [".env", "certs", "config/local.json"]
-env = { API_HOST = "http://localhost:3000" }
 run = ["bun install"]
-open = "code ."
-
-[teardown]
-run = ["docker compose down"]
 ```
 
-Every new worktree is then filled in from it:
+To copy `.env` as well, add `copy = [".env"]` under `[setup]` and prepare the
+source file at local `main/.env`. Add `.env` to `.gitignore`. Install dependencies
+in each worktree and use your package manager's download cache.
 
-- **copy** brings files or directories from the default branch's worktree. The trunk's copy wins. A pattern like packages/*/.env covers a package added next week.
-- **link** symlinks shared paths like dependency folders, and leaves what the worktree already has. Patterns work here too.
-- **env** reaches the setup commands. `PORT` and `COMPOSE_PROJECT_NAME` default to workspace-assigned values; explicit config overrides them.
-- **run** runs shell commands in the new worktree, in order. Install dependencies separately in each worktree; share package-manager caches instead of `node_modules`.
-- **open** starts your editor.
+`clone`, `add`, and `pr` apply the setup. If an install fails or the configuration
+changes later, run `grove setup feat/login` to apply it again.
+See [project setup](USAGE.md#project-setup) for configuration and retry instructions.
 
-<p align="center">
-  <img src="docs/screens/add.svg" alt="grove adding a worktree and applying .grove.toml setup steps" width="100%">
-</p>
+## Where to go next
 
-See [the workspace development cycle](USAGE.md#workspace-development-cycle) for review updates, setup recipes, runtime variables, and cleanup.
-
-## Layout
-
-One bare clone, and ordinary Git worktrees beside it:
-
-```text
-repo/
-  .bare/           # Git objects and refs, stored once
-  .git             # Points Git commands at .bare
-  main/            # Default branch worktree
-  feat/login/      # Branch feat/login
-  fix/prod-crash/  # Branch fix/prod-crash
-  agents/refactor/ # Branch agents/refactor
-```
-
-## What It Is Not
-
-- Not a replacement for Git. Every checkout is an ordinary Git worktree.
-- Not a package manager. The setup commands are yours: bun install, uv sync, just setup.
-- Not a secret manager. .grove.toml is committed and reviewed; keep real secrets out.
+- [User guide](USAGE.md): from the first clone to opening a PR and cleaning up
+- [Interactive screen](USAGE.md#interactive-screen): manage worktrees with the keyboard
+- [Options for specific tasks](USAGE.md#options-for-specific-tasks): move changes, stack branches, replace a review checkout, or use a branch's setup
+- [Troubleshooting](USAGE.md#troubleshooting): when setup or sync cannot finish
 
 ## Development
+
+Use these commands when contributing to grove itself.
 
 ```bash
 bun install

@@ -1,705 +1,733 @@
-# Using grove
+# grove user guide
 
-<div align="center">
+[English](USAGE.md) · [한국어](docs/md/USAGE.ko.md) · [Project overview](README.md)
 
-[English](USAGE.md) · [한국어](docs/md/USAGE.ko.md)
+grove gives each branch its own working folder so you can develop and review PRs
+at the same time. Start with the **basic development workflow** below. Configure
+project setup once and it runs when you create worktrees. Look up additional
+options when you need them.
 
-</div>
-
-grove manages git worktrees. Run `grove` and you get an interactive screen:
-one row per worktree, one key per action. Every action is also a CLI command
-(`grove add`, `grove sync`, ...) for scripts, agents, and non-interactive
-shells.
-
-This guide covers the screen first, then the commands.
-
-- [Install and first run](#install-and-first-run)
-- [The screen](#the-screen)
-- [Common tasks](#common-tasks)
-- [Keys](#keys)
-- [Layout on disk](#layout-on-disk)
-- [Worktree setup: .grove.toml](#worktree-setup-grovetoml)
-- [Remotes and forks](#remotes-and-forks)
-- [CLI reference](#cli-reference)
-- [Scripting and agents](#scripting-and-agents)
+- [Basic development workflow](#basic-development-workflow)
+- [What does sync do?](#what-does-sync-do)
+- [Interactive screen](#interactive-screen)
+- [Project setup](#project-setup)
+- [Options for specific tasks](#options-for-specific-tasks)
 - [Troubleshooting](#troubleshooting)
+- [Command reference](#command-reference)
+- [Scripting and agents](#scripting-and-agents)
 
-## Install and first run
+## Basic development workflow
+
+### 1. Install and clone
+
+With Git installed, choose one way to install grove:
 
 ```bash
-brew install enginerd-kr/tap/grove   # or: npm install -g @enginerd-kr/grove
-mkdir myapp && cd myapp
-grove
+brew install enginerd-kr/tap/grove
+# or install with npm (macOS and Linux; Node 18+)
+npm install -g @enginerd-kr/grove
 ```
 
-In a folder with no repository, `grove` asks for a URL, clones it, and opens
-the screen. An empty folder becomes the repository itself. A non-empty folder
-gets the repository in a subfolder.
+Replace the URL with your repository's URL.
 
-grove also works inside an existing `git clone`. New worktrees go beside the
-repository (`myapp-feat-login` next to `myapp`). In a folder with several
-repositories, `grove` asks which one.
+```bash
+grove clone https://github.com/org/repo.git
+cd repo
+```
 
-## The screen
+This creates the default branch's worktree and applies project setup. When setup
+commands appear for the first time, read them and press `y` to approve. To prepare
+the environment later, leave them unapproved and run `grove setup main` when ready.
 
-<p align="center">
-  <img src="docs/screens/list.svg" alt="the grove screen: every worktree, its drift against origin and the trunk, and whether it is clean" width="100%">
-</p>
-
-Rows are worktrees, grouped by the folders in their branch names. `*` marks
-the worktree you ran `grove` from. `▸` is the cursor.
-
-| column | meaning |
-| --- | --- |
-| remote | commits ahead / behind the branch's upstream |
-| main | commits ahead / behind the trunk |
-| pr | the branch's open pull request, as GitHub sees it: the number, `✓` `✗` `·` for checks passed, failed, or still running, then `draft`, `approved`, `changes requested`, `conflicts` as they apply. Read through `gh` once a minute; without `gh`, or outside GitHub, the column is not drawn |
-| state | `●` has uncommitted changes, `○` clean, then the age of the last commit. `merged` and `gone` mean the branch is finished with; `setup stale` means `.grove.toml` changed since the worktree was filled in |
-
-A row indented under another worktree, rather than under a folder, sits on
-it: `grove add --on` stacked it there. The state column says `on <branch>`
-instead when the parent is in another folder.
-
-Below the list: files changed in the selected worktree, and (with `/log`) its
-recent commits. Beside the list, when the selected row is in a stack: the
-whole stack, each branch under the one it sits on with how far it has drifted
-from it — the same picture `grove stack` prints. The bottom bar shows the keys
-available right now.
-
-The screen rereads local worktrees every two seconds. Remote refs and pull-request
-badges refresh separately, once a minute, with a 30-second deadline per network
-read. Local changes remain visible while a fetch is slow or unavailable. The line
-below the header shows when the last background fetch succeeded and whether the
-latest attempt failed. `/refresh` rereads local worktrees immediately.
-
-## Common tasks
-
-**Create a branch.** `a`, type a name, `enter`. grove creates the branch and
-worktree, applies `.grove.toml`, opens your editor, and copies `cd <path>` to
-the clipboard. The branch is cut from the fetched remote trunk. `A` explicitly branches from the selected local worktree. On a folder row,
-the name starts with the folder prefix filled in.
-
-**Jump to a worktree.** Select it, `enter`. The path is on the clipboard.
-
-**Sync.** `s` fetches, rebases onto the remote and then the trunk, and pushes.
-If the push would rewrite remote history, grove asks first. A branch that is
-on no remote yet is asked about too: `y` pushes it and tracks it. `/sync-all`
-does every worktree with a single confirmation, and only says which branches
-are on no remote.
-
-**Rebase onto something else.** `/rebase` lists the bases for the selected
-worktree: the branch's remote, the branch it is stacked on, the trunk, and the
-other worktrees' branches. Pick one, `enter`. Nothing is pushed. Uncommitted
-changes are carried through and put back; if the rebase conflicts, or the
-changes will not sit on the result, the whole thing is undone.
-
-**Open a pull request.** `/propose` asks the forge to open one for the
-selected worktree's branch. A branch added with `--on` goes onto the branch it
-sits on, so the second pull request of a stack does not show the first one's
-diff again; any other branch goes onto the trunk. The prompt names the base.
-`y` pushes the branch where `git push` would send it, a first push included,
-and opens the pull request filled in from the commits. A branch that already
-has one is reported instead. Requires `gh`.
-
-**Discard changes.** `x` throws away everything uncommitted in the selected
-worktree, untracked files included. What goes is saved as a commit first, and
-the line after `y` says how to get it back: `git stash apply <sha>`.
-
-**Remove.** `r`. The prompt lists what would be lost. `y` removes the worktree
-and keeps the branch. On a folder row, `r` removes every worktree in it.
-`/prune` removes every worktree badged `merged` or `gone` at once: the prompt
-names them, and the branches stay.
-
-**Review a pull request.** `/review`, pick one, `enter`. It checks out as
-`pr/<number>`. `s` receives the latest PR head without rebasing or pushing. `git push` explicitly updates the PR; `grove sync pr/42 --contribute` also rebases onto the PR base before pushing.
-Requires `gh`.
-
-Every destructive action asks first. `y` confirms. Any other key cancels.
-
-## Keys
-
-| key | action |
-| --- | --- |
-| `↑` `↓` / `k` `j` | move |
-| `←` `→` / `h` `l` | fold or open a folder; step out of or into it |
-| `enter` | copy the selected path |
-| `a` | add a worktree, branched from the selection |
-| `r` | remove the selection, or the whole folder |
-| `x` | discard uncommitted changes, keeping a copy (shown only when there are any) |
-| `s` | sync the selection |
-| `/` | command menu |
-| `y` / `n` | confirm / cancel |
-| `q` / `esc` | quit |
-
-`/` opens a searchable menu. Type to filter, `↑` `↓` to pick, `enter` to run,
-`esc` to close.
-
-<p align="center">
-  <img src="docs/screens/menu.svg" alt="the / menu open over the list, narrowed by what has been typed" width="100%">
-</p>
-
-| command | action |
-| --- | --- |
-| `/open` | open the selection in the editor |
-| `/setup` | re-apply `.grove.toml` to the selection |
-| `/rebase` | rebase the selection onto a base you pick |
-| `/propose` | open a pull request for the selection, onto the branch it sits on |
-| `/sync-all` | sync every worktree |
-| `/prune` | remove the worktrees badged `merged` or `gone` |
-| `/review` | check out an open pull request |
-| `/upstream` | this is a fork: follow another repository's trunk |
-| `/refresh` | re-read worktrees now |
-| `/log` | toggle the commit panel |
-
-Two things are CLI-only by design: moving uncommitted changes into a new
-worktree (`grove add --take`) and recording a branch as stacked on another
-(`grove add --on`).
-
-## Layout on disk
+This guide uses a repository whose default branch is `main`. Substitute `master`
+or your repository's actual name where needed. The word `trunk` in the docs and
+command options means this default branch.
 
 ```text
-myapp/
-  .bare/           # git objects and refs
-  .git             # file pointing at .bare
-  main/            # default branch
-  feat/login/      # branch feat/login
-  feat/login-api/  # branch feat/login-api
-  pr/42/           # PR checked out for review
+repo/             # Workspace: manage your tasks here
+  .bare/          # Shared Git repository
+  .git            # File pointing to .bare
+  main/           # Default branch worktree
 ```
 
-Directory name = branch name, slashes included. Each directory is a normal git
-worktree; `git` works there as usual. The root is never a worktree.
+`repo/` is the management folder. Enter a worktree inside it to edit code or make
+Git commits. Unless a step says otherwise, the commands below run from `repo/`.
 
-## Worktree setup: .grove.toml
+### 2. Start a new task
 
-A new worktree has no `.env` and no `node_modules`. `.grove.toml` on the
-default branch declares how to fill one in. Every `a` / `grove add` applies it.
+```bash
+grove add feat/login
+cd feat/login
+```
+
+This creates `repo/feat/login/` and applies setup. A new branch starts from the
+latest fetched remote default branch. You do not need to commit on local `main`
+or run `grove sync main` first.
+
+If the branch already exists, grove checks it out. If it already has a worktree,
+grove reports the existing path.
+
+Edit, test, and commit in this folder as usual. Starting another task leaves this
+worktree's changes in place.
+
+### 3. Open a PR for your work
+
+After committing your changes, run this inside `feat/login/`:
+
+```bash
+grove propose
+```
+
+This pushes the branch and opens a PR using its commits for the title and body.
+It also pushes a new branch for the first time, so no separate first push is
+needed. To write the title and body yourself, use `grove propose --web`.
+PR features require the GitHub CLI, `gh`, installed and signed in. Sign in with
+`gh auth login`.
+
+After opening the PR, commit any changes so the worktree is clean, then run this
+to incorporate updates from the remote and the default branch:
+
+```bash
+grove sync
+```
+
+On a development branch, `sync` rebases and pushes. See
+[how sync works](#what-does-sync-do) for conflicts and first pushes.
+
+### 4. Review someone else's PR
+
+Return to the workspace and enter the PR number to review.
+
+```bash
+cd "$(grove path)"
+grove pr 42
+cd pr/42
+```
+
+Read code and run tests inside `pr/42/`. Your development work in `feat/login/`
+stays in place. When the author adds commits, run this in the review folder:
+
+```bash
+grove sync
+```
+
+**In a PR review worktree, sync only receives the latest PR commits.** It does not
+rebase or push. If local commits or changes prevent an update, it stops and
+explains why. If the PR was force-pushed, see
+[replacing a review worktree](#when-a-force-push-blocks-a-pr-update).
+
+### 5. Clean up finished work
+
+Return to the workspace and preview what can be removed.
+
+```bash
+cd "$(grove path)"
+grove prune -n
+```
+
+After checking the candidates, remove them:
+
+```bash
+grove prune
+```
+
+By default, this removes worktrees whose branches have disappeared from the
+remote or have been merged, and keeps the local branches. If a squash-merged PR
+is missing from the candidates, see
+[cleanup using GitHub's merge status](#when-squash-merged-work-is-missing-from-cleanup).
+
+To remove just one worktree, such as the review folder, run `grove remove pr/42`.
+Removal is refused by default if it has uncommitted changes. If the project has
+teardown commands, they run before the directory is removed.
+
+## What does sync do?
+
+`sync` behaves according to the branch's purpose. Run `grove sync` inside a
+worktree, or name the target from the workspace: `grove sync feat/login`.
+
+| Target | Example | Behavior |
+| --- | --- | --- |
+| Development branch | `grove sync feat/login` | Fetch → rebase onto the tracked remote branch and the default branch → push |
+| PR review worktree | `grove sync pr/42` | Update to the latest PR commits |
+| Default branch | `grove sync main` | Fast-forward to incorporate remote changes |
+
+Development branch sync in the CLI uses `--force-with-lease` when needed and
+does not ask for confirmation. The interactive screen asks before a push that
+rewrites remote history and before the first push.
+
+| What you need | Command |
+| --- | --- |
+| Push a new branch before opening a PR | `grove sync feat/login --publish` |
+| Keep the synced result local | `grove sync feat/login --no-push` |
+| Sync all worktrees | `grove sync --all` |
+
+If a development branch is not on a remote and you omit `--publish`, `sync`
+rebases locally and reports exit code `4`. Use `propose` or `sync --publish` for
+the first push. With `--no-push`, local sync completes even for an unpublished
+branch.
+
+Sync refuses worktrees with uncommitted changes. A conflicting rebase is aborted
+by default; check the reported state and instructions. If local commits on the
+default branch have diverged from the remote, sync stops without rebasing them.
+
+## Interactive screen
+
+You can also run `grove` in the workspace or a worktree to manage tasks with the
+keyboard. Each row is a worktree. `*` marks the current worktree; `▸` marks the
+selected row.
+
+<p align="center">
+  <img src="docs/screens/list.svg" alt="The grove screen showing worktrees, drift from remotes, and change status" width="100%">
+</p>
+
+Start with these keys:
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` / `k` `j` | Select a worktree |
+| `a` | Start a new task from the latest remote default branch |
+| `enter` | Copy the selected worktree's path |
+| `s` | Sync the selected worktree |
+| `/` | Open the command menu |
+| `q` / `esc` | Quit |
+
+Press `a` and enter a branch name to apply setup and open the configured editor.
+It also copies `cd <path>` to the clipboard for you to paste into a terminal.
+When using `enter` to copy only the path, paste it after `cd`. grove does not
+change the working directory of your shell directly.
+
+Type in the `/` menu to search, then press `enter` to run a command.
+
+| Menu command | Task |
+| --- | --- |
+| `/propose` | Open a PR for the selected development branch |
+| `/review` | Choose an open PR and create a review worktree |
+| `/open` | Open the selected worktree in the editor |
+| `/setup` | Run setup again for the selected worktree |
+| `/prune` | Clean up worktrees marked `merged` or `gone` |
+| `/sync-all` | Sync all worktrees |
+| `/rebase` | Rebase the selected worktree onto another base |
+| `/upstream` | Set the original repository for a fork |
+| `/refresh` | Refresh the list immediately |
+| `/log` | Toggle the recent commits panel |
+
+Additional keys: `A` branches from the selected local branch; `r` removes the
+selected worktree. `x` discards uncommitted changes, including untracked files,
+while keeping a recovery copy. Confirm removal or discarding with `y` in the
+screen. Pressing `r` on a folder row targets all worktrees in that folder.
+Use `←` `→` / `h` `l` to fold or open folders.
+
+### Reading the list
+
+| Column or marker | Meaning |
+| --- | --- |
+| `remote` | Commits ahead of and behind the tracked remote branch |
+| `main` | Commits ahead of and behind the default branch's remote reference |
+| `pr` | PR number, checks, and review status. Shown when GitHub and `gh` are available |
+| `●` / `○` | Uncommitted changes / clean |
+| `merged` / `gone` | Merged / the tracked remote branch has disappeared |
+| `setup pending`, `setup failed`, `setup stale` | [Setup needs attention or another run](#setup-status-and-retries) |
+| `review #42 → main` | The reviewed PR and its actual base branch. Following numbers show drift against that base |
+| `on <branch>` or indentation below another worktree | Work stacked on another development branch |
+
+Changed files for the selected worktree appear below the list. Selecting a
+stacked branch also shows the relationships between branches.
+
+The list refreshes automatically. Remote and PR updates run separately, so local
+changes remain visible when the network is slow. The header reports the last
+background fetch and any failure. `/refresh` rereads local worktrees immediately.
+
+## Project setup
+
+If the project already has `.grove.toml`, read and approve the commands it asks
+to run. This section is for the person configuring the project's preparation
+steps.
+
+### Start with a minimal configuration
+
+Create `main/.grove.toml` in the default branch's worktree. This example is for a
+Bun project; use your project's install command, such as `pnpm install` or
+`uv sync`, in `run`.
 
 ```toml
 [setup]
-copy = [".env", "certs", "config/local.json"]
-env  = { API_HOST = "http://localhost:3000" }
-run  = ["bun install"]
-open = "code ."
-
-[teardown]
-run = ["docker compose down"]
+run = ["bun install"]
 ```
 
-| key | meaning |
+Try applying it from the workspace:
+
+```bash
+grove setup main
+```
+
+Commit `.grove.toml` and merge it into the default branch so the project can
+share it. It then applies to worktrees created by `clone`, `add`, and `pr`.
+
+To copy `.env` too, add it as follows:
+
+```toml
+[setup]
+copy = [".env"]
+run = ["bun install"]
+```
+
+Prepare the actual source file at local `main/.env` and add it to `.gitignore`.
+Keep secrets out of `.grove.toml`. `copy` reads from the local default branch's
+worktree, so cloning alone will not provide someone else's `.env`.
+
+Install dependencies separately in each worktree. Branches may have different
+lockfiles; use your package manager's download cache instead of sharing
+`node_modules`.
+
+### Approving commands
+
+New project commands are shown for approval. Press `y` in the terminal or the
+interactive screen to save approval for this repository. The same content will
+not prompt again. If the project configuration changes to content you have not
+approved, grove asks again. `copy` and `link` apply before command approval.
+
+If you deferred setup, run `grove setup feat/login` to try again. `--trust` skips
+the approval question when you have already read the commands. In a pipe or with
+`--json` or `--headless`, grove does not ask and skips unapproved commands.
+
+### Setup status and retries
+
+You do not need to recreate a worktree because installation failed. Fix the cause
+of the failed command shown in the output, then apply setup to the existing
+worktree again.
+
+```bash
+grove setup feat/login
+# When all worktrees need setup again
+grove setup --all
+```
+
+| State | Meaning and next step |
 | --- | --- |
-| `copy` | copy from the trunk worktree. Trunk wins; directories merge |
-| `link` | symlink to the trunk's path. Existing entries are left alone |
-| `env` | environment for `run` commands |
-| `run` | commands to run in the worktree, in order, awaited |
-| `open` | editor command. Not awaited; survives the terminal closing |
-| `[teardown] run` | commands to run before the worktree is removed |
+| `pending` | Setup was skipped, commands lack approval, or a copy source is missing. Read the report and run `grove setup <branch>` |
+| `running` | Setup is in progress |
+| `failed` | Setup failed. Fix the cause and run it again |
+| `ready` | Setup completed. No separate badge appears in the list |
+| `stale` | Configuration or a monitored dependency file changed after setup. Run setup again |
 
-Rules:
+Change detection covers the applied configuration files and these files at the
+root of the target worktree: `package.json`, `bun.lock`, `bun.lockb`,
+`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `uv.lock`, `pyproject.toml`,
+`Cargo.lock`, and `go.sum`. `ready` means setup completed; it does not guarantee
+that the app runs or its tests pass. Missing copy sources are reported as
+`missing` and leave setup `pending`.
 
-- Paths must stay inside the worktree. Absolute paths, `..`, `.git`, and
-  `.bare` reject the whole file.
-- A `copy` or `link` path can be a pattern: `packages/*/.env`,
-  `**/.env.local`, `apps/{web,api}/node_modules`. It is matched against the
-  trunk's worktree when setup runs, so a package added later is covered. The
-  report names each match; a pattern that matches nothing is reported as
-  missing under its own spelling.
-- Unknown keys are errors. `cpoy = [".env"]` fails instead of doing nothing.
-- List keys accept a bare string: `copy = ".env"`.
+On another run, `copy` overwrites existing files with the default branch's values
+and `run` starts its commands from the beginning. Keep files with worktree-specific
+values outside the copy list, and write install scripts that can run repeatedly.
+`setup` does not reopen the editor. Use `grove open feat/login` for that.
 
-Any key can be per-platform. The keys are `macos`, `linux`, `windows`; a
-platform the table leaves out gets nothing there. `env`'s platform keys hold
-that platform's variables, over the shared ones:
+### Additional configuration
+
+| Setting | Purpose |
+| --- | --- |
+| `[setup] copy` | Copy files and directories from the default branch. Merge directories and overwrite matching files |
+| `[setup] link` | Symlink to a path in the default branch. Keep entries already at the destination |
+| `[setup] env` | Environment variables for setup commands |
+| `[setup] run` | Shell commands run in order inside the new worktree, waiting for completion |
+| `[setup] open` | Editor command, without waiting for it to exit |
+| `[teardown] run` | Cleanup commands run before removing a worktree |
+| `[teardown] env` | Environment variables for cleanup commands |
+
+`copy` and `link` accept patterns such as `packages/*/.env` and `**/.env.local`,
+matched against the default branch's worktree. Paths must be relative and stay
+inside the worktree. Absolute paths, `..`, `.git`, and `.bare` are not allowed.
+Unknown configuration keys produce an error.
+
+### Personal settings and your editor
+
+| Priority | File | Purpose |
+| --- | --- | --- |
+| 1 — defaults | `~/.config/grove/config.toml` | Your settings for all projects |
+| 2 | `.grove.toml` | Shared project settings |
+| 3 — overrides | `.grove.local.toml` | Your local settings for this project |
+
+By default, both project files are read from `main/`. A branch with
+`--config-source worktree` reads them from its own worktree. Add
+`.grove.local.toml` to `.gitignore`.
+
+When several files set the same key, the higher-priority file wins. Lists such as
+`run`, `copy`, and `link` are replaced, not combined; `env` is overridden per
+variable. For example, `run = []` under `[setup]` in `.grove.local.toml` disables
+the project's setup commands. Global settings and local settings not tracked by
+Git apply without separate approval.
+
+Set your editor in `~/.config/grove/config.toml`:
+
+```toml
+[setup]
+open = "code ."
+```
+
+Use `macos`, `linux`, and `windows` for platform-specific settings:
 
 ```toml
 [setup.open]
 macos = 'open -a "Visual Studio Code" .'
 linux = "code ."
 
-[setup.copy]
-macos   = [".env"]
-windows = [".env", "local.bat"]
-
 [setup.env]
-PORT    = 3000
+API_HOST = "http://localhost:3000"
 windows = { SHELL = "pwsh" }
-
-[teardown.run]
-macos = ["docker compose down", "colima stop"]
 ```
 
-### Three config layers
+`copy`, `link`, `run`, and `[teardown] run` also accept per-platform lists.
+Values without a platform apply across platforms. A platform omitted from a
+platform table receives no setting from that table.
 
-| file | scope |
+## Options for specific tasks
+
+### Move work to a new branch after starting it
+
+Run this inside the worktree containing your changes:
+
+```bash
+grove add feat/search --take
+```
+
+It moves uncommitted changes into the new worktree and leaves the original clean.
+To base a new branch on committed changes, use `--from` below.
+
+### Continue work from another development branch
+
+```bash
+grove add feat/login-ui --from feat/login
+```
+
+This selects the starting point only. In the interactive screen, select
+`feat/login` and press `A`. To also remember the dependency between the tasks,
+use `--on`:
+
+```bash
+grove add feat/login-ui --on feat/login
+grove stack feat/login-ui
+grove propose feat/login-ui --stack
+```
+
+Branches created with `--on` sync onto their parent and use that parent as the
+default PR base. `--stack` opens PRs starting with the parents. Do not combine
+`--from` and `--on`.
+
+### When a force-push blocks a PR update
+
+```bash
+grove pr 42 --replace
+```
+
+This saves the existing commits under a backup ref and uncommitted changes in a
+snapshot, then replaces the checkout with the latest PR commits. Check the output
+for the backup location and recovery commands. For ordinary PR updates,
+`grove sync pr/42` is enough.
+
+### Send your own changes to a PR you are reviewing
+
+After committing your changes in the review worktree, run this to rebase onto the
+PR's actual base and push to the author's branch. You need push permission on
+that branch.
+
+```bash
+grove sync pr/42 --contribute
+```
+
+If your commits are already where you want them and need no rebase, you can also
+run `git push` directly in the review folder.
+
+### Test setup changes made on a branch
+
+The default configuration is local `main/.grove.toml`. To try configuration
+changes in a PR or development branch, select the target worktree's files:
+
+```bash
+grove pr 42 --config-source worktree
+# Also works for an existing worktree
+grove setup feat/login --config-source worktree
+```
+
+This option is available on `add`, `pr`, and `setup`. The choice is saved for the
+branch and applies to later setup, editor opening, and teardown. `copy` and
+`link` still take their source files from local `main/`. To restore the default:
+
+```bash
+grove setup feat/login --config-source trunk
+```
+
+### Run servers in several worktrees
+
+Setup, teardown, and editor commands run by grove, as well as `exec`, receive
+worktree-specific environment variables. Use them in project scripts as needed.
+
+| Variable | Value |
 | --- | --- |
-| `~/.config/grove/config.toml` | your machine. Put `open` here |
-| `.grove.toml` | the project. Committed |
-| `.grove.local.toml` | this checkout. Gitignored |
+| `GROVE_ROOT` | Workspace path |
+| `GROVE_WORKTREE` | Path of the worktree running the command |
+| `GROVE_BRANCH` | Branch name |
+| `GROVE_WORKTREE_ID` | Worktree identifier, preserved across renames |
+| `GROVE_PORT` | Port number distinct within this workspace |
+| `GROVE_SERVICE_NAME` | Worktree-specific service name |
+| `GROVE_DATABASE_NAME` | Worktree-specific database name |
 
-Applied in that order. Every key takes the value from the highest layer that
-sets it — `copy`, `link`, `run` and `open` included, and `env` one variable name
-at a time. A higher layer replaces the whole key rather than adding to it, so
-`run = []` in `.grove.local.toml` turns the project's commands off on this
-machine. Commenting a key out is the same as leaving it out: the layer below
-still applies. A key written for another platform is not a value set here.
+`PORT` and `COMPOSE_PROJECT_NAME` default to the assigned port and service name.
+Explicit values in setup or teardown `env` override these defaults. For example,
+setting `PORT = 3000` in shared configuration gives all worktrees the same port.
 
-When more than one layer is in play, each command says which file it came from
-as it runs.
+These variables are not automatically injected into commands you run directly
+in an ordinary terminal. To inspect the assigned values, run the following.
+`exec` visits every worktree in order.
 
-### Trust
+```bash
+grove exec -- sh -c 'echo "$GROVE_BRANCH: PORT=$PORT DB=$GROVE_DATABASE_NAME"'
+```
 
-`copy` and `link` run immediately. `run` and `open` do not until you approve
-them, since a `git pull` could otherwise deliver arbitrary commands.
+Your app or startup script must read these values. grove does not create databases
+or reserve ports with the operating system. Handle conflicts with other
+repositories or apps in your project.
 
-grove shows the commands and asks. `y` approves. On the screen that is the
-prompt after `a`; on the CLI it is the same question under `grove add`,
-`grove pr`, `grove setup`, and `grove open`, whenever a terminal is attached.
-`--trust` answers it in advance. In a pipe, with `--headless`, or with
-`--json`, nothing is asked: the commands are printed and skipped.
+### When squash-merged work is missing from cleanup
 
-Approval is a hash of the file, stored in the bare repository's git config
-(local, never pushed). Editing the file revokes it. `config.toml` and an
-untracked `.grove.local.toml` never need approval.
+Include GitHub's PR merge status when checking candidates. This requires `gh`.
 
-### Re-applying setup
+```bash
+grove prune -n --forge-merged
+# Remove the candidates after reviewing them
+grove prune --forge-merged
+```
 
-`a` applies `.grove.toml` as it was at the time. When the file changes later,
-the rows filled in from the older version read `setup stale`: grove records
-which version each worktree was set up from, beside the branch in the bare
-repository's config, and compares it with the trunk's file on every refresh.
-Run `/setup` on a worktree or `grove setup --all` to catch them up. Re-running it refreshes files: `copy` overwrites from the trunk, `link` leaves
-existing entries, and `run` executes again. Make your commands safe to repeat.
-Keep per-worktree `.env` overrides outside copied paths if they must survive setup. Worktrees whose setup was never recorded have unknown readiness. New worktrees
-record `pending`, `running`, `failed`, `ready`, or `stale`, including skipped
-setup and approval still pending. Local config and dependency manifests/lockfiles
-are included in readiness fingerprints independently of command approval.
+GitHub's merge status is used only when the merged PR's final commit exactly
+matches the local branch's final commit. Worktrees with additional local commits
+or uncommitted changes are kept. The screen's `/prune` does not make this extra
+query.
 
-`run`, `teardown`, and `exec` commands receive `GROVE_ROOT`, `GROVE_WORKTREE`,
-and `GROVE_BRANCH`.
-
-## Remotes and forks
-
-grove never asks which remote to use. It reads what git already knows, so a
-repository that works with `git push` and `git pull` works with grove the
-same way.
-
-**The trunk** is the branch `origin/HEAD` names, usually `main`. Which copy
-of it counts is whatever the local `main` tracks: `origin/main` in a plain
-clone, and `upstream/main` once you have said so. Everything is measured
-against that copy: the `main` column, the `merged` badge, the base `a` cuts
-a branch from, and what `s` rebases onto.
-
-**A branch is pushed** where `git push` would send it: the branch's own
-`pushRemote`, else `remote.pushDefault`, else the remote it tracks, else
-`origin`. `--push`, `--publish`, and every push `s` makes follow this.
-`grove add` looks for an existing branch on that same remote.
-
-So a fork is one line:
+### Contribute from a fork
 
 ```bash
 grove clone git@github.com:you/repo.git --upstream git@github.com:them/repo.git
 ```
 
-or, in a repository you already have, `/upstream` on the screen or
-`grove upstream <url>`. Either one writes three git settings and nothing of
-grove's: a remote called `upstream`, `git branch -u upstream/main main`, and
-`remote.pushDefault = origin`. `git pull` and `git push` read the same
-three. The same URL again changes nothing; a different one is refused
-unless `--force` says to replace it, and the screen asks.
+New tasks and sync use the original repository's default branch, while development
+branches push to your fork. If you already cloned, use
+`grove upstream <original-repository-URL>` or `/upstream` in the screen. PR review
+worktrees push to the PR's source branch.
 
-Nothing is detected. Which repository a fork came from is a fact only the
-forge holds, so the URL is typed once by somebody who knows it.
+The default branch is identified through `origin/HEAD`; its local branch's
+tracked remote supplies the reference. Setting `upstream` adds the original
+remote, makes the default branch track it, and sets `remote.pushDefault` to
+`origin`. A development branch's push destination follows Git settings in this
+order: `branch.<name>.pushRemote`, `remote.pushDefault`, the tracked remote,
+then `origin`.
 
-From then on `a` cuts from `upstream/main`, `s` rebases onto it and pushes
-to your fork, and `merged` means merged into theirs. `grove pr` fetches the
-pull request from the trunk's remote, and an explicit push from a `pr/<n>` worktree always goes
-back to the pull request, whatever `pushDefault` says. `doctor` reports an
-`upstream` remote the trunk does not follow yet, and a trunk that tracks a
-remote nothing has been fetched from.
+### Use an existing Git clone or start from the screen
 
-## CLI reference
+You can run `grove` inside a repository created with ordinary `git clone`.
+New worktrees then appear beside the repository with names such as
+`myapp-feat-login`. Use `grove path feat/login` to get the path.
 
-Every command has `--help`, generated from the parser's own table.
-
-```bash
-grove clone <url> [-b <branch>]   # first-run screen; `init` is an alias
-grove upstream <url>              # /upstream
-grove add <branch>                # a
-grove list                        # the rows, as text
-grove path [target]               # enter; no target prints the root
-grove open [target]               # /open
-grove setup [target | --all]      # /setup
-grove sync [target | --all]       # s, /sync-all
-grove rebase [target]             # /rebase
-grove pr <number | url | branch>  # /review
-grove propose [target]            # /propose
-grove stack [target | --all]      # the panel beside a stacked row
-grove reset <target>              # x
-grove remove <target>             # r
-grove prune                       # /prune
-grove rename <target> <name>      # move branch and directory together
-grove exec -- <command>           # run in every worktree
-grove doctor                      # diagnose
-```
-
-`<target>` is a branch, directory, or path. It defaults to the current
-worktree. `-C <path>` selects a repository explicitly.
-
-```bash
-cd "$(grove path feat/login)"
-```
-
-### add
-
-Uses the local branch if it exists, tracks the remote branch if that exists,
-otherwise creates it from the default branch.
-
-| flag | |
-| --- | --- |
-| `--from <base>` | create from `<base>` instead |
-| `--on <branch>` | create from `<branch>` and record it as the parent (stack) |
-| `--take` | move the current worktree's uncommitted changes into the new one |
-| `--push` | push and set upstream |
-| `--trust` | approve `.grove.toml` commands |
-| `--no-fetch`, `--no-setup` | skip the fetch / skip `.grove.toml` |
-
-A stacked branch rebases onto its parent, and onto the trunk only through the
-parent. Parents sync before children; syncing a child syncs its parents. The
-record is `branch.<name>` in the bare repo's config, so `git branch -m`
-carries it along.
-
-### sync
-
-Fetches, then:
-
-- **default branch**: fast-forward only; divergence is refused and local commits stay.
-- **review branch**: receive the PR head, fast-forward only, without pushing.
-- **development branch**: rebase onto its remote, then onto the trunk, then
-  push with `--force-with-lease`.
-
-A dirty worktree aborts before anything runs. A conflicted rebase is aborted
-unless `--no-abort`. `--no-push` keeps the result local.
-
-A branch on no remote yet (`grove add` without `--push`) is rebased and then
-reported with exit code 4: nothing was pushed, and nothing was refused.
-`--publish` pushes it where `git push` would and tracks it. `--no-push` says
-it is meant to stay local, and reports nothing. See
-[Remotes and forks](#remotes-and-forks) for which remote that is.
-
-The screen confirms before a force-push and before a first push. The CLI does
-neither. Review worktrees only receive PR updates unless `--contribute` is explicit.
-
-### rebase
-
-Moves one worktree's branch onto a base of your choosing and pushes nothing.
-`sync` picks its base and pushes; this is for when the base is the question.
-
-| flag | |
-| --- | --- |
-| `--upstream` | onto the branch the worktree tracks |
-| `--trunk` | onto the default branch as origin has it (`--onto main` is the local checkout) |
-| `--onto <ref>` | onto any branch or ref; a name only origin has means `origin/<name>` |
-| `--no-stash` | refuse a dirty worktree instead of carrying its changes |
-| `--no-abort` | leave a conflicted rebase, or conflicting changes, in place |
-| `--no-fetch` | skip the fetch |
-
-With none of the three base flags, a terminal is shown the bases and asked for
-one by number. A pipe gets exit code 2 with the same list on stderr.
-
-Uncommitted changes are snapshotted (a commit, never `refs/stash`), the rebase
-runs, and they are re-applied on top. If the rebase conflicts, or the changes
-do not apply cleanly to the rebased branch, everything is undone and the
-worktree is exactly as it was: exit code 5. `--no-abort` keeps the half-finished
-state instead and prints the snapshot's sha, so `git stash apply <sha>` brings
-the changes back once the conflict is resolved.
-
-### propose
-
-Opens a pull request for a worktree's branch. The base is the branch `add
---on` recorded it as sitting on, else the trunk; `--base <branch>` says
-otherwise. The branch is pushed first, where `git push` would send it: a
-branch on no remote is pushed with `-u`, one that is ahead is pushed plainly,
-and one that is behind its remote is refused until `sync` has caught it up.
-Uncommitted changes are warned about and left alone.
-
-| flag | |
-| --- | --- |
-| `--base <branch>` | open it onto `<branch>` |
-| `--stack` | the branches it sits on first, bottom-up, then it — one pull request each, onto the branch below |
-| `--draft` | open it as a draft |
-| `--title <text>` | the title; without it, and `--body`, both are filled in from the commits |
-| `--body <text>` | the body, beside `--title` |
-| `--web` | push, then write the pull request in the browser |
-
-A branch that already has an open pull request is reported with its number
-and base, and nothing is pushed. If that base is not the one the stack says,
-the `gh pr edit` that moves it is printed. Needs `gh`; exits `10` without it.
-
-`--stack` is `propose` run over the chain: the bottom branch onto the trunk,
-each one above onto the one below, and the target last. A pull request
-already open is reported and left alone, so a half-proposed stack is
-finished. `--base`, `--title`, `--body` and `--web` are each about one pull
-request and are refused beside it; `--draft` applies to every one. The
-branches above the target are left alone — a pull request is opened when
-its author says the work is ready.
-
-### stack
-
-Draws the stack a worktree's branch is in: the trunk at the top, each branch
-under the one it sits on, and beside each its worktree and how far it has
-drifted from its base — `↑` commits it adds, `↓` commits it has fallen behind
-by, which is the number `sync` would close. `*` marks where you are.
-
-```text
-main
-├─ feat/login *       feat/login      ↑2 ↓0
-│  └─ feat/login-api  feat/login-api  ↑1 ↓1
-└─ fix/crash          no worktree     ↑1 ↓0
-```
-
-A branch in the stack without a worktree says so; `grove add <branch>` gives
-it one. A branch the records name and the repository has lost reads `gone`.
-`--all` draws every stack in the repository; an unstacked branch is drawn
-alone under the trunk. Reads git only — whether a branch has a pull request
-is the forge's word, and the screen's `pr` column is where that is drawn.
-
-### remove / prune
-
-`remove` refuses unsafe worktrees unless `--force`. A worktree mid-rebase is
-refused regardless. `--delete-branch` deletes the branch. `--no-teardown`
-skips `[teardown]`.
-
-`prune` fetches, then removes worktrees whose branch is gone from the remote
-(`--gone`) or merged into the trunk (`--merged`). No flag means both. `-n`
-prints what would go. Dirty, mid-rebase, locked, or current worktrees are
-skipped and reported.
-
-`--closed` adds the one case only the forge can see: a pull request closed
-without being merged, its branch still on the remote and none of its commits
-on the trunk. It asks `gh` about every worktree the other two answers left
-alone, one question each, and counts a pull request only when its head is the
-commit the worktree is at, so a reused branch name does not match an old
-pull request. Needs `gh`; exits `10` without it, before anything is removed.
-`/prune` on the screen never asks the forge.
-
-### reset
-
-`git reset --hard`. `--clean` also deletes untracked files. `--to <ref>` resets
-to another ref.
-
-Before changing anything, grove refuses a reset whose destination would overwrite
-an untracked or ignored path, including file/directory collisions. Move those paths
-out of the worktree and retry. This check also applies with `--clean`.
-
-What it discards is saved first, as a commit that touches no ref — the same
-shape `git stash push -u` stores, tracked changes and (with `--clean`) the
-untracked files — and the sha is printed: `git stash apply <sha>` brings it
-all back. The latest snapshot for a branch is also held under
-`refs/grove/discarded/<branch>`, so it survives git's own housekeeping; an
-earlier one stays reachable by its sha until git prunes unreferenced objects.
-The screen's `x` is `reset --clean`, and says the same line after `y`.
-
-### exec
-
-Runs the command after `--` in every worktree, as a process, not a shell line.
-Use `sh -c` for shell syntax. Continues past failures unless `--fail-fast`.
-Only the command's stdout goes to stdout.
-
-```bash
-grove exec -- bun install
-grove exec -- git status --short
-grove exec -- sh -c 'echo $GROVE_BRANCH'
-```
-
-## Scripting and agents
-
-- `--json` prints one JSON document to stdout. Human output goes to stderr.
-- `--headless` (or a non-TTY) disables the screen. Commands never prompt; they
-  act or fail with an exit code.
-- `--verbose` logs every git command with exit code and timing.
-
-| exit code | meaning |
-| --- | --- |
-| 0 | ok |
-| 1 | grove bug |
-| 2 | usage |
-| 3 | not a repository |
-| 4 | refused |
-| 5 | rebase conflict |
-| 6 | state conflict (also `doctor` with a problem) |
-| 7 | git command failed |
-| 8 | remote error |
-| 9 | `[setup]` command failed (worktree exists) |
-| 10 | `gh` missing or failed |
-| 11 | `exec` failed in at least one worktree |
-| 130 | Ctrl-C |
-
-### What `--json` says
-
-Every command's document is its result object, and only the fields below need
-reading in a script. The exit code is the verdict: non-zero is failure, and
-success is never to be inferred from what was printed on stderr.
-
-| command | fields worth reading |
-| --- | --- |
-| `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `setup` |
-| `add`'s `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
-| `list` | one row per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale` |
-| `propose` | `url`, `number`, `base`, `created` (false when one already existed), `pushed`; with `--stack`, an array of these, bottom-up |
-| `stack` | `trunk`, and `rows[]` top to bottom, each with `branch`, `parent`, `depth`, `dir` (absent without a worktree), `ahead`/`behind` against the parent, `exists`, `current` |
-| `reset` | `saved`: the snapshot's sha, for `git stash apply` |
-| `sync` | exit `4` with nothing pushed means the branch is on no remote yet |
-| `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when it stays |
-
-`setup.untrusted: true` means `.grove.toml`'s commands were printed and not
-run, because nobody on this machine has approved that version of the file.
-`setup.failed` is set when a command exited non-zero; the worktree exists
-either way, and `add` exits `9`.
-
-### Trust is a person's decision
-
-The gate exists so that a human reads `.grove.toml`'s commands before they
-run. An agent passing `--trust` is exactly what it guards against. Approve
-the file once, as yourself: `y` when the screen asks, or `grove setup --trust`
-in a terminal. The approval is stored in the repository, so every later
-`grove add` on this machine runs the commands without being asked, from an
-agent or not. Distinct approved recipe hashes are retained, so approving a
-branch-specific recipe does not revoke approval of the trunk recipe.
-
-A typical agent loop, once the file has been approved:
-
-```bash
-grove add agents/<task> --json           # create; read `path` from stdout
-# ... work in the worktree ...
-grove sync agents/<task> --publish        # first push too; exit 4 without it
-grove remove agents/<task> --delete-branch
-```
-
-A policy for an `AGENTS.md` or `CLAUDE.md`, ready to paste:
-
-```markdown
-## Worktrees
-
-- Inspect with `grove list --json`. Never guess a path from a branch name.
-- For a task, create a worktree with `grove add agents/<task> --json` and
-  work only in the `path` it returns.
-- A non-zero exit is a failure. Do not read success out of the log.
-- If the result says `setup.untrusted`, report it. Never pass `--trust`;
-  approving the setup file is the user's decision.
-- Do not run `grove remove`, `grove prune`, `--delete-branch`, `--force`, or
-  `grove reset` unless the user asked for that cleanup.
-```
+Running `grove` in an empty folder asks for a URL and makes that folder the
+workspace. In a non-empty folder it clones into a subfolder. When several
+repositories are available, a selection screen appears. In the CLI, enter the
+repository or use `-C <path>` to select it.
 
 ## Troubleshooting
+
+| Situation | Next step |
+| --- | --- |
+| A worktree exists but installation did not run | Run `grove setup <branch>` and approve commands or inspect the failure |
+| `.env` is reported missing | Prepare the source file in the default branch's worktree, then rerun setup |
+| Changes to a branch's `.grove.toml` are not applied | Use `grove setup <branch> --config-source worktree` |
+| `setup stale` appears | Configuration or dependency files changed. Run `grove setup <branch>` |
+| Development branch sync exits with code `4` | Read the error. If it says the branch has no remote yet, use `--publish` |
+| Sync is refused after a PR force-push | See [replacing a review worktree](#when-a-force-push-blocks-a-pr-update) |
+| Default branch sync is refused | Check for diverged local and remote commits, resolve with Git, then retry |
+| PR creation or review fails | Check `gh` installation and `gh auth login` |
+| Usage text appears instead of the screen | Run in an interactive terminal without `--headless` |
+| `exec` options are interpreted as grove options | Add `--` before the command to run |
+
+If folders and Git's records seem out of step, run:
 
 ```bash
 grove doctor
 ```
 
-Reports problems and the command that fixes each. Writes nothing. Checks for:
-a bare clone with no fetch refspec, a trunk tracking a remote nothing has
-been fetched from, an `upstream` remote the trunk does not follow, worktrees
-git lists that are missing on disk, leftover directories, a root `.git`
-pointing at the wrong place, and broken symlinks. Exits `6` on a problem,
-`0` on warnings only.
+It reports problems and repair commands without changing the repository. Checks
+include a missing default branch worktree, fetch and upstream settings,
+worktrees missing from disk, incorrect `.git` paths, and broken symlinks. For a
+locked worktree whose folder was deleted, it also reports the unlock command
+needed before cleanup. It exits with `6` for problems or `0` for warnings only.
 
-One of the missing-on-disk cases hides from git itself: a worktree that was
-locked and then deleted. A coding agent locks the worktree it works in, its
-session dies, the directory is cleaned up, and the entry stays because
-`git worktree prune` skips locked entries by design. The branch then reads as
-checked out at a path that does not exist, and `grove add` of it fails.
-`doctor` names the entry and prints the unlock to run before the prune.
+## Command reference
 
-Not bugs:
+Use `grove <command> --help` for all options. `<target>` below means a branch
+name, directory name, or path. `-C <path>` selects the repository to operate on.
 
-- **Nothing was installed.** `run` needs trust: answer `y` when asked, or
-  pass `--trust`. A pipe is never asked. `copy` / `link` read from the trunk
-  worktree, not your branch.
-- **`grove` printed usage instead of the screen.** No TTY, or `--headless`.
-- **`grove exec` consumed my flags.** Put `--` before the command.
-- **`grove <command>` refused to pick a repository.** The folder holds several.
-  `cd` into one or pass `-C`.
+### Create and navigate
 
-## What grove is not
+| Command | Purpose and additional options |
+| --- | --- |
+| `grove clone <url> [dir]` | Create a workspace. `init` is an alias. `-b <branch>` also checks out that branch beside the default branch |
+| `grove add <branch>` | Create a worktree. `--push` publishes it; `--no-fetch` skips fetching |
+| `grove pr <number or URL or branch>` | Create or update a PR review worktree. `--replace` saves existing work before replacing it |
+| `grove list` | Print the worktree list |
+| `grove path [target]` | Print the worktree's absolute path, or the workspace root without a target |
+| `grove open [target]` | Open in the configured editor |
+| `grove rename <target> <name>` | Rename the branch and directory. `--push` pushes the new name and keeps the old remote branch |
 
-- Not a git replacement. Every worktree is a normal git worktree.
-- Not a package manager. Setup commands are yours.
-- Not a secret manager. `.grove.toml` is committed. Secrets go in the local
-  layers.
+Use `--no-setup` with `clone`, `add`, or `pr` to defer setup. See
+[options for specific tasks](#options-for-specific-tasks) for examples of
+`--from`, `--on`, `--take`, and PR replacement.
 
-## Workspace development cycle
+### Prepare and sync
 
-1. `grove clone <url>` creates `.bare/` and the default-branch worktree, and
-   applies setup. A terminal shows unapproved commands for approval. Use
-   `grove setup main` later to finish, or `--no-setup` to defer everything.
-   `clone -b feature` also creates the default worktree as the shared source.
-2. `grove add feat/task` fetches and starts a new branch from the remote trunk.
-   The UI's `a` does the same. `A` starts from the selected local branch;
-   CLI `--from <ref>` is the equivalent. `--on <branch>` records a stack parent.
-   The result reports the actual `base` ref and `baseSha` for new branches.
-3. Setup installs dependencies per worktree. `node_modules` and build output
-   should not be linked across branches that can have different dependencies.
-   `copy` overwrites matching destination paths on every setup, and reports them.
-4. `grove propose` publishes a development branch and opens its PR.
-5. `grove pr 42` creates a separate review checkout. Re-running it, or syncing
-   that checkout, receives the latest PR head without rebasing or pushing.
-   PR repository URL, number, base, head branch and last fetched head SHA are
-   remembered locally and appear as `review` metadata in `grove list --json`.
-   Its `drift` counts commits ahead/behind the actual PR base; the screen
-   shows those counts alongside the review base.
-6. If the author rewrites history, update refuses to discard local work.
-   `grove pr 42 --replace` saves the previous committed head under
-   `refs/grove/review-backups/42/…` and uncommitted changes as a snapshot, then
-   replaces the checkout. JSON reports `updated: "replaced"`, the committed
-   `backup` ref and the `saved` snapshot SHA when there were local changes.
-   The output gives recovery instructions. A stopped
-   rebase or a reset that would overwrite untracked/ignored paths is refused.
-   To contribute, explicitly use `grove sync pr/42 --contribute` (rebase onto
-   the PR's base and push) or `git push` (push only).
-7. After merging, `grove prune -n --forge-merged` includes forge-confirmed
-   merges, even when several commits were squashed and the branch remains.
-   `grove prune --forge-merged` runs teardown and removes eligible worktrees.
-   The PR head must exactly match the local tip; later local commits stay.
-   Dirty, locked, current and mid-rebase worktrees stay, and branches are kept
-   unless `--delete-branch` is requested. `--closed` additionally finds declined PRs.
-8. `grove sync main` fast-forwards the reference checkout. A diverged main is
-   refused; move its local work to a feature branch or explicitly rebase it.
+| Command | Purpose and additional options |
+| --- | --- |
+| `grove setup [target]` | Run setup again. `--all` selects all worktrees |
+| `grove sync [target]` | Sync according to the branch's purpose. `--all` selects all worktrees |
+| `grove rebase [target]` | Rebase onto a base you choose, without pushing |
+| `grove exec -- <command>` | Run a command in every worktree in order. `--fail-fast` stops at the first failure |
+| `grove upstream <url>` | Set the original repository for a fork. Use `--force` to replace an existing URL |
 
-### Testing a branch's setup recipe
+`setup`, `sync`, `rebase`, `open`, and `propose` use the current worktree when no
+target is given. At the workspace root, name a target.
 
-By default, setup reads the trunk's configuration. To validate configuration
-changes in a feature or PR, use one of:
+Choose a `rebase` base with one of `--trunk` (the remote reference followed by the
+default branch), `--upstream` (the target branch's tracked remote branch), or
+`--onto <ref>`. For example, `--onto main` means local main. Without a base option,
+the terminal shows a list to choose from; non-interactive execution exits with
+code `2`.
+
+`rebase` saves uncommitted changes temporarily and reapplies them to the result.
+On conflicts, it restores the original state by default. `--no-stash` refuses a
+worktree with changes, and `--no-abort` leaves conflicts in place. Follow the
+printed recovery instructions. `sync` also has `--no-abort`, but does not carry
+uncommitted changes through a rebase.
+
+For shell syntax in `exec`, use `sh -c`:
 
 ```bash
-grove add feat/setup --config-source worktree
-grove pr 42 --config-source worktree
-grove setup feat/setup --config-source worktree
+grove exec -- git status --short
+grove exec -- sh -c 'echo "$GROVE_BRANCH"'
 ```
 
-The choice is remembered per branch for subsequent setup, open and teardown.
-The target checkout supplies `.grove.toml` and `.grove.local.toml`; the global
-layer still applies. Commands from a different tracked recipe require approval.
-`copy` and `link` continue to read from the default-branch worktree. Restore the
-normal recipe with `grove setup feat/setup --config-source trunk`.
-`grove setup --all` asks separately for distinct unapproved recipes.
-`grove doctor` reports a missing default worktree and how to recreate it.
+### Open PRs and inspect stacks
 
-### Running several worktrees
-
-Setup, open, teardown, and `grove exec` receive:
-
-| variable | meaning |
+| Command or option | Purpose |
 | --- | --- |
-| `GROVE_ROOT`, `GROVE_WORKTREE`, `GROVE_BRANCH` | workspace, checkout and branch |
-| `GROVE_WORKTREE_ID` | stable identity across branch and directory renames |
-| `GROVE_PORT` | port allocated uniquely among this workspace's worktrees |
-| `GROVE_SERVICE_NAME` | unique service/Compose name |
-| `GROVE_DATABASE_NAME` | unique database name for your setup script |
+| `grove propose [target]` | Push a branch and open a PR |
+| `--draft` | Open a draft PR |
+| `--web` | Write the title and body in the browser |
+| `--title <text> --body <text>` | Supply a title and body. `--body` requires `--title` |
+| `--base <branch>` | Choose the PR's base branch |
+| `--stack` | Open PRs in order, starting with the target branch's parents |
+| `grove stack [target]` | Show the branch's stack and drift against parents. `--all` shows all stacks |
 
-`PORT` and `COMPOSE_PROJECT_NAME` default to the allocated values; explicit
-`[setup.env]` or `[teardown.env]` values override those defaults. Database
-creation is the project's responsibility. For example, a setup script can use
-`GROVE_DATABASE_NAME` when creating a database or generating its connection URL.
-Port assignments do not bind sockets or reserve ports against unrelated apps or
-other workspaces. Assignments are reused and released when Grove removes the
-worktree. Grove stores runtime claims inside the repository's Git directory.
+`propose` targets the default branch unless the task was created with `add --on`,
+in which case it targets the parent. If a PR already exists, it reports that PR
+without pushing. Sync first if the branch is behind the remote. Do not combine
+`--stack` with `--base`, `--title`, `--body`, or `--web`.
+
+### Clean up and recover
+
+| Command or option | Purpose |
+| --- | --- |
+| `grove remove <target>` | Remove a worktree. `rm` is an alias |
+| `grove prune` | Remove finished worktrees |
+| `prune -n` / `prune --dry-run` | Print candidates without removing them |
+| `prune --gone` / `prune --merged` | Select only branches gone from the remote / confirmed merged by Git |
+| `prune --forge-merged` | Also query GitHub's PR merge status |
+| `prune --closed` | Also query PRs closed without merging. Add a candidate when the PR's final commit matches the local one |
+| `remove --delete-branch` / `prune --delete-branch` | Delete local branches along with the worktrees |
+| `remove --no-teardown` | Skip cleanup commands |
+| `grove reset <target>` | Save a copy of uncommitted changes, then discard them |
+| `grove doctor` | Diagnose repository state and print repair commands |
+
+`prune` skips dirty, rebasing, locked, and current worktrees. Use `--no-fetch` to
+skip fetching before cleanup. `remove` refuses unsafe removal by default.
+`--force` relaxes some protections, but cannot remove a worktree during a rebase.
+
+`reset` discards changes to tracked files by default. `--clean` includes untracked
+files; `--to <ref>` resets to a different commit. The output gives a recovery
+commit you can restore with `git stash apply <sha>`. The screen's `x` corresponds
+to `reset --clean`. The latest copy for each branch survives Git cleanup; older
+copies are not guaranteed to remain available indefinitely.
+
+## Scripting and agents
+
+- `--json` prints one JSON document to stdout. Human-readable output goes to stderr.
+- `--headless` (or a non-TTY environment) disables the screen. Commands do not ask
+  questions; they run or report failure with an exit code.
+- `--verbose` logs Git commands with their exit codes and elapsed time.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | grove bug |
+| 2 | Usage error |
+| 3 | Not a repository |
+| 4 | Refused |
+| 5 | Rebase conflict |
+| 6 | State conflict, including problems found by `doctor` |
+| 7 | Git command failed |
+| 8 | Remote error |
+| 9 | Setup command failed; the worktree exists |
+| 10 | `gh` is missing or failed |
+| 11 | `exec` failed in one or more worktrees |
+| 130 | Ctrl-C |
+
+### Reading `--json` output
+
+Output is a command-specific result object or array. Common fields are listed
+below. Use the exit code to determine success: a nonzero code means failure,
+regardless of messages printed to stderr.
+
+| Command | Useful fields |
+| --- | --- |
+| `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `base`, `baseSha`, `setup` |
+| `add` setup | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
+| `list` | One entry per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale`, `setupState`, `review` |
+| `propose` | `url`, `number`, `base`, `created` (false if it already existed), `pushed`; with `--stack`, an array in parent-first order |
+| `stack` | `trunk` and ordered `rows[]`: `branch`, `parent`, `depth`, `dir` (absent without a worktree), `ahead`/`behind` against the parent, `exists`, `current` |
+| `reset` | `saved`: snapshot SHA for `git stash apply` |
+| `sync` | Per-target results. Exit code `4` can mean a first push was not requested or sync was refused because of changes or another condition; read the error too |
+| `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when kept |
+
+`setup.untrusted: true` means `.grove.toml` commands were shown but not run because
+that version has not been approved on this machine. `setup.failed` is set when
+a command exits nonzero. The worktree exists in either case. Skipping unapproved
+commands alone does not cause a failure exit code, so check `setup.untrusted` too.
+Setup command failures in `clone`, `add`, `pr`, and `setup` produce exit code `9`.
+
+### Approval is a user's decision
+
+Before automating, have the user read and approve the project commands. Answer
+`y` in the screen or run `grove setup main --trust` after reading them. Approved
+configuration with the same content also applies when an agent creates a
+worktree. Your task instructions can prohibit an agent from adding `--trust`
+on its own to run unapproved commands.
+
+A typical agent loop after approval:
+
+```bash
+grove add agents/refactor --json         # Create; read `path` from stdout
+# ... work inside the worktree ...
+grove sync agents/refactor --publish     # Includes the first push
+# Once the work is finished and cleanup is agreed
+grove remove agents/refactor --delete-branch
+```
+
+An example policy to paste into `AGENTS.md` or `CLAUDE.md`:
+
+```markdown
+## Worktrees
+
+- Inspect `grove list --json`. Do not guess paths from branch names.
+- Create a worktree for each task with `grove add agents/<task> --json` and work
+  only inside the returned `path`.
+- Treat a nonzero exit code as failure. Do not infer success from log messages.
+- Report `setup.untrusted` in the result. Never add `--trust`; approval of setup
+  files is the user's decision.
+- Do not run `grove remove`, `grove prune`, `--delete-branch`, `--force`, or
+  `grove reset` unless the user requested that cleanup.
+```
