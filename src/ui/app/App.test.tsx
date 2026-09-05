@@ -10,7 +10,7 @@ import { keys, nextFrame, plain, waitFor } from "../test-utils.ts";
 import { theme } from "../theme.ts";
 import { App } from "./App.tsx";
 import { commandsFor } from "./Menu.tsx";
-import { describePending, wouldForcePush, wouldPublish } from "./pending.ts";
+import { describePending, wouldForcePush } from "./pending.ts";
 import type { WorktreeService } from "./service.ts";
 import { buildTree, pathOf, type TreeRow } from "./tree.ts";
 
@@ -464,7 +464,7 @@ describe("describePending", () => {
     });
 
     // A branch on no remote is also being published, and the prompt names
-    // where — the same fact `s` puts on its question.
+    // where the new branch will be published.
     expect(
       describePending({
         kind: "propose",
@@ -557,15 +557,6 @@ describe("describePending", () => {
     );
   });
 
-  test("`s` over a branch no remote has says where it would go, in amber", () => {
-    const local = summary({ dir: "feat/login", upstream: undefined });
-
-    expect(describePending({ kind: "publish", summary: local })).toEqual({
-      text: "sync feat/login? it is on no remote yet, so this pushes it to origin/feat/login",
-      colour: theme.warn,
-    });
-  });
-
   test("`/prune` names what goes and counts what stays, in amber", () => {
     const entry = (dir: string, skipped?: string) => ({
       path: `/repo/${dir}`,
@@ -631,6 +622,14 @@ describe("wouldForcePush", () => {
     );
   });
 
+  test("a deleted remote branch leaves nothing to force-push", () => {
+    expect(
+      wouldForcePush(
+        summary({ dir: "feat/login", finished: "gone", trunk: { ahead: 5, behind: 3 } }),
+      ),
+    ).toBe(false);
+  });
+
   test("so does one whose own remote gained a commit, even with the trunk level", () => {
     // The rebase onto `origin/feat/login` replays this branch's commits over a
     // colleague's, which rewrites them just as surely as the trunk would.
@@ -683,43 +682,6 @@ describe("wouldForcePush", () => {
     // No trunk drift at all is git too old to have answered. The prompt is the
     // safe direction, and it is the direction with the cheaper mistake.
     expect(wouldForcePush(summary({ dir: "feat/login", ahead: 2 }))).toBe(true);
-  });
-});
-
-/**
- * The other test `s` runs, after `wouldForcePush` has said no.
- *
- * A wrong `true` here is a prompt over a branch that `sync` would have pushed
- * plainly, and a wrong `false` is a branch rebased and left on no remote with
- * nothing on the screen having said so — which is the state this exists to end.
- */
-describe("wouldPublish", () => {
-  test("a branch with no upstream is one nobody has pushed", () => {
-    expect(wouldPublish(summary({ dir: "feat/login", upstream: undefined }))).toBe(true);
-  });
-
-  test("one with an upstream is `wouldForcePush`'s question, not this one", () => {
-    expect(wouldPublish(summary({ dir: "feat/login", trunk: { ahead: 2, behind: 3 } }))).toBe(
-      false,
-    );
-  });
-
-  test("the trunk always has a remote, and a detached HEAD has no branch to push", () => {
-    expect(wouldPublish(summary({ dir: "main", isDefault: true, upstream: undefined }))).toBe(
-      false,
-    );
-    expect(
-      wouldPublish(
-        summary({ dir: "feat/login", branch: undefined, detached: true, upstream: undefined }),
-      ),
-    ).toBe(false);
-  });
-
-  test("the two states `sync` skips are not asked about, because it will decline anyway", () => {
-    const base = { dir: "feat/login", upstream: undefined } as const;
-
-    expect(wouldPublish(summary({ ...base, dirty: true, changed: 1 }))).toBe(false);
-    expect(wouldPublish(summary({ ...base, rebasing: true }))).toBe(false);
   });
 });
 
@@ -1415,13 +1377,7 @@ describe("the keys", () => {
     expect(calls.synced).toEqual(["/repo/feat/login", undefined]);
   });
 
-  /**
-   * The gap this closes: `a` makes a branch on no remote, and `s` over it
-   * synced and said `up-to-date` however many times it was pressed, with the
-   * branch never reaching the origin. The screen can ask, so it does — and the
-   * answer is what `grove sync --publish` spells out.
-   */
-  test("`s` over a branch no remote has asks, and `y` syncs it with the push", async () => {
+  test("`s` syncs a local branch without asking to publish it", async () => {
     const rows = [
       summary({ dir: "main", isDefault: true, current: true }),
       summary({ dir: "feat/login", upstream: undefined }),
@@ -1432,19 +1388,10 @@ describe("the keys", () => {
 
     await toLogin(ui);
     ui.stdin.write("s");
-    await settled(ui, (frame) => frame.includes("it is on no remote yet"));
-    // `n` leaves it: nothing runs, and the branch stays where it was.
-    ui.stdin.write("n");
-    await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("no remote"));
-    expect(calls.synced).toEqual([]);
-
-    ui.stdin.write("s");
-    await settled(ui, (frame) => frame.includes("it is on no remote yet"));
-    ui.stdin.write("y");
     await settled(ui, (frame) => IN_LIST(frame) && frame.includes("1 up-to-date"));
 
     expect(calls.synced).toEqual(["/repo/feat/login"]);
-    expect(calls.published).toEqual(["/repo/feat/login"]);
+    expect(calls.published).toEqual([]);
   });
 
   /**

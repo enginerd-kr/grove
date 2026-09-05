@@ -517,7 +517,7 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "rebased onto its own remote first and then onto the default branch, and",
       "the result is force-pushed back with --force-with-lease. Stops without",
       "changing anything if the worktree is dirty. A branch that is on no remote",
-      "yet is rebased and reported, and pushed only with --publish.",
+      "yet syncs locally from the default branch, and is pushed only with --publish.",
     ],
     flags: [
       {

@@ -3,7 +3,14 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode } from "../../cli/exit-codes.ts";
 import { runCli } from "../../cli/test-cli.ts";
-import { managedRepo, seedGit, seedWorktree, type TempRepo, withTempRepo } from "../test-utils.ts";
+import {
+  managedRepo,
+  probeGit,
+  seedGit,
+  seedWorktree,
+  type TempRepo,
+  withTempRepo,
+} from "../test-utils.ts";
 
 /**
  * `grove sync` through the real binary.
@@ -47,6 +54,28 @@ async function commitIn(worktree: string, file: string, contents: string): Promi
 }
 
 describe("grove sync, through the binary", () => {
+  test("sync in a new worktree succeeds from main without publishing", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const { path } = await seedWorktree(repo, "feat/local");
+      await commitIn(path, "mine.txt", "mine\n");
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+
+      const synced = await runCli(["sync"], { cwd: path });
+      expect(synced.exitCode).toBe(ExitCode.ok);
+      expect(synced.stdout.trim()).toBe(".\trebased");
+      expect(await Bun.file(join(path, "trunk.txt")).text()).toBe("trunk\n");
+      expect(await Bun.file(join(path, "mine.txt")).text()).toBe("mine\n");
+      expect(
+        (await probeGit(temp.originPath, ["rev-parse", "--verify", "feat/local"])).code,
+      ).not.toBe(0);
+
+      const again = await runCli(["sync", "--all"], { cwd: repo.root });
+      expect(again.exitCode).toBe(ExitCode.ok);
+      expect(again.stdout).toContain("feat/local\tup-to-date");
+    });
+  });
+
   test("--all prints one row per worktree on stdout, and narrates beside it on stderr", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);

@@ -37,8 +37,6 @@ export type Pending =
   | { readonly kind: "reset"; readonly summary: WorktreeSummary }
   /** `s`, where the sync it starts would rewrite commits the remote already has. */
   | { readonly kind: "sync"; readonly summary: WorktreeSummary }
-  /** `s`, where the branch is on no remote and `y` puts it on one. */
-  | { readonly kind: "publish"; readonly summary: WorktreeSummary }
   /** `/sync-all`, where `count` of the worktrees would. */
   | { readonly kind: "sync-all"; readonly count: number }
   /** `/prune`: every finished worktree, as the dry run described them. */
@@ -104,9 +102,8 @@ export function wouldForcePush(summary: WorktreeSummary): boolean {
   // prompt that teaches people to answer `y` without reading it.
   if (summary.dirty || summary.rebasing) return false;
 
-  // Nothing published is nothing to overwrite. It is `wouldPublish`'s question
-  // instead, and the two are asked in that order.
-  if (summary.upstream === undefined) return false;
+  // A local branch syncs without pushing, so nothing is overwritten.
+  if (summary.upstream === undefined || summary.finished === "gone") return false;
 
   // Absent means git could not answer — 2.41 for `%(ahead-behind:)` — and an
   // unanswered question about a force-push is asked rather than assumed away.
@@ -118,25 +115,6 @@ export function wouldForcePush(summary: WorktreeSummary): boolean {
   if (trunk.ahead === 0) return false;
 
   return trunk.behind > 0 || summary.behind > 0;
-}
-
-/**
- * Whether syncing this worktree would leave a branch on no remote.
- *
- * The other question `s` asks before it acts. `sync` rebases such a branch and
- * then reports that it is nowhere, because a first push is one the remote has
- * never agreed to and the command line has to be told to make it. The screen
- * can ask, so it does — and `y` is `--publish`.
- *
- * The same states `wouldForcePush` leaves alone are left alone here, for the
- * same reason: `sync` declines a dirty or mid-rebase worktree before it looks
- * at the remote, and the trunk always has one.
- */
-export function wouldPublish(summary: WorktreeSummary): boolean {
-  if (isReview(summary) || summary.isDefault || summary.branch === undefined) return false;
-  if (summary.dirty || summary.rebasing) return false;
-
-  return summary.upstream === undefined;
 }
 
 /**
@@ -224,19 +202,6 @@ export function describePending(target: Pending): {
 
     return {
       text: `sync ${dir}? ${rewritten} rewritten and force-pushed to ${upstream}`,
-      colour: theme.warn,
-    };
-  }
-
-  // The one sync question that takes nothing away: a branch nobody has pushed
-  // gains a remote copy. Amber all the same, because it is the moment the
-  // branch stops being only yours, and the name on the far end is the part
-  // worth reading before answering.
-  if (target.kind === "publish") {
-    const { dir, branch, publishRemote } = target.summary;
-
-    return {
-      text: `sync ${dir}? it is on no remote yet, so this pushes it to ${publishRemote}/${branch}`,
       colour: theme.warn,
     };
   }
@@ -346,14 +311,6 @@ export function commitPending(
   // question and the answer is one it should find.
   if (target.kind === "prune") {
     return { label: "pruning finished worktrees", run: () => service.prune() };
-  }
-
-  // `y` is the `--publish` the command line would have been given.
-  if (target.kind === "publish") {
-    return {
-      label: `syncing ${target.summary.dir}`,
-      run: () => service.sync(target.summary.path, { publish: true }),
-    };
   }
 
   // `y` is `--force`: the question named the remote being replaced.

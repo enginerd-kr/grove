@@ -725,14 +725,7 @@ export function createWorktreeService(
       // the screen reports outcomes and stays open. Dropping those from the
       // input rather than reimplementing the test keeps `failureFor` the only
       // place that decides a conflict outranks a refused push.
-      //
-      // A branch on no remote is the other exception, for the same reason: the
-      // command line exits 4 over it because a script would otherwise go on to
-      // delete the branch, but on this screen `s` over the row is the question
-      // that publishes it, and `/sync-all` saying so is enough.
-      const failure = syncFailureFor(
-        outcomes.filter((outcome) => outcome.kind !== "skipped" && outcome.unpublished !== true),
-      );
+      const failure = syncFailureFor(outcomes.filter((outcome) => outcome.kind !== "skipped"));
       if (failure) throw failure;
 
       return `${describeSync(outcomes)}${describeUnpublished(outcomes)}`;

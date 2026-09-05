@@ -363,13 +363,7 @@ describe("grove sync", () => {
     });
   });
 
-  /**
-   * The gap this closes: a branch `add` made without `--push` has no upstream,
-   * and `publish` returned on that before it said anything — so the branch
-   * could be synced any number of times and reach no remote, and a script
-   * that went on to `remove --delete-branch` had deleted the only copy.
-   */
-  test("a branch on no remote is rebased and reported, and --publish puts it on origin", async () => {
+  test("a local branch syncs successfully from main, and --publish puts it on origin", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
       // What `grove add feat/local` makes: a branch the origin has never heard of.
@@ -392,12 +386,10 @@ describe("grove sync", () => {
       expect(reported.log.err.join("")).not.toContain("publishing");
       expect(await onOrigin(temp, "feat/local")).toBe(false);
 
-      // Exit 4 the way a refused push is, with the flag in the hint: the
-      // script about to delete the branch is the one this has to stop.
-      const error = failure(succeeded(reported));
-      expect(errorToExitCode(error.code)).toBe(ExitCode.refused);
-      expect(error.message).toBe("feat/local on no remote yet");
-      expect(error.hint).toContain("--publish");
+      expect(synced?.onto).toBe("origin/main");
+      expect(await Bun.file(join(worktree, "mine.txt")).text()).toBe("mine\n");
+      expect(failureFor(succeeded(reported))).toBeUndefined();
+      expect(failureFor(succeeded(await attemptSync(repo, { all: true })))).toBeUndefined();
 
       // `--no-push` is the spelling for a branch meant to stay local, and it
       // has nothing to report.
@@ -418,6 +410,29 @@ describe("grove sync", () => {
       expect(again?.kind).toBe("up-to-date");
       expect(again?.unpublished).toBeUndefined();
       expect(failureFor(again ? [again] : [])).toBeUndefined();
+    });
+  });
+
+  test("syncs from main when fetch prunes the tracked remote branch", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const { path } = await seedWorktree(repo, "feat/login");
+      await seedGit(temp.originPath, ["update-ref", "-d", "refs/heads/feat/login"]);
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+      await commitIn(path, "mine.txt", "mine\n");
+
+      const outcomes = succeeded(await attemptSync(repo, { cwd: path }));
+
+      expect(outcomes[0]).toMatchObject({
+        kind: "rebased",
+        onto: "origin/main",
+        unpublished: true,
+      });
+      expect(failureFor(outcomes)).toBeUndefined();
+      expect(await Bun.file(join(path, "trunk.txt")).text()).toBe("trunk\n");
+      expect(await Bun.file(join(path, "mine.txt")).text()).toBe("mine\n");
+      expect(await onOrigin(temp, "feat/login")).toBe(false);
+      expect(await isRebasing(path)).toBe(false);
     });
   });
 

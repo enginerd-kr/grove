@@ -443,12 +443,11 @@ describe("createWorktreeService", () => {
         await commitOnOrigin(temp, "main", "newer.txt");
         expect(await service.sync("main")).toBe("main fast-forwarded");
 
-        // The command line exits 4 here; the screen says so on the line and
-        // stays open, because `s` over the row is the question that fixes it.
+        // A local sync succeeds and reports that the branch remains local.
         expect(await service.sync("feat/local")).toBe("feat/local rebased, on no remote yet");
         expect(await service.sync()).toBe("2 up-to-date — feat/local is on no remote yet");
 
-        // `y` on that question.
+        // Publishing remains an explicit option.
         expect(await service.sync("feat/local", { publish: true })).toBe("feat/local up-to-date");
         const onOrigin = await probeGit(temp.originPath, ["rev-parse", "--verify", "feat/local"]);
         expect(onOrigin.code).toBe(0);

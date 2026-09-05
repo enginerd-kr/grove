@@ -91,7 +91,7 @@ to incorporate updates from the remote and the default branch:
 grove sync
 ```
 
-On a development branch, `sync` rebases and pushes. See
+On a development branch, `sync` rebases and pushes if it has a remote branch. See
 [how sync works](#what-does-sync-do) for conflicts and first pushes.
 
 ### 4. Review someone else's PR
@@ -153,7 +153,7 @@ worktree, or name the target from the workspace: `grove sync feat/login`.
 
 Development branch sync in the CLI uses `--force-with-lease` when needed and
 does not ask for confirmation. The interactive screen asks before a push that
-rewrites remote history and before the first push.
+rewrites remote history. Branches without a remote branch sync locally.
 
 | What you need | Command |
 | --- | --- |
@@ -161,10 +161,10 @@ rewrites remote history and before the first push.
 | Keep the synced result local | `grove sync feat/login --no-push` |
 | Sync all worktrees | `grove sync --all` |
 
-If a development branch is not on a remote and you omit `--publish`, `sync`
-rebases locally and reports exit code `4`. Use `propose` or `sync --publish` for
-the first push. With `--no-push`, local sync completes even for an unpublished
-branch.
+If a development branch has no remote branch, `sync` rebases onto the default
+branch and completes successfully without pushing. This also applies when the
+tracked remote branch was deleted. Stacked branches still sync from their parent.
+Use `propose` or `sync --publish` for the first push.
 
 Sync refuses worktrees with uncommitted changes. A conflicting rebase is aborted
 by default; check the reported state and instructions. If local commits on the
@@ -539,7 +539,7 @@ repository or use `-C <path>` to select it.
 | `.env` is reported missing | Prepare the source file in the default branch's worktree, then rerun setup |
 | Changes to a branch's `.grove.toml` are not applied | Use `grove setup <branch> --config-source worktree` |
 | `setup stale` appears | Configuration or dependency files changed. Run `grove setup <branch>` |
-| Development branch sync exits with code `4` | Read the error. If it says the branch has no remote yet, use `--publish` |
+| Development branch sync exits with code `4` | Read the error for uncommitted changes, a refused push, or another condition |
 | Sync is refused after a PR force-push | See [replacing a review worktree](#when-a-force-push-blocks-a-pr-update) |
 | Default branch sync is refused | Check for diverged local and remote commits, resolve with Git, then retry |
 | PR creation or review fails | Check `gh` installation and `gh auth login` |
@@ -690,7 +690,7 @@ regardless of messages printed to stderr.
 | `propose` | `url`, `number`, `base`, `created` (false if it already existed), `pushed`; with `--stack`, an array in parent-first order |
 | `stack` | `trunk` and ordered `rows[]`: `branch`, `parent`, `depth`, `dir` (absent without a worktree), `ahead`/`behind` against the parent, `exists`, `current` |
 | `reset` | `saved`: snapshot SHA for `git stash apply` |
-| `sync` | Per-target results. Exit code `4` can mean a first push was not requested or sync was refused because of changes or another condition; read the error too |
+| `sync` | Per-target results. Exit code `4` means a push or sync was refused because of changes or another condition; read the error too |
 | `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when kept |
 
 `setup.untrusted: true` means `.grove.toml` commands were shown but not run because

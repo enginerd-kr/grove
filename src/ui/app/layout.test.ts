@@ -460,11 +460,6 @@ describe("hintsFor", () => {
       "remove",
       "keep",
     ]);
-    // `push`, because that is the half of the sync the question was about.
-    expect(hintsFor("confirm", leaf, "publish").map((hint) => hint.action)).toEqual([
-      "push",
-      "leave it",
-    ]);
     // Both halves, because the question is not "shall I" but "have you read
     // this": what `y` agrees to and what it does next are two different facts.
     expect(hintsFor("confirm", leaf, "trust-open").map((hint) => hint.action)).toEqual([

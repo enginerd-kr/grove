@@ -22,13 +22,7 @@ import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
 import type { Mode } from "./mode.ts";
 import { PullRequests } from "./PullRequests.tsx";
-import {
-  commitPending,
-  describePending,
-  type Pending,
-  wouldForcePush,
-  wouldPublish,
-} from "./pending.ts";
+import { commitPending, describePending, type Pending, wouldForcePush } from "./pending.ts";
 import { padTo, Row } from "./Row.tsx";
 import { Stack } from "./Stack.tsx";
 import type { WorktreeService } from "./service.ts";
@@ -294,10 +288,8 @@ export function App({
           const now = (await reread()).find((row) => row.path === summary.path);
           if (now === undefined) return undefined;
 
-          // Two questions, and a row can only need one of them: a branch on no
-          // remote has nothing there to rewrite.
+          // Only a push that rewrites remote commits needs confirmation.
           if (wouldForcePush(now)) return { kind: "sync", summary: now };
-          if (wouldPublish(now)) return { kind: "publish", summary: now };
 
           return undefined;
         },

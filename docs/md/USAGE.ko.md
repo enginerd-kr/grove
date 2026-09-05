@@ -89,7 +89,7 @@ PR을 올린 뒤 원격 변경과 기본 브랜치의 변경을 반영할 때는
 grove sync
 ```
 
-개발 브랜치의 `sync`는 rebase 후 push합니다. 충돌이나 첫 push를 다루는 방법은
+개발 브랜치의 `sync`는 rebase 후 원격 브랜치가 있으면 push합니다. 충돌이나 첫 push를 다루는 방법은
 [동기화 설명](#동기화는-무엇을-하나요)을 보세요.
 
 ### 4. 다른 사람의 PR 리뷰하기
@@ -148,8 +148,8 @@ grove prune
 | 기본 브랜치 | `grove sync main` | 원격 변경을 fast-forward로 반영 |
 
 CLI의 개발 브랜치 동기화는 필요하면 `--force-with-lease`로 push하며, 별도
-확인을 묻지 않습니다. 대화형 화면에서는 히스토리를 덮어쓰는 push와 첫 push
-전에 확인합니다.
+확인을 묻지 않습니다. 대화형 화면에서는 히스토리를 덮어쓰는 push 전에
+확인합니다. 원격 브랜치가 없으면 로컬에서 동기화합니다.
 
 | 필요한 동작 | 명령 |
 | --- | --- |
@@ -157,9 +157,10 @@ CLI의 개발 브랜치 동기화는 필요하면 `--force-with-lease`로 push�
 | 동기화한 결과를 로컬에만 두기 | `grove sync feat/login --no-push` |
 | 모든 워크트리 동기화하기 | `grove sync --all` |
 
-원격에 없는 개발 브랜치에 `--publish` 없이 `sync`하면 로컬 rebase 뒤 종료 코드
-`4`로 알립니다. 처음 올릴 때는 `propose`나 `sync --publish`를 사용하세요.
-`--no-push`를 쓰면 원격에 없는 브랜치도 로컬 동기화만으로 마칩니다.
+원격 브랜치가 없는 개발 브랜치는 기본 브랜치 위로 rebase하고 push 없이
+정상 완료합니다. 추적하던 원격 브랜치가 삭제된 경우도 같습니다. 스택 브랜치는
+기존처럼 부모 브랜치를 기준으로 동기화합니다. 처음 올릴 때는 `propose`나
+`sync --publish`를 사용하세요.
 
 커밋하지 않은 변경이 있으면 동기화를 거부합니다. rebase 충돌은 기본적으로
 abort하며, 오류에 표시된 상태와 안내를 확인하세요. 기본 브랜치의 로컬 커밋과
@@ -526,7 +527,7 @@ grove clone git@github.com:you/repo.git --upstream git@github.com:them/repo.git
 | `.env`를 찾을 수 없다고 나옴 | 기본 브랜치 워크트리에 복사 원본 파일 준비 후 `setup` 재실행 |
 | 브랜치에서 바꾼 `.grove.toml`이 적용되지 않음 | `grove setup <branch> --config-source worktree` 사용 |
 | `setup stale` 표시 | 설정이나 의존성 파일이 바뀜. `grove setup <branch>` 실행 |
-| 개발 브랜치 `sync`가 종료 코드 `4`로 끝남 | 오류 내용을 확인. 아직 원격에 없다는 안내라면 `--publish`로 첫 push |
+| 개발 브랜치 `sync`가 종료 코드 `4`로 끝남 | 오류 내용에서 미커밋 변경, push 거부 등의 원인 확인 |
 | PR force-push 이후 동기화 거부 | [리뷰 워크트리 교체](#pr이-force-push되어-업데이트가-막혔을-때) 참고 |
 | 기본 브랜치 동기화 거부 | 로컬 커밋과 원격이 갈라졌는지 확인하고 Git으로 정리한 뒤 재시도 |
 | PR 생성·리뷰가 안 됨 | `gh` 설치 및 `gh auth login` 확인 |
@@ -677,7 +678,7 @@ push하지 않습니다. 원격보다 뒤처졌다면 먼저 `sync`로 동기화
 | `propose` | `url`, `number`, `base`, `created` (이미 있었으면 false), `pushed`; `--stack`이면 이것들의 배열, 아래에서 위로 |
 | `stack` | `trunk`, 그리고 위에서 아래로 `rows[]`, 각각 `branch`, `parent`, `depth`, `dir` (워크트리가 없으면 없음), 부모 대비 `ahead`/`behind`, `exists`, `current` |
 | `reset` | `saved`: 스냅샷의 sha, `git stash apply`용 |
-| `sync` | 대상별 결과. 종료 코드 `4`는 첫 push 미지정 또는 변경 등으로 동기화를 거부한 경우이므로 오류 내용도 확인 |
+| `sync` | 대상별 결과. 종료 코드 `4`는 push 거부 또는 변경 등으로 동기화를 거부한 경우이므로 오류 내용도 확인 |
 | `prune -n` | `entries[]`, 각각 `dir`, `reason`, 그리고 남는 경우 `skipped` |
 
 `setup.untrusted: true`는 `.grove.toml`의 명령이 출력만 되고 실행되지

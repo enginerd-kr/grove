@@ -70,7 +70,8 @@ These examples run from `repo/`.
 for a new branch. To publish a branch with `sync` before opening a PR, add
 `--publish`.
 
-**On a development branch, `sync` rebases and pushes.** On a PR review worktree,
+**On a development branch, `sync` rebases and pushes if it has a remote branch.**
+Branches without one sync locally from the default branch. On a PR review worktree,
 it receives the latest PR commits. On the default branch, it only fast-forwards.
 See [how sync works](USAGE.md#what-does-sync-do) for the differences.
 

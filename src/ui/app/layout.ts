@@ -229,11 +229,6 @@ const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
     { keys: "y", action: "remove" },
     { keys: "n", action: "keep" },
   ],
-  // `y` is the push, since that is the half of the sync the question is about.
-  publish: [
-    { keys: "y", action: "push" },
-    { keys: "n", action: "leave it" },
-  ],
   // The one `y` that is an answer to "have you read this" rather than to "shall
   // I", so it says both halves: what is being agreed to and what happens next.
   "trust-open": [

@@ -61,8 +61,8 @@ export type SyncOptions = {
    *
    * Off by default, and reported rather than done: `grove add` without
    * `--push` makes a branch nobody has published, and the first push is the
-   * one that makes it somebody else's business too. The screen asks about it;
-   * the command line spells it out with `--publish`.
+   * one that makes it somebody else's business too. The command line asks
+   * for it explicitly with `--publish`.
    */
   readonly publish: boolean;
 };
@@ -102,9 +102,8 @@ export type SyncOutcome = {
    *
    * Carried apart from `pushed`, because it is neither of that field's two
    * answers: nothing was attempted and nothing was refused. The rebase stands,
-   * and the branch is exactly as unpublished as it was — which `failureFor`
-   * turns into the exit code, since a `rebased` printed over a branch no
-   * remote has ever seen is the same lie a refused push used to tell.
+   * and the branch stays local. This is informational: syncing from the
+   * default branch does not require publishing the worktree's branch.
    */
   readonly unpublished?: true;
 };
@@ -453,14 +452,23 @@ async function syncOne(
    * work first means the rebase replays ours on top of theirs and the push has
    * nothing to destroy.
    */
-  for (const base of [status.upstream, onto]) {
+  // A deleted remote branch can still be named in status after fetch prunes
+  // its ref. Treat it like a new local branch for both rebase and publishing.
+  const tracked =
+    status.upstream === undefined
+      ? undefined
+      : await runGit(["rev-parse", "--verify", "--quiet", "@{upstream}^{commit}"], {
+          cwd: record.path,
+        });
+  const upstream = tracked?.code === 0 ? status.upstream : undefined;
+  for (const base of [upstream, onto]) {
     if (base === undefined) continue;
 
     const conflicted = await rebaseOnto(base);
     if (conflicted) return conflicted;
   }
 
-  const published = await publish(record, name, status.upstream, options, reporter, {
+  const published = await publish(record, name, upstream, options, reporter, {
     force: true,
   });
 
@@ -739,17 +747,6 @@ export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undef
     return new GroveError("refused", describe(refused, "not pushed"), {
       hint: "the rebase stands locally; look at what the remote gained, then sync again",
       details: refused.map((outcome) => `${outcome.dir}: ${outcome.pushRefusal ?? ""}`),
-    });
-  }
-
-  // Below a refused push and above a skip: like the refusal, the rebase
-  // happened and the remote did not get it; unlike it, nothing stood in the
-  // way — the push was never asked for, and the hint is how to ask.
-  const unpublished = outcomes.filter((outcome) => outcome.unpublished === true);
-  if (unpublished.length > 0) {
-    return new GroveError("refused", describe(unpublished, "on no remote yet"), {
-      hint: "sync again with --publish to push it to origin and track it, or --no-push to keep it local",
-      details: unpublished.map((outcome) => `${outcome.dir}: nobody has pushed ${outcome.branch}`),
     });
   }
 
