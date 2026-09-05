@@ -1,13 +1,8 @@
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { version } from "../../../package.json";
 import type { WorktreeSummary } from "../../core/commands/list.ts";
-import {
-  type BranchPullRequest,
-  type PullRequest,
-  pullRequestFor,
-} from "../../core/commands/pr.ts";
-import type { RebaseChoice } from "../../core/commands/rebase.ts";
+import { pullRequestFor } from "../../core/commands/pr.ts";
 import type { StackResult } from "../../core/commands/stack.ts";
 import type { Commit } from "../../core/history.ts";
 import { upgradeHint } from "../../core/install-channel.ts";
@@ -25,6 +20,7 @@ import { columnWidths, GAP, hintsFor, LOG_ROWS, regionsFor } from "./layout.ts";
 import { type CommandName, commandsFor, Menu, matching } from "./Menu.tsx";
 import { MessageView } from "./MessageView.tsx";
 import { type Message, messageFor } from "./message.ts";
+import type { Mode } from "./mode.ts";
 import { PullRequests } from "./PullRequests.tsx";
 import {
   commitPending,
@@ -36,8 +32,11 @@ import {
 import { padTo, Row } from "./Row.tsx";
 import { Stack } from "./Stack.tsx";
 import type { WorktreeService } from "./service.ts";
-import { buildTree, firstChildOf, parentOf, pathOf } from "./tree.ts";
-import { editPrompt, type Prompt, typed } from "./typing.ts";
+import { pathOf } from "./tree.ts";
+import { editPrompt, typed } from "./typing.ts";
+import { useCommandRunner } from "./useCommandRunner.ts";
+import { LOCAL_REFRESH_MS, REMOTE_REFRESH_MS, useWorktreeRefresh } from "./useWorktreeRefresh.ts";
+import { useWorktreeSelection } from "./useWorktreeSelection.ts";
 
 /**
  * `grove` with nothing to do: the worktrees, and making, syncing and removing
@@ -55,55 +54,6 @@ import { editPrompt, type Prompt, typed } from "./typing.ts";
  * always on the last row and nothing reflows as work scrolls past.
  */
 
-type Mode =
-  | { readonly kind: "list" }
-  /**
-   * `from` is the branch the new one starts on, taken from wherever the cursor
-   * was when the prompt opened — not from wherever it is when you press enter.
-   * The list re-reads itself on a timer, and a base that could change while you
-   * were still typing the name would be a different branch than the one the
-   * prompt said.
-   */
-  | ({ readonly kind: "add"; readonly from?: string } & Prompt)
-  /** `/upstream`: the URL being typed. Nothing else is carried; the trunk is read when it runs. */
-  | ({ readonly kind: "upstream" } & Prompt)
-  | { readonly kind: "confirm"; readonly target: Pending }
-  /**
-   * The open pull requests, and which one the cursor is on.
-   *
-   * The rows are read before the popup opens rather than while it is up, for
-   * the same reason `add` carries its base: a list that filled itself in under
-   * the cursor would move what `enter` is aimed at.
-   */
-  | { readonly kind: "pick"; readonly prs: readonly PullRequest[]; readonly index: number }
-  /**
-   * `/rebase`'s popup: the bases for one row, and which the cursor is on.
-   *
-   * The row is carried the way `add` carries its base, and the choices the
-   * way `pick` carries its rows: both were read when the popup opened, and a
-   * list re-read under the cursor would move what `enter` is aimed at.
-   */
-  | {
-      readonly kind: "onto";
-      readonly summary: WorktreeSummary;
-      readonly choices: readonly RebaseChoice[];
-      readonly index: number;
-    }
-  /**
-   * The slash menu: everything the list can do that has no key of its own.
-   *
-   * The rows are *not* carried here, unlike `pick`'s. They are a constant
-   * narrowed by `query`, so holding them would be holding a derivation — and
-   * the one thing they depend on besides the query, `logOn`, is changed only
-   * by running the command that closes the menu.
-   *
-   * `index` counts into what the query matched rather than into every command,
-   * which is why every edit to `query` puts it back to 0: a cursor left on the
-   * fourth row of a list that is now one row long is aimed at nothing.
-   */
-  | { readonly kind: "menu"; readonly query: string; readonly index: number }
-  | { readonly kind: "busy"; readonly label: string };
-
 type Props = {
   readonly service: WorktreeService;
   /** Shown in the header; the repository the keystrokes act on. */
@@ -112,8 +62,9 @@ type Props = {
   readonly store: LineStore;
   /** Ctrl-C while busy: stop the git child before the screen goes away. */
   readonly onCancel?: () => void;
-  /** How often to refresh, in ms. Defaults to `REFRESH_MS`; tests drive it faster. */
+  /** How often to refresh, in ms. Defaults to `LOCAL_REFRESH_MS`; tests drive it faster. */
   readonly refreshMs?: number;
+  readonly remoteRefreshMs?: number;
   /** How often the message slot turns to its next tip, in ms. Defaults to `TIP_ROTATE_MS`; tests drive it faster. */
   readonly tipRotateMs?: number;
   /**
@@ -150,47 +101,7 @@ type Props = {
 const MIN_FILES_COLS = 26;
 const MAX_FILES_COLS = 48;
 
-/**
- * How often the screen brings itself up to date, in the absence of any reason
- * to think it needs to.
- *
- * Both halves are on this one clock. The local half — is anything dirty, has a
- * worktree appeared — is edited from somewhere else, an editor or a build or
- * another terminal, so waiting for `/ refresh` would make the screen a photograph
- * of whenever you last pressed a key. The remote half is counted against
- * `origin/main`, which is a *local* ref: without a fetch of our own, a
- * colleague's push never appears at all.
- *
- * A minute because that is the pace the slower half sets, and running the
- * cheaper half faster buys little: an action you take refreshes immediately,
- * `/ refresh` refreshes on demand, and the rest is other people's work
- * arriving, which does not arrive by the second.
- *
- * The fetch is also why this is quiet. It can fail for reasons that are nobody's
- * fault — a train, a VPN, a key that is not loaded — and a screen that reported
- * each one would be unusable offline while telling you nothing you could act on.
- */
-const REFRESH_MS = 60_000;
-// Long enough to read a tip and its hint before it turns — this is standing
-// advice, not a spinner, so it should not feel like it is racing the reader.
 const TIP_ROTATE_MS = 60_000;
-
-/**
- * How far the clock is let drift once nobody is at the keyboard, and how long
- * "nobody" has to have been true before it starts.
- *
- * A fetch every minute is right while someone is driving the screen, but
- * `grove` left open on a desk pays that cost with nobody there to spend it
- * on — the network round trip and the `git` calls behind it are real work,
- * done for an answer nobody is about to read. Idle is measured from the last
- * key, not the last render, so typing a name into `a`'s prompt counts as
- * being there even though nothing in the list moved. Both scale off
- * `refreshMs` rather than standing as fixed minutes, so a test driving the
- * interval in milliseconds exercises the same backoff a real session would,
- * only compressed.
- */
-const IDLE_AFTER_FACTOR = 2;
-const MAX_REFRESH_FACTOR = 5;
 
 // Standing advice about features that are easy to miss, shown alongside
 // whatever the session earned (a release waiting to be upgraded to) so the
@@ -232,20 +143,13 @@ const GENERAL_TIPS: readonly Message[] = [
   },
 ];
 
-/** A new set with `key` flipped in or out — `Set` is mutable and state is not. */
-function toggled(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
-  const next = new Set(set);
-  if (!next.delete(key)) next.add(key);
-
-  return next;
-}
-
 export function App({
   service,
   repoRoot,
   store,
   onCancel,
-  refreshMs = REFRESH_MS,
+  refreshMs = LOCAL_REFRESH_MS,
+  remoteRefreshMs = REMOTE_REFRESH_MS,
   tipRotateMs = TIP_ROTATE_MS,
   checkUpdate,
   columns: columnsOverride,
@@ -255,21 +159,14 @@ export function App({
   const live = useWindowSize();
   const columns = columnsOverride ?? live.columns;
   const terminalRows = rowsOverride ?? live.rows;
-  const [rows, setRows] = useState<readonly WorktreeSummary[]>([]);
-  /**
-   * What the forge last said about the open pull requests, for the `pr`
-   * column — held apart from `rows` because it arrives on its own clock.
-   *
-   * `list` is git and answers in a moment; the forge is a network round trip
-   * and answers when it answers. Folding the two into one read would make
-   * every refresh, and every action's re-read after it, wait on `gh` — so the
-   * rows are drawn as soon as git has them, and the column fills in behind.
-   */
-  const [pullRequests, setPullRequests] = useState<readonly BranchPullRequest[]>([]);
-  const [cursorKey, setCursorKey] = useState<string | undefined>(undefined);
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [mode, setMode] = useState<Mode>({ kind: "busy", label: "reading worktrees" });
   const [message, setMessage] = useState<Message | undefined>(undefined);
+  const { rows, refresh, noteInput, pullRequests, remoteStatus } = useWorktreeRefresh(
+    service,
+    mode.kind === "busy",
+    refreshMs,
+    remoteRefreshMs,
+  );
   // Every tip that earned the slot on this open: the release tip when there is
   // one to give, plus the standing `GENERAL_TIPS`.
   // Never empty once set. See the rotation `useInterval` below.
@@ -323,146 +220,13 @@ export function App({
     });
   }, [rows, pullRequests]);
 
-  // The cursor walks every drawn row, folders included: a folder is what you
-  // reach for to act on the branches under it in one go.
-  //
-  // Folded folders are held by key rather than by row, so a fold survives the
-  // list re-reading itself — which it does every two seconds, and which would
-  // otherwise flick every folder back open while you were looking at it.
-  const tree = useMemo(() => buildTree(badged, collapsed), [badged, collapsed]);
-
-  /**
-   * Where the cursor is, remembered as the row rather than as its position.
-   *
-   * The list re-reads itself on a timer now, so a worktree appearing above the
-   * selected one would otherwise slide the selection down a row without anybody
-   * touching a key — and the next `r` would be aimed at something else. Held by
-   * row, the selection stays on what was selected.
-   *
-   * The position is still what a vanished row falls back to: when the thing
-   * under the cursor is removed, staying near it beats jumping to the top.
-   */
-  const lastIndex = useRef(0);
-  const anchored = tree.findIndex((row) => row.key === cursorKey);
-  const index =
-    tree.length === 0 ? 0 : anchored >= 0 ? anchored : Math.min(lastIndex.current, tree.length - 1);
-  const current = tree[index];
-
-  useEffect(() => {
-    lastIndex.current = index;
-  }, [index]);
-  const selected = current?.kind === "leaf" ? current.summary : undefined;
-  // Off the row itself, not read back from the rows below it: a folded folder
-  // has none, and `r` there still removes everything it holds.
-  const under = current?.kind === "group" ? current.leaves : [];
-
-  /**
-   * Cursor movement, computed from the previous cursor rather than from the
-   * rendered one.
-   *
-   * Keys arrive faster than React commits: two presses in the same frame both
-   * read the same `index` and the second one goes nowhere, which is exactly
-   * what holding the arrow key does. Resolving the pending row to its position
-   * inside the updater is what makes the second press count. Clamping lives in
-   * here too, so a list that shrank under the cursor cannot leave it past the
-   * end.
-   */
-  const move = useCallback(
-    (delta: number) => {
-      setCursorKey((previous) => {
-        const last = Math.max(0, tree.length - 1);
-        const at = tree.findIndex((row) => row.key === previous);
-        const from = at >= 0 ? at : Math.min(lastIndex.current, last);
-
-        return tree[Math.min(last, Math.max(0, from + delta))]?.key;
-      });
-    },
-    [tree],
-  );
-
-  const mounted = useRef(true);
-  useEffect(() => {
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-
-  /**
-   * Asks the forge about the open pull requests, and keeps whatever it says.
-   *
-   * Never awaited by the caller, and never reported: this runs beside every
-   * re-read of the list, and the screen must not wait on a network round
-   * trip to draw rows git has already handed over, nor say anything when the
-   * round trip fails. No `gh`, no GitHub behind the remote, no network —
-   * each is a column that stays as it was, which for most of those is a
-   * column that is not there. One at a time, for `catchUp`'s reason.
-   */
-  const askingForge = useRef(false);
-  const readPullRequests = useCallback(async () => {
-    if (askingForge.current) return;
-    askingForge.current = true;
-
-    try {
-      const found = await service.branchPullRequests();
-      if (mounted.current) setPullRequests(found);
-    } catch {
-      // A read nobody asked for reports nothing; the column keeps its last answer.
-    } finally {
-      askingForge.current = false;
-    }
-  }, [service]);
-
-  const refresh = useCallback(async () => {
-    // Started before the list is awaited so the two overlap, and not awaited
-    // at all: the rows are the outcome, and the column fills in behind them.
-    void readPullRequests();
-    setRows(await service.list());
-  }, [service, readPullRequests]);
-
-  /**
-   * The keys blocked and the last answer gone — how every action starts,
-   * whether it ends in a message or in a question.
-   */
-  const busy = useCallback(
-    (label: string) => {
-      store.clear();
-      setMessage(undefined);
-      setMode({ kind: "busy", label });
-    },
-    [store],
-  );
-
-  /**
-   * Every action, in one shape: clear the last run's lines, block the keys,
-   * then say what happened whether it worked or not.
-   */
-  const perform = useCallback(
-    async (label: string, action: () => Promise<string>) => {
-      busy(label);
-
-      try {
-        setMessage({ kind: "info", text: await action() });
-      } catch (error) {
-        setMessage(messageFor(error));
-      }
-
-      // The list is re-read even after a failure: a refusal often happens
-      // half-way, and a stale screen is how someone acts on the wrong row.
-      try {
-        await refresh();
-      } catch {
-        // Nothing to add — the failure above is the one worth reporting.
-      }
-      setMode({ kind: "list" });
-    },
-    [busy, refresh],
-  );
+  const { tree, index, current, selected, under, move, traverse } = useWorktreeSelection(badged);
+  const { busy, perform } = useCommandRunner(store, refresh, setMode, setMessage);
 
   /**
    * Refetch and re-read, and hand the rows back as well as drawing them.
    *
-   * `catchUp` below does the same two calls on a timer and keeps nothing; this
-   * is for the one caller that has to *decide* on what came back, before the
+   * This is for the caller that has to *decide* on what came back, before the
    * screen is drawn from it.
    */
   const reread = useCallback(async (): Promise<readonly WorktreeSummary[]> => {
@@ -471,11 +235,8 @@ export function App({
     // sync fails too, so no force-push anybody was not asked about reaches
     // anything. What is stale is the question, not the answer.
     await service.fetch();
-    const summaries = await service.list();
-    setRows(summaries);
-
-    return summaries;
-  }, [service]);
+    return refresh();
+  }, [service, refresh]);
 
   /**
    * Ask first, act second — the shape `s`, `/sync-all` and `/open` share.
@@ -748,8 +509,7 @@ export function App({
 
     void (async () => {
       try {
-        const summaries = await service.list();
-        if (live) setRows(summaries);
+        await refresh();
       } catch (error) {
         if (live) setMessage(messageFor(error));
         return;
@@ -779,7 +539,7 @@ export function App({
     return () => {
       live = false;
     };
-  }, [service, checkUpdate]);
+  }, [refresh, checkUpdate]);
 
   // Jumps the slot to a random tip in the pool, never the one just shown —
   // unless something else has claimed the slot since, in which case there is
@@ -799,72 +559,6 @@ export function App({
       });
     },
     tipPool.length > 1 ? tipRotateMs : null,
-  );
-
-  /**
-   * One tick: bring the remote refs up to date, then re-read everything.
-   *
-   * The fetch first, so the read behind it sees what it brought. Its failure is
-   * not the read's problem — offline, on a VPN, or with no key loaded, the local
-   * half of the screen is still worth refreshing, and swallowing the error here
-   * is what keeps that true.
-   *
-   * Paused while `busy`, where a command already owns the repository and is
-   * going to re-read it when it finishes anyway — a `git status` racing a
-   * `git worktree add` reports a state that was true for neither.
-   *
-   * A tick that finds nothing changed costs a React render and no terminal
-   * write: Ink compares the frame it produced against the last one and returns
-   * early when they match, so an idle screen stays genuinely idle.
-   */
-  const reading = useRef(false);
-  const catchUp = useCallback(async () => {
-    // One at a time. A fetch over a slow link, or a `git status` across thirty
-    // worktrees, can outlast the interval — and ticks queueing up behind each
-    // other would never let go.
-    if (reading.current) return;
-    reading.current = true;
-
-    try {
-      await service.fetch();
-      // The forge beside git rather than after it, and not waited for: what
-      // it says lands in its own state whenever it lands.
-      void readPullRequests();
-      const summaries = await service.list();
-      if (mounted.current) setRows(summaries);
-    } catch {
-      // A read nobody asked for reports nothing. The next tick either succeeds,
-      // or the next keystroke runs a command that says why.
-    } finally {
-      reading.current = false;
-    }
-  }, [service, readPullRequests]);
-
-  // Once on open, because opening the screen is exactly when what it is showing
-  // is most likely to be from another day.
-  useEffect(() => {
-    void catchUp();
-  }, [catchUp]);
-
-  // The clock's own delay, separate from `refreshMs` itself: the interval
-  // reads this, and each tick is what's allowed to widen it. A ref for the
-  // last keystroke rather than state — it moves on every key, and nothing
-  // should re-render because of that, only because the delay it feeds
-  // eventually changes.
-  const lastInputAt = useRef(Date.now());
-  const [refreshDelay, setRefreshDelay] = useState(refreshMs);
-  const idleAfterMs = refreshMs * IDLE_AFTER_FACTOR;
-  const maxRefreshMs = refreshMs * MAX_REFRESH_FACTOR;
-
-  useInterval(
-    () => {
-      void catchUp();
-      setRefreshDelay((current) => {
-        const idleFor = Date.now() - lastInputAt.current;
-        return idleFor < idleAfterMs ? refreshMs : Math.min(current * 2, maxRefreshMs);
-      });
-    },
-    mode.kind === "busy" ? null : refreshDelay,
   );
 
   /**
@@ -1023,8 +717,7 @@ export function App({
     // now, rather than waiting for the next tick to notice, is what keeps a
     // backed-off clock from making the screen wait minutes for its first
     // refresh after being read again.
-    lastInputAt.current = Date.now();
-    setRefreshDelay(refreshMs);
+    noteInput();
 
     if (key.ctrl && input === "c") {
       // `onCancel` is this key and nothing else, which is what lets `runApp`
@@ -1214,40 +907,8 @@ export function App({
     if (key.upArrow || input === "k") return move(-1);
     if (key.downArrow || input === "j") return move(1);
 
-    /**
-     * Folding and traversing, as one pair of keys that mirror each other.
-     *
-     * `→` opens a shut folder, and otherwise goes in: to the first row nested
-     * under this one. `←` shuts an open folder, and otherwise goes out: to the
-     * folder this row is in. From six rows deep, `←←←` is how you get back out
-     * and fold up what you came from without counting rows on the way.
-     *
-     * And when there is nothing to go into or out of, they keep going the way
-     * they point rather than stopping dead. Without that they are not a pair:
-     * `←` walks out through as many levels as there are while `→` stops at the
-     * first worktree it meets, so holding one of them travels and holding the
-     * other does nothing. A key that sometimes moves and sometimes does not is
-     * a key you have to look at the screen to use.
-     */
-    if (key.rightArrow || input === "l") {
-      if (current?.kind === "group" && current.collapsed) {
-        return setCollapsed(toggled(collapsed, current.key));
-      }
-
-      const child = current === undefined ? undefined : firstChildOf(tree, current);
-
-      return child === undefined ? move(1) : setCursorKey(child.key);
-    }
-
-    if (key.leftArrow || input === "h") {
-      if (current?.kind === "group" && !current.collapsed) {
-        return setCollapsed(toggled(collapsed, current.key));
-      }
-
-      const parent = current === undefined ? undefined : parentOf(tree, current);
-
-      return parent === undefined ? move(-1) : setCursorKey(parent.key);
-    }
+    if (key.rightArrow || input === "l") return traverse(1);
+    if (key.leftArrow || input === "h") return traverse(-1);
 
     /**
      * Enter hands the row's path to whatever is not this screen.
@@ -1450,7 +1111,11 @@ export function App({
 
       {/* The breath between the card and the table under it — counted into
           `headerRows` above, like every other row this column draws. */}
-      <Box height={1} />
+      <Box height={1}>
+        <Text dimColor wrap="truncate">
+          {remoteStatus}
+        </Text>
+      </Box>
 
       {labelled ? (
         <Text dimColor wrap="truncate">

@@ -648,6 +648,35 @@ describe("parseGitProgress", () => {
 });
 
 describe("killRunningGit", () => {
+  test("a deadline stops a git command's descendants without stopping unrelated work", async () => {
+    await withTempRepo(async (temp) => {
+      const cwd = await clone(temp);
+      const unrelated = runShell("sleep 0.2; printf survived", { cwd });
+      const result = await runGit(["-c", "alias.slow=!sleep 0.3 && touch late.txt", "slow"], {
+        cwd,
+        timeoutMs: 50,
+      });
+      expect(result.code).toBe(124);
+      expect(result.stderr).toContain("timed out");
+      expect((await unrelated).stdout).toBe("survived");
+      await Bun.sleep(350);
+      expect(await Bun.file(join(cwd, "late.txt")).exists()).toBe(false);
+    });
+  });
+
+  test("a timed-out shell leaves no helper that closed its pipes and ignored TERM", async () => {
+    await withTempRepo(async (temp) => {
+      const cwd = await clone(temp);
+      const result = await runShell(
+        `sh -c 'trap "" TERM; sleep 0.3; touch late.txt' >/dev/null 2>&1 & wait`,
+        { cwd, timeoutMs: 100 },
+      );
+      expect(result.code).toBe(124);
+      await Bun.sleep(400);
+      expect(await Bun.file(join(cwd, "late.txt")).exists()).toBe(false);
+    });
+  });
+
   test("with nothing running it is a no-op, not a crash", () => {
     expect(() => killRunningGit()).not.toThrow();
     expect(() => killRunningGit("SIGKILL")).not.toThrow();

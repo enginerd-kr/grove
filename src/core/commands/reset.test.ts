@@ -71,6 +71,47 @@ async function commit(worktree: string, message: string): Promise<void> {
 }
 
 describe("grove reset", () => {
+  test("refuses --to collisions before changing HEAD or tracked and untracked files", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const worktree = (await seedWorktree(repo, "spike")).path;
+      const before = await head(worktree);
+      await Bun.write(join(worktree, "login.txt"), "local work\n");
+      await Bun.write(join(worktree, "app.txt"), "tracked work\n");
+      for (const clean of [false, true]) {
+        const outcome = await attemptReset(repo, "spike", { to: "origin/feat/login", clean });
+        expect(refused(outcome).code).toBe("refused");
+        expect(refused(outcome).details).toContain("login.txt");
+        expect(await head(worktree)).toBe(before);
+        expect(await Bun.file(join(worktree, "login.txt")).text()).toBe("local work\n");
+        expect(await Bun.file(join(worktree, "app.txt")).text()).toBe("tracked work\n");
+        expect(outcome.log.err).toEqual([]);
+      }
+    });
+  });
+
+  test("protects ignored files and both directions of file/directory collisions", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const destination = (await seedWorktree(repo, "destination")).path;
+      for (const file of ["ignored.txt", "folder/child.txt", "flat.txt"]) {
+        await Bun.write(join(destination, file), "committed\n");
+      }
+      await commit(destination, "Destination paths");
+      const worktree = (await seedWorktree(repo, "spike")).path;
+      await Bun.write(join(worktree, ".gitignore"), "ignored.txt\n");
+      await commit(worktree, "Ignore local file");
+      for (const file of ["ignored.txt", "folder", "flat.txt/local\nfile"]) {
+        await Bun.write(join(worktree, file), "local work\n");
+      }
+      const outcome = await attemptReset(repo, "spike", { to: "destination" });
+      expect(refused(outcome).details).toEqual(["flat.txt/local\nfile", "folder", "ignored.txt"]);
+      for (const file of ["ignored.txt", "folder", "flat.txt/local\nfile"]) {
+        expect(await Bun.file(join(worktree, file)).text()).toBe("local work\n");
+      }
+    });
+  });
+
   test("discards tracked changes, leaves untracked files until --clean, and never touches ignored ones", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
@@ -362,17 +403,14 @@ describe("grove reset", () => {
       const outcome = await attemptReset(repo, "spike", { to: "nope" });
       const missing = refused(outcome);
 
-      // git's failure, not one of ours: the ref was this tool's to pass along
-      // and not to validate, so the code is the generic one and the reason
-      // underneath it is git's own words — provably carried rather than
-      // invented, which one stderr blob could never have shown.
+      // Resolve the destination before snapshotting or starting a reset.
       expect(missing.code).toBe("git-failed");
       expect(errorToExitCode(missing.code)).toBe(ExitCode.gitFailed);
-      expect(missing.message).toBe("git reset --hard nope failed (exit 128)");
-      expect(missing.details.join("\n")).toContain("unknown revision");
-      // The step was opened and then failed, which is what says the command got
-      // as far as running git rather than refusing on its own account.
-      expect(outcome.log.err).toEqual(["· resetting spike\n", "✗ could not reset spike\n"]);
+      expect(missing.message).toBe(
+        "git rev-parse --verify --end-of-options nope^{commit} failed (exit 128)",
+      );
+      expect(missing.details.join("\n")).toContain("Needed a single revision");
+      expect(outcome.log.err).toEqual([]);
 
       // The changes the command was about to destroy are all still here, which
       // is the only interesting thing about a reset that did not run.

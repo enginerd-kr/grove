@@ -296,7 +296,7 @@ afterEach(() => {
  */
 function mount(
   service: WorktreeService,
-  { refreshMs, store = new LineStore(), columns = 100 }: MountOptions = {},
+  { refreshMs, remoteRefreshMs, store = new LineStore(), columns = 100 }: MountOptions = {},
 ) {
   const instance = render(
     <App
@@ -304,6 +304,7 @@ function mount(
       repoRoot="/repo"
       store={store}
       refreshMs={refreshMs}
+      remoteRefreshMs={remoteRefreshMs}
       columns={columns}
       rows={24}
     />,
@@ -315,6 +316,7 @@ function mount(
 
 type MountOptions = {
   readonly refreshMs?: number;
+  readonly remoteRefreshMs?: number;
   readonly store?: LineStore;
   readonly columns?: number;
 };
@@ -877,6 +879,70 @@ describe("the list", () => {
     expect(calls.fetched).toBeGreaterThan(0);
   });
 
+  test("local changes remain visible while a remote fetch is pending, then show its result", async () => {
+    let listed: readonly WorktreeSummary[] = ROWS;
+    const pending = Promise.withResolvers<boolean>();
+    let fetched = 0;
+    const { service } = stub({
+      list: async () => listed,
+      fetch: () => {
+        fetched += 1;
+        return pending.promise;
+      },
+    });
+    const ui = await opened_with(service, { refreshMs: 25, remoteRefreshMs: 30 });
+    listed = [...ROWS, summary({ dir: "local-change" })];
+    await settled(ui, (frame) => frame.includes("local-change"));
+    expect(fetched).toBe(1);
+    expect(ui.frame()).toContain("remote: not synced");
+    pending.resolve(true);
+    await settled(ui, (frame) => frame.includes("remote: just fetched"));
+  });
+
+  test("a failed fetch leaves local polling active and a slower remote clock independent", async () => {
+    let listed: readonly WorktreeSummary[] = ROWS;
+    let fetched = 0;
+    const { service } = stub({
+      list: async () => listed,
+      fetch: async () => {
+        fetched += 1;
+        throw new Error("offline");
+      },
+    });
+    const ui = await opened_with(service, { refreshMs: 25, remoteRefreshMs: 60_000 });
+    listed = [...ROWS, summary({ dir: "offline-change" })];
+    await settled(ui, (frame) => frame.includes("offline-change"));
+    expect(fetched).toBe(1);
+    expect(ui.frame()).toContain("offline or unavailable");
+  });
+
+  test("a background read cannot overwrite a newer command refresh", async () => {
+    const pending = Promise.withResolvers<readonly WorktreeSummary[]>();
+    let reads = 0;
+    const { service } = stub({
+      list: async () => {
+        reads += 1;
+        if (reads === 2) return pending.promise;
+        return reads === 1 ? ROWS : [...ROWS, summary({ dir: "fresh-result" })];
+      },
+    });
+    const ui = await opened_with(service, { refreshMs: 25 });
+    await waitFor(
+      () => String(reads),
+      (value) => value === "2",
+      { timeoutMs: WAIT },
+    );
+    await run(ui, "refresh");
+    await settled(ui, (frame) => frame.includes("fresh-result"));
+    const start = ui.frames.length;
+    pending.resolve([...ROWS, summary({ dir: "stale-result" })]);
+    await nextFrame();
+    expect(ui.frames.slice(start).some((frame) => plain(frame).includes("stale-result"))).toBe(
+      false,
+    );
+    expect(ui.frame()).toContain("fresh-result");
+  });
+
   /**
    * The list re-reads itself on a timer. A fold held by row rather than by key
    * would spring every folder open on the next tick, under the cursor.
@@ -981,7 +1047,7 @@ describe("the add prompt", () => {
     // Twice as many backspaces as there are characters: the caret clamps at
     // zero, and the two presses past the start have nothing left to take.
     for (let at = 0; at < 4; at += 1) await press(ui, keys.backspace);
-    await settled(ui, (frame) => !frame.includes("ab"));
+    await settled(ui, (frame) => !/new branch[^\n]*ab/.test(frame));
 
     // The prompt is still up and still taking text: an empty name is a thing to
     // type into, not a cancel.

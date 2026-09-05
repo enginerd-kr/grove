@@ -124,6 +124,7 @@ async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
       columns={shot.columns}
       rows={shot.rows}
       refreshMs={NO_REFRESH}
+      remoteRefreshMs={NO_REFRESH}
       tipRotateMs={NO_REFRESH}
     />,
     shot.columns,
@@ -140,6 +141,8 @@ async function shoot(fixture: Fixture, shot: Shot): Promise<void> {
     // the terminal is — which is how this came to time out with a screen that
     // had loaded perfectly well and simply had no room to show that row.
     await session.until(`${fixture.branches.length} worktrees`);
+    // The fetch status is visible too; wait for its settled, repeatable frame.
+    await session.until("remote: just fetched");
     await shot.drive(session);
     check(shot, session.plain(), fixture.root);
     await mkdir(OUT, { recursive: true });

@@ -24,6 +24,10 @@ app/Menu.tsx      `/`: the commands with no key of their own, as a list to type 
 app/changelog.ts  CHANGELOG.md parsed at compile time, for the banner's "What's new"
 app/message.ts    the one line shown after something happened, shared by both screens
 app/tree.ts       the worktree paths, and one worktree's changed paths, as the trees they are
+app/mode.ts       the screen modes and the data each prompt carries
+app/useCommandRunner.ts  command progress, outcomes, and rereads after actions
+app/useWorktreeRefresh.ts  independent local and remote reads, deadlines in the service
+app/useWorktreeSelection.ts  cursor anchoring, folds, and tree traversal
 app/service.ts    what the screens are allowed to do: add, sync, remove, discard, check out or propose a PR
 app/run.tsx       discovery, the reporter, which screen is up, and render()
 test-utils.ts     ANSI stripping + a frame-flush helper for tests
@@ -125,22 +129,19 @@ e2e-utils.ts      drives the real binary in a PTY (Bun.spawn), through an emulat
   opens and keeps it on the mode, rather than reading the selection again on `enter`. With the
   list refreshing itself, the two are not the same value — and the second one would not be what
   the prompt said while the name was being typed.
-- **One timer, doing both halves in order.** `REFRESH_MS` (60s) fetches and then re-reads, so
-  the read behind the fetch sees what it brought. The fetch's failure is deliberately not the
-  read's problem: offline, the local half is still worth refreshing. It pauses while `busy` — a
-  command already owns the repository and re-reads it when it finishes, and a `git status`
-  racing a `git worktree add` describes a state that was true for neither — and it is guarded by
-  a ref, so a tick cannot start before the last one finished. `refreshMs` is a prop with that
-  default: the tests that are *about* the refreshing drive it in milliseconds, and the rest
-  inherit it and are simply never ticked.
-- **The clock backs off once nobody's pressed a key in a while**, doubling `refreshMs` each tick
-  the idle stretch is still open, capped at five times it. The fetch behind it is real network
-  and process cost paid for a screen nobody is reading, which is what makes a `grove` left open
-  overnight expensive rather than idle. Idle is timed from the last key (`useInput` stamps a
-  ref on every one, whatever it does), not from the last render, so it survives typing into `a`'s
-  prompt without ever seeing the list move. Any key snaps the delay back to `refreshMs`
-  immediately, rather than waiting for a backed-off tick to notice — otherwise reopening the
-  screen after a while away could wait minutes for its first refresh.
+- **Local and remote reads have separate clocks.** `useWorktreeRefresh` reads local
+  worktrees every two seconds and fetches remote refs and PR badges every minute.
+  Each background lane permits one request at a time. Network reads have 30-second
+  deadlines in the service/process layer; a slow or failed fetch never blocks the
+  local timer. Successful fetches also trigger a local read when no action is running.
+  The header's status line reports the age and outcome of the last background fetch.
+- **Actions pause the background clocks.** A generation counter prevents a read
+  started before an action from overwriting the command's newer result. Explicit
+  actions still refresh after success or failure, through `useCommandRunner`.
+- **The remote clock backs off while idle**, doubling after two intervals without
+  input, up to five minutes. Any key restores the one-minute interval; local reads
+  keep their two-second cadence. `refreshMs` and `remoteRefreshMs` let tests control
+  the clocks independently.
 - **The cursor is a row, not an index.** With the list re-reading itself, a worktree appearing
   above the selected one would slide the selection down without anybody touching a key, and the
   next `r` would be aimed at something else. `move` still resolves inside the state updater, so

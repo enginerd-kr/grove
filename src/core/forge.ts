@@ -26,8 +26,12 @@ export function ghLabel(argv: readonly string[]): string {
  * point at where. Anything else is gh's own stderr, which is the useful half —
  * "no pull requests found", "not a GitHub repository".
  */
-export async function runGh(argv: readonly string[], cwd: string): Promise<string> {
-  const result = await runTool(["gh", ...argv] as [string, ...string[]], { cwd });
+export async function runGh(
+  argv: readonly string[],
+  cwd: string,
+  timeoutMs?: number,
+): Promise<string> {
+  const result = await runTool(["gh", ...argv] as [string, ...string[]], { cwd, timeoutMs });
 
   if (result === null) {
     throw new GroveError("gh", "this needs `gh`, which is not installed", {
@@ -55,8 +59,12 @@ export async function runGh(argv: readonly string[], cwd: string): Promise<strin
  * answer we cannot read is gh disappointing us rather than a bug in this tool,
  * and it exits 10 with gh's own words instead of 1 with a `SyntaxError`.
  */
-export async function ghJson(argv: readonly string[], cwd: string): Promise<unknown> {
-  const output = await runGh(argv, cwd);
+export async function ghJson(
+  argv: readonly string[],
+  cwd: string,
+  timeoutMs?: number,
+): Promise<unknown> {
+  const output = await runGh(argv, cwd, timeoutMs);
 
   try {
     return JSON.parse(output);

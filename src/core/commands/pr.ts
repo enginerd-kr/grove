@@ -304,6 +304,7 @@ export async function branchPullRequests(
   const parsed: unknown = await ghJson(
     ["pr", "list", "--state", "open", "--limit", String(limit), "--json", BADGE_FIELDS],
     repo.root,
+    30_000,
   );
   if (!Array.isArray(parsed)) return [];
 

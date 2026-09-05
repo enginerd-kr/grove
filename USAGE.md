@@ -66,7 +66,11 @@ whole stack, each branch under the one it sits on with how far it has drifted
 from it — the same picture `grove stack` prints. The bottom bar shows the keys
 available right now.
 
-The screen refreshes periodically. `/refresh` forces one.
+The screen rereads local worktrees every two seconds. Remote refs and pull-request
+badges refresh separately, once a minute, with a 30-second deadline per network
+read. Local changes remain visible while a fetch is slow or unavailable. The line
+below the header shows when the last background fetch succeeded and whether the
+latest attempt failed. `/refresh` rereads local worktrees immediately.
 
 ## Common tasks
 
@@ -480,6 +484,10 @@ pull request. Needs `gh`; exits `10` without it, before anything is removed.
 
 `git reset --hard`. `--clean` also deletes untracked files. `--to <ref>` resets
 to another ref.
+
+Before changing anything, grove refuses a reset whose destination would overwrite
+an untracked or ignored path, including file/directory collisions. Move those paths
+out of the worktree and retry. This check also applies with `--clean`.
 
 What it discards is saved first, as a commit that touches no ref — the same
 shape `git stash push -u` stores, tracked changes and (with `--clean`) the

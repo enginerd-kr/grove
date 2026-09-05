@@ -187,18 +187,17 @@ export function stackOrder<T>(
  * `prune --delete-branch` — and not where a worktree goes. A branch without a
  * worktree is still a branch, and still a base its children can be rebased on.
  *
- * Called **before** the deletion, too: `git branch -d` takes the whole
- * `branch.<name>` section with it, this record included, so a call afterwards
- * would find no parent to hand the children and would clear them instead of
- * moving them up.
+ * Deletion callers capture the stack first and pass it after deletion succeeds:
+ * `git branch -d` removes the branch's config, including its parent record.
  *
  * Answers with the children it moved, so the command that called it can say so.
  */
 export async function forgetBranch(
   bare: string,
   branch: string,
+  recorded?: Stack,
 ): Promise<readonly { readonly child: string; readonly parent?: string }[]> {
-  const stack = await readStack(bare);
+  const stack = recorded ?? (await readStack(bare));
   const grandparent = stack.get(branch);
   const children = childrenOf(stack, branch);
 

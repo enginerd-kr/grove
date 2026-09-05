@@ -7,7 +7,7 @@ import { GroveError } from "../errors.ts";
 import { isEmptyOrMissing } from "../fs.ts";
 import { runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths, worktreeBase } from "../layout.ts";
-import { forgetBranch } from "../stack.ts";
+import { forgetBranch, readStack } from "../stack.ts";
 import {
   LISTED,
   listWorktrees,
@@ -261,10 +261,9 @@ export async function pruneEmptyParents(root: string, removed: string): Promise<
  * Deletes a branch, with everything that hangs off the deletion — the one
  * spelling of it, shared with `prune`.
  *
- * The stack repair runs *before* the deletion and not after: `git branch -d`
- * takes the whole `branch.<name>` config section with it, and the stack record
- * is in there. Anything standing on this branch is handed to whatever it was
- * standing on.
+ * The stack is read before deletion and repaired only after it succeeds.
+ * `git branch -d` removes the branch's config, so the saved parent is needed
+ * to reparent its children without changing anything on a refused deletion.
  *
  * `-d` refuses a branch whose commits are not merged anywhere; that refusal is
  * the safety net, so it is only downgraded to `-D` when `force` says so. What
@@ -282,12 +281,13 @@ export async function deleteBranch(
   options: { readonly force: boolean; readonly announce: boolean },
   reporter: Reporter,
 ): Promise<{ readonly deleted: boolean; readonly kept?: string }> {
-  for (const { child, parent } of await forgetBranch(bare, branch)) {
-    reporter.info(`${child} now sits on ${parent ?? "the default branch"}`);
-  }
-
+  const stack = await readStack(bare);
   const result = await runGit(["branch", options.force ? "-D" : "-d", branch], { cwd: bare });
   if (result.code !== 0) return { deleted: false, kept: `git -C ${bare} branch -D ${branch}` };
+
+  for (const { child, parent } of await forgetBranch(bare, branch, stack)) {
+    reporter.info(`${child} now sits on ${parent ?? "the default branch"}`);
+  }
 
   if (options.announce) reporter.info(`deleted branch ${branch}`);
   await dropPrRemote(bare, branch, reporter);

@@ -23,6 +23,8 @@ export type GitResult = {
 
 export type GitOptions = {
   readonly cwd?: string;
+  /** Optional deadline for background reads; kills this child and its descendants. */
+  readonly timeoutMs?: number;
   /**
    * Called for each line git writes to stderr, as it arrives.
    *
@@ -175,9 +177,10 @@ async function drain(
 async function spawnProcess(
   argv: readonly string[],
   env: Readonly<Record<string, string | undefined>>,
-  { cwd, onStderrLine }: Pick<GitOptions, "cwd" | "onStderrLine">,
+  { cwd, onStderrLine, timeoutMs }: Pick<GitOptions, "cwd" | "onStderrLine" | "timeoutMs">,
   detached = false,
 ): Promise<GitResult> {
+  detached ||= timeoutMs !== undefined;
   let child: ReturnType<typeof Bun.spawn>;
 
   try {
@@ -219,6 +222,24 @@ async function spawnProcess(
     kill: (signal) => child.kill(signal),
   };
   running.add(entry);
+  let timedOut = false;
+  let forceTimer: ReturnType<typeof setTimeout> | undefined;
+  const stop = (signal: NodeJS.Signals) => {
+    try {
+      if (entry.grouped) process.kill(-entry.pid, signal);
+      else entry.kill(signal);
+    } catch {
+      // The process may have exited just before the deadline.
+    }
+  };
+  const timer =
+    timeoutMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          timedOut = true;
+          stop("SIGTERM");
+          forceTimer = setTimeout(() => stop("SIGKILL"), 1000);
+        }, timeoutMs);
 
   try {
     const [stdout, stderr, code] = await Promise.all([
@@ -227,8 +248,15 @@ async function spawnProcess(
       child.exited,
     ]);
 
-    return { code, stdout, stderr };
+    return timedOut
+      ? { code: 124, stdout, stderr: `${stderr}\ncommand timed out after ${timeoutMs}ms\n` }
+      : { code, stdout, stderr };
   } finally {
+    // A helper can close its pipes and ignore TERM after the parent exits.
+    // Do not cancel its escalation just because our streams finished first.
+    if (timedOut) stop("SIGKILL");
+    clearTimeout(timer);
+    clearTimeout(forceTimer);
     running.delete(entry);
   }
 }
@@ -236,13 +264,13 @@ async function spawnProcess(
 /** Runs git and reports what happened. A non-zero exit is a result, not a throw. */
 export async function runGit(
   args: readonly string[],
-  { cwd, onStderrLine, env }: GitOptions = {},
+  { cwd, onStderrLine, env, timeoutMs }: GitOptions = {},
 ): Promise<GitResult> {
   const startedAt = performance.now();
   const result = await spawnProcess(
     ["git", ...args],
     { ...process.env, ...PINNED_ENV, ...env },
-    { cwd, onStderrLine },
+    { cwd, onStderrLine, timeoutMs },
   );
 
   if (trace) traceCommand(args, cwd, result, performance.now() - startedAt);
@@ -275,7 +303,7 @@ const SHELL_ENV: Readonly<Record<string, string>> = {
  */
 export async function runTool(
   argv: readonly [string, ...string[]],
-  { cwd, env }: Pick<GitOptions, "cwd" | "env"> = {},
+  { cwd, env, timeoutMs }: Pick<GitOptions, "cwd" | "env" | "timeoutMs"> = {},
 ): Promise<GitResult | null> {
   const startedAt = performance.now();
 
@@ -284,7 +312,7 @@ export async function runTool(
     result = await spawnProcess(
       argv,
       { ...process.env, GIT_TERMINAL_PROMPT: "0", GH_PROMPT_DISABLED: "1", ...env },
-      { cwd },
+      { cwd, timeoutMs },
     );
   } catch (error) {
     // Bun.spawn throws when the executable does not exist on PATH.
@@ -309,7 +337,7 @@ export async function runTool(
  * expecting `&&` and `$HOME` to mean what they mean everywhere else. Nothing
  * a keystroke reaches gets here.
  *
- * It is also the only spawner given a process group of its own, and the `&&` is
+ * It always gets a process group of its own, and the `&&` is
  * the reason. `sh -c` *execs* a line holding a single command, so the child in
  * the set above is the work itself and killing it is enough. Add a second
  * command — which is what these lines look like in practice, `bun install &&
@@ -331,19 +359,20 @@ export async function runTool(
  * Nothing else is given up — stdin is already `"ignore"` and both output
  * streams are pipes, so no part of this was using that terminal anyway.
  *
- * `runGit` and `runTool` stay undetached. They exec a real program directly, so
+ * `runGit` and `runTool` without a deadline stay undetached. They exec a real program directly, so
  * their child *is* the work, and they keep the tty relationship that lets a
- * credential helper's prompt behave.
+ * credential helper's prompt behave. Reads with a deadline use their own group
+ * so a timed-out fetch also stops its transport and credential helpers.
  */
 export async function runShell(
   command: string,
-  { cwd, env, onStderrLine }: GitOptions = {},
+  { cwd, env, onStderrLine, timeoutMs }: GitOptions = {},
 ): Promise<GitResult> {
   const startedAt = performance.now();
   const result = await spawnProcess(
     ["sh", "-c", command],
     { ...process.env, ...SHELL_ENV, ...env },
-    { cwd, onStderrLine },
+    { cwd, onStderrLine, timeoutMs },
     true,
   );
 

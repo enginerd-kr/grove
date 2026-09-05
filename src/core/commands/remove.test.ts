@@ -3,18 +3,20 @@ import { join } from "node:path";
 import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
 import { pathExists } from "../fs.ts";
 import type { RepoPaths } from "../layout.ts";
+import { readStack, setParent } from "../stack.ts";
 import {
   type Attempt,
   attempt,
   managedRepo,
   probeGit,
+  recorder,
   refused,
   seedGit,
   seedWorktree,
   succeeded,
   withTempRepo,
 } from "../test-utils.ts";
-import { type RemoveResult, removeWorktree } from "./remove.ts";
+import { deleteBranch, type RemoveResult, removeWorktree } from "./remove.ts";
 
 /**
  * `grove remove` against a real repository.
@@ -93,6 +95,31 @@ async function trustSetupFile(repo: RepoPaths, contents: string): Promise<void> 
 }
 
 describe("grove remove", () => {
+  test("keeps the whole stack when deletion is refused and reparents only after success", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedGit(repo.gitDir, ["branch", "--no-track", "parent", "origin/feat/login"]);
+      await seedGit(repo.gitDir, ["branch", "--no-track", "child", "parent"]);
+      await setParent(repo.gitDir, "parent", "main");
+      await setParent(repo.gitDir, "child", "parent");
+      const before = await readStack(repo.gitDir);
+      const log = recorder();
+      expect(
+        await deleteBranch(repo.gitDir, "parent", { force: false, announce: true }, log.reporter),
+      ).toMatchObject({ deleted: false });
+      expect(await readStack(repo.gitDir)).toEqual(before);
+      expect((await probeGit(repo.gitDir, ["rev-parse", "--verify", "parent"])).code).toBe(0);
+      expect(log.err).toEqual([]);
+
+      expect(
+        await deleteBranch(repo.gitDir, "parent", { force: true, announce: true }, log.reporter),
+      ).toEqual({ deleted: true });
+      expect(await readStack(repo.gitDir)).toEqual(new Map([["child", "main"]]));
+      expect((await probeGit(repo.gitDir, ["rev-parse", "--verify", "parent"])).code).not.toBe(0);
+      expect(log.err.join("")).toContain("child now sits on main");
+    });
+  });
+
   test("takes a branch name, a directory name, or a path, and clears the folders they left", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);

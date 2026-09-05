@@ -143,9 +143,10 @@ describe("grove reset", () => {
 
       const missing = await runCli(["reset", "main", "--to", "nope"], { cwd: root });
       expect(missing.exitCode).toBe(ExitCode.gitFailed);
-      // The step that failed and git's own reason under it, both on stderr.
-      expect(missing.stderr).toContain("could not reset main");
-      expect(missing.stderr).toContain("unknown revision");
+      // Destination validation fails before the reset step can begin.
+      expect(missing.stderr).not.toContain("resetting main");
+      expect(missing.stderr).toContain("nope^{commit}");
+      expect(missing.stderr).toContain("Needed a single revision");
       expect(missing.stdout).toBe("");
     });
   }, 60_000);

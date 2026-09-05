@@ -1,5 +1,6 @@
 import { type Reporter, withStep } from "../../report/reporter.ts";
-import { runGit, runGitOrThrow } from "../git.ts";
+import { GroveError } from "../errors.ts";
+import { gitOutput, runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { recoverLine, snapshotChanges } from "../snapshot.ts";
 import { plural } from "../text.ts";
@@ -46,7 +47,7 @@ export type ResetOptions = {
    * and has to be asked for.
    */
   readonly to?: string;
-  /** Also delete untracked files. `git reset --hard` leaves those alone. */
+  /** Also delete untracked files, after saving them in the snapshot. */
   readonly clean: boolean;
 };
 
@@ -98,6 +99,35 @@ export function describeDiscard(tracked: number, untracked: number): string {
   return parts.join(" and ");
 }
 
+/** Include ignored files: reset --hard can overwrite those too. */
+async function refuseUntrackedCollisions(path: string, commit: string): Promise<void> {
+  const [files, others] = await Promise.all([
+    gitOutput(["ls-tree", "-r", "--name-only", "-z", commit], { cwd: path }),
+    gitOutput(["ls-files", "--others", "-z"], { cwd: path }),
+  ]);
+  const tracked = new Set(files.split("\0").filter(Boolean));
+  const directories = new Set<string>();
+  for (const file of tracked) {
+    for (let slash = file.indexOf("/"); slash !== -1; slash = file.indexOf("/", slash + 1)) {
+      directories.add(file.slice(0, slash));
+    }
+  }
+  const collisions = others.split("\0").filter((file) => {
+    if (!file) return false;
+    if (tracked.has(file) || directories.has(file)) return true;
+    for (let slash = file.indexOf("/"); slash !== -1; slash = file.indexOf("/", slash + 1)) {
+      if (tracked.has(file.slice(0, slash))) return true;
+    }
+    return false;
+  });
+  if (collisions.length > 0) {
+    throw new GroveError("refused", "reset would overwrite untracked or ignored files", {
+      hint: "move these files out of the worktree before resetting",
+      details: collisions.slice(0, LISTED),
+    });
+  }
+}
+
 export async function resetWorktree(
   repo: RepoPaths,
   cwd: string,
@@ -108,7 +138,7 @@ export async function resetWorktree(
   const target = resolveTarget(options.target, worktrees, { root: repo.root, cwd });
   const dir = worktreeDir(repo.root, target.path);
 
-  // Not overridable, and the one refusal here. A stopped rebase has commits
+  // Not overridable. A stopped rebase has commits
   // half-applied and its own HEAD; resetting through that abandons them
   // somewhere only the reflog remembers, which is not what anybody typing
   // "throw away my changes" is asking for.
@@ -126,6 +156,11 @@ export async function resetWorktree(
   // "discarded 3 files" is the part worth saying.
   const before = await statusOf(target.path);
   const to = options.to ?? "HEAD";
+  // Pin the destination so the collision check and reset use the same tree.
+  const commit = await gitOutput(["rev-parse", "--verify", "--end-of-options", `${to}^{commit}`], {
+    cwd: target.path,
+  });
+  await refuseUntrackedCollisions(target.path, commit);
 
   // Before anything is touched, and refusing rather than carrying on without
   // it: a reset that could not keep a copy is exactly the reset somebody will
@@ -143,7 +178,7 @@ export async function resetWorktree(
     reporter,
     { start: `resetting ${dir}`, done: `reset ${dir}`, failed: `could not reset ${dir}` },
     async () => {
-      await runGitOrThrow(["reset", "--hard", to], { cwd: target.path });
+      await runGitOrThrow(["reset", "--hard", commit], { cwd: target.path });
       // `-d` for directories as well: a build output tree is the usual reason a
       // reset leaves a worktree still dirty, and it is never one file.
       if (options.clean) await runGitOrThrow(["clean", "-fd"], { cwd: target.path });
@@ -163,9 +198,10 @@ export async function resetWorktree(
 
   // Only worth saying when they survived: `--clean` is opt-in on the command
   // line, and a worktree that is still dirty after a reset is a surprise.
-  if (!options.clean && before.untracked.length > 0) {
+  const after = await statusOf(target.path);
+  if (!options.clean && after.untracked.length > 0) {
     reporter.warn(
-      `${dir} still has ${before.untracked.length} untracked file(s); --clean would delete them too`,
+      `${dir} still has ${after.untracked.length} untracked file(s); --clean would delete them too`,
     );
   }
 

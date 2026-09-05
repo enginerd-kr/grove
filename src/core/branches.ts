@@ -83,8 +83,8 @@ const CLOBBERED_TAG = "would clobber existing tag";
  * with the tags reported for the caller to warn about; anything else — a dead
  * remote, a branch refused — is not.
  */
-export async function fetchRemotes(bare: string): Promise<FetchOutcome> {
-  const result = await runGit(["fetch", "--all", "--prune", "--tags"], { cwd: bare });
+export async function fetchRemotes(bare: string, timeoutMs?: number): Promise<FetchOutcome> {
+  const result = await runGit(["fetch", "--all", "--prune", "--tags"], { cwd: bare, timeoutMs });
   if (result.code === 0) return { fetched: true, staleTags: [] };
 
   // ` ! [rejected]  v0.4.4  -> v0.4.4  (would clobber existing tag)` — the
