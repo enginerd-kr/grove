@@ -4,6 +4,10 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.5.4 — 2026-09-06
+
+- `sync` on a development branch that has no remote branch now rebases onto the default branch and completes successfully instead of exiting with code `4`. A branch whose tracked remote branch was deleted is treated the same way. The interactive screen no longer asks to publish before syncing; use `propose` or `sync --publish` for the first push. Exit code `4` now only means a push or sync was refused because of uncommitted changes, a refused push, or another condition.
+
 ## 0.5.3 — 2026-09-05
 
 - Start new work from the latest fetched remote default branch with `grove add` or `a`. Press `A` or use `--from` to branch from local work; `--on` also remembers a stack parent. Default-branch sync now only fast-forwards, preserving diverged local commits.
