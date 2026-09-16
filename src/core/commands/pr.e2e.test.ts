@@ -173,6 +173,19 @@ describe.skipIf(!POSIX)("grove pr", () => {
       expect(caught.stderr).toContain("pr/7 caught up with pull request 7");
       expect(caught.stderr).not.toContain("already has a worktree");
       expect(await Bun.file(join(root, "pr", "7", "login.txt")).text()).toBe("login\n");
+
+      // A force-push can withdraw a commit. The review still has no local work,
+      // so sync receives the rewrite and reports the retained revision in JSON.
+      await seedGit(forge.base, ["update-ref", "refs/heads/main", `${ahead}~1`]);
+      const rewritten = await runCli(["sync", "pr/7", "--json"], { cwd: root, env: forge.env });
+      expect(rewritten.exitCode).toBe(ExitCode.ok);
+      const [synced] = JSON.parse(rewritten.stdout);
+      expect(synced.kind).toBe("replaced");
+      expect(synced.backup).toStartWith("refs/grove/review-backups/7/");
+      expect((await probeGit(forge.repo.gitDir, ["rev-parse", synced.backup])).stdout.trim()).toBe(
+        ahead,
+      );
+      expect(await Bun.file(join(root, "pr", "7", "login.txt")).exists()).toBe(false);
     });
   }, 120_000);
 

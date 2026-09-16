@@ -11,7 +11,7 @@ import { theme } from "../theme.ts";
 import { App } from "./App.tsx";
 import { commandsFor } from "./Menu.tsx";
 import { describePending, wouldForcePush } from "./pending.ts";
-import type { WorktreeService } from "./service.ts";
+import { type ReviewReplacement, ReviewUpdateRequired, type WorktreeService } from "./service.ts";
 import { buildTree, pathOf, type TreeRow } from "./tree.ts";
 
 /**
@@ -121,6 +121,7 @@ type Calls = {
   readonly removedMany: { targets: readonly string[]; discardDirty?: boolean }[];
   readonly discarded: string[];
   readonly checkedOut: number[];
+  readonly replacedReviews: (readonly ReviewReplacement[])[];
   readonly synced: (string | undefined)[];
   /** The targets `sync` was told to publish, apart from the syncs themselves. */
   readonly published: string[];
@@ -146,6 +147,7 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     removedMany: [],
     discarded: [],
     checkedOut: [],
+    replacedReviews: [],
     synced: [],
     published: [],
     rebased: [],
@@ -223,6 +225,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       checkoutPr: async (number) => {
         calls.checkedOut.push(number);
         return `added pr/${number} — Change number ${number}`;
+      },
+      replaceReviews: async (reviews) => {
+        calls.replacedReviews.push(reviews);
+        return "updated PR; local work backed up";
       },
       sync: async (target, options) => {
         calls.synced.push(target);
@@ -1393,6 +1399,64 @@ describe("the keys", () => {
     expect(calls.synced).toEqual(["/repo/feat/login"]);
     expect(calls.published).toEqual([]);
   });
+
+  test.each(["s", "review", "sync-all"])(
+    "%s offers discard-and-update or cancel when local work blocks a PR update",
+    async (entry) => {
+      const review = { number: 42, url: "https://forge/pull/42", branch: "feat/login" };
+      const reviews =
+        entry === "sync-all"
+          ? [review, { number: 43, url: "https://forge/pull/43", branch: "feat/search" }]
+          : [review];
+      const rows = ROWS.map((row) => ({
+        ...row,
+        trunk: { ahead: 0, behind: 0 },
+        behind: 0,
+      }));
+      const refuse = async () => {
+        throw new ReviewUpdateRequired(reviews);
+      };
+      const { service, calls } = stub({
+        list: async () => [...rows],
+        sync: refuse,
+        checkoutPr: refuse,
+        pullRequests: async () => [pullRequest(42)],
+        // This must not replace the discard question after a failed checkout.
+        pendingCommands: async () => ["bun install"],
+      });
+      const ui = await opened_with(service, { columns: 160 });
+      await toLogin(ui);
+      const ask = async () => {
+        if (entry === "s") {
+          await press(ui, "s");
+        } else {
+          await run(ui, entry);
+          if (entry === "review") {
+            await settled(ui, (frame) => frame.includes("enter check out"));
+            await press(ui, keys.enter);
+          }
+        }
+        const frame = await settled(ui, (each) => each.includes("y discard and update"));
+        expect(frame).toContain("discard local work in feat/login");
+        expect(frame).toContain("n cancel");
+        expect(frame).not.toContain("approve:");
+        if (entry === "sync-all") expect(frame).toContain("feat/search and update");
+      };
+
+      for (const key of ["n", keys.esc, keys.enter]) {
+        await ask();
+        expect(calls.replacedReviews).toEqual([]);
+        await press(ui, key);
+        await settled(ui, (frame) => IN_LIST(frame) && !frame.includes("y discard and update"));
+        expect(calls.replacedReviews).toEqual([]);
+      }
+      await ask();
+      await press(ui, "y");
+      await settled(ui, (frame) => frame.includes("updated PR; local work backed up"));
+      expect(calls.replacedReviews).toEqual([reviews]);
+      expect(calls.trusted).toEqual([]);
+    },
+  );
 
   /**
    * The list badges `merged` and `gone`, and until now clearing them meant `r`

@@ -11,6 +11,7 @@ import {
   checkoutPullRequest,
   describePullRequest,
   listPullRequests,
+  PrLocalWorkError,
   type PrResult,
   pullRequestFor,
 } from "./pr.ts";
@@ -365,6 +366,45 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
 });
 
 describe.skipIf(!POSIX)("running it again", () => {
+  test.each(["rewritten", "rewound"] as const)(
+    "updates an untouched review when the remote PR is %s, keeping the old commits",
+    async (change) => {
+      await withForge(async (forge) => {
+        await forge.answer();
+        await forge.propose("fix/crash", "one\n", "Fix the crash");
+        const first = await pr(forge, "42");
+        const before = await headOf(first.path);
+        const author = join(forge.temp.root, "fork-work");
+        if (change === "rewritten") {
+          await Bun.write(join(author, "crash.txt"), "rewritten\n");
+          await seedGit(author, ["add", "-A"]);
+          await seedGit(author, ["commit", "--amend", "-m", "Revised fix"]);
+        } else {
+          await seedGit(author, ["reset", "--hard", "HEAD~1"]);
+        }
+        await seedGit(author, ["push", "--force", "origin", "fix/crash"]);
+
+        const updated = await pr(forge, "42");
+
+        expect(updated.updated).toBe("replaced");
+        expect(updated.alreadyPresent).toBe(true);
+        expect(updated.backup).toBeDefined();
+        expect(await seedGit(forge.repo.gitDir, ["rev-parse", updated.backup ?? ""])).toBe(
+          `${before}\n`,
+        );
+        expect(await headOf(first.path)).toBe(await headOf(author));
+        expect((await seedGit(first.path, ["status", "--porcelain"])).trim()).toBe("");
+        if (change === "rewritten") {
+          expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("rewritten\n");
+        } else {
+          expect(await Bun.file(join(first.path, "crash.txt")).exists()).toBe(false);
+        }
+        expect((await pr(forge, "42")).updated).toBe("unchanged");
+      });
+    },
+    90_000,
+  );
+
   test("catches the worktree up when the pull request moves on", async () => {
     await withForge(async (forge) => {
       await forge.answer();
@@ -389,6 +429,42 @@ describe.skipIf(!POSIX)("running it again", () => {
     });
   }, 90_000);
 
+  test.each(["committed", "staged", "untracked", "unrecorded"] as const)(
+    "does not replace a rewritten review with %s local state",
+    async (state) => {
+      await withForge(async (forge) => {
+        await forge.answer();
+        await forge.propose("fix/crash", "one\n", "Fix the crash");
+        const first = await pr(forge, "42");
+        if (state === "unrecorded") {
+          await seedGit(forge.repo.gitDir, ["config", "--unset", "branch.pr/42.grovepr"]);
+        } else {
+          await Bun.write(join(first.path, "notes.txt"), "local work\n");
+          if (state !== "untracked") await seedGit(first.path, ["add", "notes.txt"]);
+          if (state === "committed") await seedGit(first.path, ["commit", "-m", "Local work"]);
+        }
+        const before = await headOf(first.path);
+        const status = await seedGit(first.path, ["status", "--porcelain"]);
+        await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "feat/login"]);
+
+        const error = refused(await attemptPr(forge, "42"));
+
+        expect(error.code).toBe("refused");
+        expect(error.hint).toContain("grove pr 42 --replace");
+        expect(await headOf(first.path)).toBe(before);
+        expect(await seedGit(first.path, ["status", "--porcelain"])).toBe(status);
+        expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("one\n");
+        if (state !== "unrecorded") {
+          expect(await Bun.file(join(first.path, "notes.txt")).text()).toBe("local work\n");
+        }
+        expect(
+          await seedGit(forge.repo.gitDir, ["for-each-ref", "refs/grove/review-backups"]),
+        ).toBe("");
+      });
+    },
+    90_000,
+  );
+
   test("refuses rather than choosing when the pull request moved and you have commits there", async () => {
     await withForge(async (forge) => {
       await forge.answer();
@@ -408,6 +484,7 @@ describe.skipIf(!POSIX)("running it again", () => {
       const error = refused(outcome);
 
       expect(error.code).toBe("refused");
+      expect(error).toBeInstanceOf(PrLocalWorkError);
       expect(errorToExitCode(error.code)).toBe(ExitCode.refused);
       expect(error.message).toBe("pr/42 has 1 commit pull request 42 does not");
       // Which of the two refusals `reconcileBranch` composes this was: the
@@ -451,8 +528,11 @@ describe.skipIf(!POSIX)("running it again", () => {
       const dirty = refused(await attemptPr(forge, "42"));
 
       expect(dirty.code).toBe("refused");
+      expect(dirty).toBeInstanceOf(PrLocalWorkError);
       expect(dirty.message).toBe("pr/42 has uncommitted changes, and pull request 42 has moved on");
-      expect(dirty.hint).toBe("commit them, or discard them: grove reset pr/42");
+      expect(dirty.hint).toBe(
+        "stash them and retry, or run grove pr 42 --replace to save them before replacing the checkout",
+      );
       expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("half-edited\n");
 
       // Somebody's own branch that happens to be called `pr/9`: not an
@@ -469,6 +549,7 @@ describe.skipIf(!POSIX)("running it again", () => {
       const clash = refused(outcome);
 
       expect(clash.code).toBe("refused");
+      expect(clash).not.toBeInstanceOf(PrLocalWorkError);
       expect(clash.message).toBe("pr/9 is already a branch here, and it is not pull request 9");
       // The other half of the same check, and the half stderr could not show:
       // this one is not yours, so the way out is a rename and not a reset.
@@ -476,6 +557,39 @@ describe.skipIf(!POSIX)("running it again", () => {
         `rename it: git -C ${forge.repo.gitDir} branch -m pr/9 <another name>`,
       );
       expect(await pathExists(join(forge.repo.root, "pr", "9"))).toBe(false);
+    });
+  }, 90_000);
+
+  test("a review stopped in a rebase is never offered as local work to discard", async () => {
+    await withForge(async (forge) => {
+      await forge.answer();
+      await forge.propose("fix/crash", "one\n", "first");
+      const first = await pr(forge, "42");
+      await Bun.write(join(first.path, "crash.txt"), "local fix\n");
+      await seedGit(first.path, ["add", "crash.txt"]);
+      await seedGit(first.path, ["commit", "-m", "Local fix"]);
+      await forge.propose("fix/crash", "remote fix\n", "second");
+      await seedGit(first.path, ["fetch", "pr-42"]);
+      expect((await probeGit(first.path, ["rebase", "pr-42/fix/crash"])).code).not.toBe(0);
+      const before = await headOf(first.path);
+      const status = await seedGit(first.path, ["status", "--porcelain"]);
+
+      for (const replace of [false, true]) {
+        const error = refused(
+          await attempt((reporter) =>
+            checkoutPullRequest(
+              forge.repo,
+              forge.repo.root,
+              { pr: "42", setup: false, trust: false, replace },
+              reporter,
+            ),
+          ),
+        );
+        expect(error.message).toContain("in the middle of a rebase");
+        expect(error).not.toBeInstanceOf(PrLocalWorkError);
+        expect(await headOf(first.path)).toBe(before);
+        expect(await seedGit(first.path, ["status", "--porcelain"])).toBe(status);
+      }
     });
   }, 90_000);
 });

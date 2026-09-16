@@ -413,7 +413,18 @@ Branches created with `--on` sync onto their parent and use that parent as the
 default PR base. `--stack` opens PRs starting with the parents. Do not combine
 `--from` and `--on`.
 
-### When a force-push blocks a PR update
+### Update a PR after a force-push
+
+Run `grove sync pr/42` or `grove pr 42` again. If the worktree is clean and still
+at the last PR commit grove checked out, grove saves that revision under a backup
+ref and updates to the rewritten PR. The interactive screen's `s` does the same.
+
+If you have local commits or uncommitted changes, the interactive screen offers
+`y discard and update` or `n cancel`. Only `y` replaces your local work, after
+saving a backup. `n` or Esc leaves it untouched. The same choice appears when you
+select an existing PR in `/review`.
+
+From the command line, save that work and replace the checkout explicitly with:
 
 ```bash
 grove pr 42 --replace
@@ -421,8 +432,8 @@ grove pr 42 --replace
 
 This saves the existing commits under a backup ref and uncommitted changes in a
 snapshot, then replaces the checkout with the latest PR commits. Check the output
-for the backup location and recovery commands. For ordinary PR updates,
-`grove sync pr/42` is enough.
+for the backup location and recovery commands. Older review worktrees without a
+recorded PR revision also need `--replace` when the remote history has changed.
 
 ### Send your own changes to a PR you are reviewing
 

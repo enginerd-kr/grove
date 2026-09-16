@@ -455,6 +455,10 @@ describe("hintsFor", () => {
       "sync",
       "leave it",
     ]);
+    expect(hintsFor("confirm", leaf, "replace-review")).toEqual([
+      { keys: "y", action: "discard and update" },
+      { keys: "n", action: "cancel" },
+    ]);
     // The same pair `r` uses: it is a removal, of however many.
     expect(hintsFor("confirm", leaf, "prune").map((hint) => hint.action)).toEqual([
       "remove",

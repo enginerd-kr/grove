@@ -21,7 +21,12 @@ import {
   type WorktreeRecord,
   worktreeDir,
 } from "../worktrees.ts";
-import { checkoutPullRequest, pullRequestBase } from "./pr.ts";
+import {
+  checkoutPullRequest,
+  PrLocalWorkError,
+  pullRequestBase,
+  type ReviewReplacement,
+} from "./pr.ts";
 
 /**
  * `grove sync` — fetch, then bring worktrees up to date with the default branch.
@@ -72,7 +77,17 @@ export type SyncOutcome = {
   /** The worktree's directory relative to the repo root, for messages. */
   readonly dir: string;
   readonly branch?: string;
-  readonly kind: "up-to-date" | "fast-forwarded" | "rebased" | "skipped" | "conflicted";
+  readonly kind:
+    | "up-to-date"
+    | "fast-forwarded"
+    | "replaced"
+    | "rebased"
+    | "skipped"
+    | "conflicted";
+  /** Previous PR commits retained when receiving rewritten remote history. */
+  readonly backup?: string;
+  /** A review update blocked on local work, available for explicit replacement. */
+  readonly replacement?: ReviewReplacement;
   /** Why it was skipped, or what conflicted. Absent when nothing went wrong. */
   readonly reason?: string;
   readonly conflicts?: readonly string[];
@@ -179,8 +194,14 @@ export async function syncWorktrees(
           path: target.path,
           dir: worktreeDir(repo.root, target.path),
           branch: target.branch,
-          kind: result.updated === "unchanged" ? "up-to-date" : "fast-forwarded",
+          kind:
+            result.updated === "unchanged"
+              ? "up-to-date"
+              : result.updated === "replaced"
+                ? "replaced"
+                : "fast-forwarded",
           onto: result.upstream,
+          ...(result.backup === undefined ? {} : { backup: result.backup }),
         });
       } catch (error) {
         if (!isGroveError(error)) throw error;
@@ -190,6 +211,7 @@ export async function syncWorktrees(
           branch: target.branch,
           kind: "skipped",
           reason: `${error.message}${error.hint ? `; ${error.hint}` : ""}`,
+          ...(error instanceof PrLocalWorkError ? { replacement: error.review } : {}),
         });
       }
       continue;

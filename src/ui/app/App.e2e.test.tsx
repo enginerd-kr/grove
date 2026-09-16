@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { runCli } from "../../cli/test-cli.ts";
+import { withForge } from "../../core/commands/forge-test-utils.ts";
 import { pathExists } from "../../core/fs.ts";
-import { type TempRepo, withTempRepo } from "../../core/test-utils.ts";
+import { seedGit, type TempRepo, withTempRepo } from "../../core/test-utils.ts";
 import { type Cell, startUi, type UiSession } from "../e2e-utils.ts";
 import { keys } from "../test-utils.ts";
 import { commandsFor } from "./Menu.tsx";
@@ -359,6 +360,63 @@ describeUi("the app", () => {
           const after = await ui.waitForFrame((frame) => !listed(frame), WAIT);
           // ...and the message outlives the re-read that removed the row.
           expect(after).toContain("removed feat/login");
+        } finally {
+          ui.kill();
+        }
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "PR sync keeps local work on cancel and backs it up before a confirmed update",
+    async () => {
+      await withForge(async (forge) => {
+        await forge.answer();
+        await forge.answerTo("pr list", "[]");
+        await forge.propose("fix/crash", "one\n", "first");
+        const created = await runCli(["pr", "42", "--no-setup"], { cwd: forge.repo.root });
+        expect(created.exitCode).toBe(0);
+        const path = join(forge.repo.root, "pr", "42");
+        await Bun.write(join(path, "local.txt"), "local commit\n");
+        await seedGit(path, ["add", "local.txt"]);
+        await seedGit(path, ["commit", "-m", "Local work"]);
+        const before = (await seedGit(path, ["rev-parse", "HEAD"])).trim();
+        await Bun.write(join(path, "notes.txt"), "local notes\n");
+        await forge.propose("fix/crash", "two\n", "second");
+        const remote = (await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim();
+        const ui = await open(forge.repo.root, 120);
+        try {
+          await press(ui, keys.down, (frame) => selected(frame) === "pr/");
+          await press(ui, keys.down, (frame) => selected(frame) === "42");
+          const asked = (frame: string) => frame.includes("y discard and update");
+
+          for (const key of ["n", keys.esc]) {
+            await press(ui, "s", asked);
+            expect((await seedGit(path, ["rev-parse", "HEAD"])).trim()).toBe(before);
+            await press(ui, key, (frame) => !asked(frame) && frame.includes("q quit"));
+            expect(await Bun.file(join(path, "local.txt")).text()).toBe("local commit\n");
+            expect(await Bun.file(join(path, "notes.txt")).text()).toBe("local notes\n");
+          }
+
+          await press(ui, "s", asked);
+          await press(ui, "y", (frame) => frame.includes("updated pr/42 to the latest PR"));
+          expect((await seedGit(path, ["rev-parse", "HEAD"])).trim()).toBe(remote);
+          expect(await Bun.file(join(path, "crash.txt")).text()).toBe("two\n");
+          expect(await Bun.file(join(path, "local.txt")).exists()).toBe(false);
+          expect(await Bun.file(join(path, "notes.txt")).exists()).toBe(false);
+          expect(
+            (
+              await seedGit(forge.repo.gitDir, [
+                "for-each-ref",
+                "--format=%(objectname)",
+                "refs/grove/review-backups/42",
+              ])
+            ).trim(),
+          ).toBe(before);
+          await seedGit(path, ["stash", "apply", "refs/grove/discarded/pr/42"]);
+          expect(await Bun.file(join(path, "notes.txt")).text()).toBe("local notes\n");
+          expect((await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim()).toBe(remote);
         } finally {
           ui.kill();
         }

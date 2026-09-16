@@ -7,7 +7,7 @@ import { ghJson, record, text } from "../forge.ts";
 import { gitOutput, runGit, runGitOrThrow } from "../git.ts";
 import type { RepoPaths } from "../layout.ts";
 import { recordReview, reviewBranch, reviewOf as storedReview } from "../review.ts";
-import { listWorktrees, statusOf } from "../worktrees.ts";
+import { listWorktrees, refuseMidRebase, statusOf } from "../worktrees.ts";
 import { addWorktree } from "./add.ts";
 import { resetWorktree } from "./reset.ts";
 
@@ -123,6 +123,23 @@ export type PrResult = {
   readonly alreadyPresent: boolean;
   readonly setup?: SetupResult;
 };
+
+/** The PR whose local work a user can explicitly choose to replace. */
+export type ReviewReplacement = {
+  readonly number: number;
+  readonly url: string;
+  readonly branch: string;
+};
+
+export class PrLocalWorkError extends GroveError {
+  constructor(
+    readonly review: ReviewReplacement,
+    message: string,
+    hint: string,
+  ) {
+    super("refused", message, { hint });
+  }
+}
 
 /**
  * The local branch a pull request gets, which is also its directory.
@@ -680,7 +697,7 @@ async function fetchHead(repo: RepoPaths, detail: PrDetail, reporter: Reporter):
   return { sha: sha.trim() };
 }
 
-/** Fast-forward by default; explicit replacement preserves commits and local changes. */
+/** Receive PR updates; replacing local work requires an explicit request. */
 async function reconcileBranch(
   repo: RepoPaths,
   detail: PrDetail,
@@ -704,21 +721,72 @@ async function reconcileBranch(
 
   if (current.stdout.trim() === head.sha) return { updated: "unchanged" };
 
+  const holder = (await listWorktrees(repo.gitDir)).find((wt) => wt.branch === branch);
+  if (holder !== undefined) refuseMidRebase(holder, branch);
+
   const ancestor = await runGit(["merge-base", "--is-ancestor", ref, head.sha], {
     cwd: repo.gitDir,
   });
+  // A rewritten remote does not imply local work. The recorded head survives
+  // background fetches, unlike the remote-tracking ref, and proves this branch
+  // still holds exactly the last PR revision we checked out.
+  const review = ancestor.code === 1 ? await storedReview(repo.gitDir, branch) : undefined;
+  const untouched =
+    review?.number === detail.number &&
+    review.url === detail.url &&
+    review.headSha === current.stdout.trim();
+  const replacement = { number: detail.number, url: detail.url, branch };
 
-  if (replace) {
+  if (!replace && ancestor.code !== 0 && !untouched) {
+    const tracking = await runGit(["config", "--get", `branch.${branch}.remote`], {
+      cwd: repo.gitDir,
+    });
+    const mine = tracking.stdout.trim() === remote;
+    const ahead = (
+      await gitOutput(["rev-list", "--count", `${head.sha}..${ref}`], { cwd: repo.gitDir })
+    ).trim();
+    const commits = `${ahead} commit${ahead === "1" ? "" : "s"}`;
+
+    if (mine || (review?.url === detail.url && review.number === detail.number)) {
+      throw new PrLocalWorkError(
+        replacement,
+        `${branch} has ${commits} pull request ${detail.number} does not`,
+        `the PR may have been force-pushed, or these commits are local; grove pr ${detail.number} --replace saves them before replacing the checkout`,
+      );
+    }
+    throw new GroveError(
+      "refused",
+      `${branch} is already a branch here, and it is not pull request ${detail.number}`,
+      { hint: `rename it: git -C ${repo.gitDir} branch -m ${branch} <another name>` },
+    );
+  }
+
+  if (!replace && holder !== undefined && (await statusOf(holder.path)).dirty) {
+    const message = `${branch} has uncommitted changes, and pull request ${detail.number} has moved on`;
+    const hint = `stash them and retry, or run grove pr ${detail.number} --replace to save them before replacing the checkout`;
+    const recorded = review ?? (await storedReview(repo.gitDir, branch));
+    const tracking = await runGit(["config", "--get", `branch.${branch}.remote`], {
+      cwd: repo.gitDir,
+    });
+    if (
+      (recorded?.url === detail.url && recorded.number === detail.number) ||
+      tracking.stdout.trim() === remote
+    ) {
+      throw new PrLocalWorkError(replacement, message, hint);
+    }
+    throw new GroveError("refused", message, { hint });
+  }
+
+  if (replace || untouched) {
     const backup = `refs/grove/review-backups/${detail.number}/${Date.now()}-${crypto.randomUUID()}`;
     await runGitOrThrow(["update-ref", backup, current.stdout.trim()], { cwd: repo.gitDir });
     reporter.info(`previous review commits saved: ${backup}`);
     let savedChanges: string | undefined;
-    const holder = (await listWorktrees(repo.gitDir)).find((wt) => wt.branch === branch);
     if (holder) {
       const saved = await resetWorktree(
         repo,
         repo.root,
-        { target: holder.path, to: head.sha, clean: true },
+        { target: holder.path, to: head.sha, clean: replace },
         reporter,
       );
       savedChanges = saved.saved;
@@ -729,48 +797,11 @@ async function reconcileBranch(
     return { updated: "replaced", backup, saved: savedChanges };
   }
 
-  if (ancestor.code !== 0) {
-    const tracking = await runGit(["config", "--get", `branch.${branch}.remote`], {
-      cwd: repo.gitDir,
-    });
-    const mine = tracking.stdout.trim() === remote;
-    const ahead = (
-      await gitOutput(["rev-list", "--count", `${head.sha}..${ref}`], { cwd: repo.gitDir })
-    ).trim();
-    const commits = `${ahead} commit${ahead === "1" ? "" : "s"}`;
-
-    throw new GroveError(
-      "refused",
-      mine
-        ? `${branch} has ${commits} pull request ${detail.number} does not`
-        : `${branch} is already a branch here, and it is not pull request ${detail.number}`,
-      {
-        hint: mine
-          ? `the PR may have been force-pushed, or these commits are local; grove pr ${detail.number} --replace saves them before replacing the checkout`
-          : `rename it: git -C ${repo.gitDir} branch -m ${branch} <another name>`,
-      },
-    );
-  }
-
-  // Behind, and safely so. Where it is checked out the move has to go through
-  // the worktree, or the index and the working tree would be left describing
-  // the commit the branch no longer points at.
-  const worktrees = await listWorktrees(repo.gitDir);
-  const holder = worktrees.find((wt) => wt.branch === branch);
-
+  // Move through the worktree so its files and index follow the branch.
   if (holder === undefined) {
     await runGitOrThrow(["branch", "-f", branch, head.sha], { cwd: repo.gitDir });
 
     return { updated: "fast-forwarded" };
-  }
-
-  const status = await statusOf(holder.path);
-  if (status.dirty) {
-    throw new GroveError(
-      "refused",
-      `${branch} has uncommitted changes, and pull request ${detail.number} has moved on`,
-      { hint: `commit them, or discard them: grove reset ${branch}` },
-    );
   }
 
   await runGitOrThrow(["merge", "--ff-only", head.sha], { cwd: holder.path });

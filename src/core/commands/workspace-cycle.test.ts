@@ -117,6 +117,53 @@ test("replacing a divergent review saves committed and uncommitted work", async 
   });
 });
 
+test("sync receives a force-pushed PR after a rename and an earlier background fetch", async () => {
+  await withForge(async (forge) => {
+    await forge.answer();
+    await forge.propose("fix/crash", "one\n", "first");
+    const review = succeeded(
+      await attempt((r) =>
+        checkoutPullRequest(
+          forge.repo,
+          forge.repo.root,
+          { pr: "42", setup: false, trust: false },
+          r,
+        ),
+      ),
+    );
+    const before = await head(review.path);
+    const renamed = succeeded(
+      await attempt((r) =>
+        renameWorktree(
+          forge.repo,
+          forge.repo.root,
+          { target: review.path, to: "reviews/crash", push: false, force: false },
+          r,
+        ),
+      ),
+    );
+    await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "feat/login"]);
+    const remote = (await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim();
+    await seedGit(forge.repo.gitDir, ["fetch", "--all"]);
+
+    const outcomes = succeeded(
+      await attempt((r) =>
+        syncWorktrees(forge.repo, forge.repo.root, { ...sync, target: renamed.path }, r),
+      ),
+    );
+
+    expect(outcomes[0]?.kind).toBe("replaced");
+    expect(outcomes[0]?.path).toBe(renamed.path);
+    expect(outcomes[0]?.pushed).toBeUndefined();
+    expect(await head(renamed.path)).toBe(remote);
+    expect(await Bun.file(join(renamed.path, "login.txt")).text()).toBe("login\n");
+    expect(await seedGit(forge.repo.gitDir, ["rev-parse", outcomes[0]?.backup ?? ""])).toBe(
+      `${before}\n`,
+    );
+    expect((await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim()).toBe(remote);
+  });
+});
+
 test("new branches report the fetched base, and main with divergent commits stays untouched", async () => {
   await withTempRepo(async (temp) => {
     const repo = await managedRepo(temp);

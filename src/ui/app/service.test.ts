@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { addWorktree } from "../../core/commands/add.ts";
+import { withForge } from "../../core/commands/forge-test-utils.ts";
 import { isGroveError } from "../../core/errors.ts";
 import { pathExists } from "../../core/fs.ts";
 import type { RepoPaths } from "../../core/layout.ts";
@@ -15,7 +16,12 @@ import {
 } from "../../core/test-utils.ts";
 import { waitForEntry } from "../../hooks/test-utils.ts";
 import type { Reporter, Step } from "../../report/reporter.ts";
-import { createSetupService, createWorktreeService, type WorktreeService } from "./service.ts";
+import {
+  createSetupService,
+  createWorktreeService,
+  ReviewUpdateRequired,
+  type WorktreeService,
+} from "./service.ts";
 
 /**
  * The layer between the keys and `core/commands`, driven against a real repository.
@@ -475,8 +481,52 @@ describe("createWorktreeService", () => {
         // one the screen does raise, because `rebased` and `conflicted` in the
         // same colour is the screen calling a failure a success; a skip already
         // says what happened on the line it returns.
-        expect(await service.sync("feat/login")).toBe("feat/login skipped");
+        expect(await service.sync("feat/login")).toBe("feat/login skipped — uncommitted changes");
         expect(await pathExists(join(root, "feat", "login", "later.txt"))).toBe(false);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "review updates ask before replacing local work and keep a recoverable backup",
+    async () => {
+      await withForge(async (forge) => {
+        await forge.answer();
+        await forge.propose("fix/crash", "one\n", "first");
+        const { service } = serviceAt(forge.repo);
+        await service.checkoutPr(42);
+        await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "feat/login"]);
+
+        const updated = await service.checkoutPr(42);
+
+        expect(updated).toContain("pr/42 updated to the rewritten pull request");
+        expect(updated).toContain("previous commits saved at refs/grove/review-backups/42/");
+        const path = join(forge.repo.root, "pr", "42");
+        expect(await Bun.file(join(path, "login.txt")).text()).toBe("login\n");
+        await Bun.write(join(path, "notes.txt"), "local notes\n");
+        await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "main"]);
+
+        const blocked: unknown = await service.sync("pr/42").catch((error: unknown) => error);
+
+        expect(blocked).toBeInstanceOf(ReviewUpdateRequired);
+        if (!(blocked instanceof ReviewUpdateRequired)) throw new Error("expected a choice");
+        expect(blocked.reviews).toEqual([
+          { number: 42, url: "https://github.example/acme/widget/pull/42", branch: "pr/42" },
+        ]);
+        await expect(service.checkoutPr(42)).rejects.toBeInstanceOf(ReviewUpdateRequired);
+        await expect(service.sync()).rejects.toBeInstanceOf(ReviewUpdateRequired);
+        expect(await Bun.file(join(path, "notes.txt")).text()).toBe("local notes\n");
+        expect(await Bun.file(join(path, "login.txt")).text()).toBe("login\n");
+
+        const remote = (await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim();
+        expect(await service.replaceReviews(blocked.reviews)).toContain("local work backed up");
+        expect((await seedGit(path, ["rev-parse", "HEAD"])).trim()).toBe(remote);
+        expect((await seedGit(path, ["status", "--porcelain"])).trim()).toBe("");
+        expect(await Bun.file(join(path, "notes.txt")).exists()).toBe(false);
+        expect((await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim()).toBe(remote);
+        await seedGit(path, ["stash", "apply", "refs/grove/discarded/pr/42"]);
+        expect(await Bun.file(join(path, "notes.txt")).text()).toBe("local notes\n");
       });
     },
     SLOW,

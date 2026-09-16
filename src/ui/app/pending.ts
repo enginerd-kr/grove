@@ -2,7 +2,13 @@ import type { WorktreeSummary } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import { plural } from "../../core/text.ts";
 import { theme } from "../theme.ts";
-import type { PendingOpen, PendingPropose, PruneResult, WorktreeService } from "./service.ts";
+import type {
+  PendingOpen,
+  PendingPropose,
+  PruneResult,
+  ReviewReplacement,
+  WorktreeService,
+} from "./service.ts";
 
 /**
  * What a key is about to do that nobody should be able to do by accident, held
@@ -39,6 +45,7 @@ export type Pending =
   | { readonly kind: "sync"; readonly summary: WorktreeSummary }
   /** `/sync-all`, where `count` of the worktrees would. */
   | { readonly kind: "sync-all"; readonly count: number }
+  | { readonly kind: "replace-review"; readonly reviews: readonly ReviewReplacement[] }
   /** `/prune`: every finished worktree, as the dry run described them. */
   | { readonly kind: "prune"; readonly result: PruneResult }
   /**
@@ -215,6 +222,13 @@ export function describePending(target: Pending): {
     };
   }
 
+  if (target.kind === "replace-review") {
+    return {
+      text: `discard local work in ${target.reviews.map((review) => review.branch).join(", ")} and update to the latest PR? a backup is kept`,
+      colour: theme.warn,
+    };
+  }
+
   // The two URLs, whole: which remote is being replaced is the entire
   // question, and a prompt that abbreviated either would be asking somebody
   // to agree to something it had not shown them.
@@ -305,6 +319,12 @@ export function commitPending(
   }
   if (target.kind === "sync-all") {
     return { label: "syncing every worktree", run: () => service.sync() };
+  }
+  if (target.kind === "replace-review") {
+    return {
+      label: "updating pull requests",
+      run: () => service.replaceReviews(target.reviews),
+    };
   }
   // The real run, not the dry one's entries replayed: `grove prune` decides
   // what is finished at the moment it runs, and a branch merged between the

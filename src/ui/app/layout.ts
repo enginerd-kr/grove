@@ -225,6 +225,10 @@ const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
     { keys: "y", action: "sync" },
     { keys: "n", action: "leave it" },
   ],
+  "replace-review": [
+    { keys: "y", action: "discard and update" },
+    { keys: "n", action: "cancel" },
+  ],
   prune: [
     { keys: "y", action: "remove" },
     { keys: "n", action: "keep" },

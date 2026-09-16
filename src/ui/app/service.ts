@@ -9,7 +9,9 @@ import {
   branchPullRequests,
   checkoutPullRequest,
   listPullRequests,
+  PrLocalWorkError,
   type PullRequest,
+  type ReviewReplacement,
 } from "../../core/commands/pr.ts";
 import {
   type ExistingPullRequest,
@@ -54,7 +56,14 @@ import type { Reporter } from "../../report/reporter.ts";
  * Passed straight through, so the screen holds the answer without reaching past
  * this module for the shape of it — the same way it takes `WorktreeSummary`.
  */
-export type { ExistingPullRequest, PendingOpen, PruneResult };
+export type { ExistingPullRequest, PendingOpen, PruneResult, ReviewReplacement };
+
+/** The screen offers discard-and-update or cancel for these named reviews. */
+export class ReviewUpdateRequired extends Error {
+  constructor(readonly reviews: readonly ReviewReplacement[]) {
+    super("local work must be discarded before updating these pull requests");
+  }
+}
 
 /**
  * What `/propose` has to say before it asks: where the pull request goes, and
@@ -246,6 +255,8 @@ export type WorktreeService = {
    * one up, or found nothing to do at all.
    */
   readonly checkoutPr: (number: number) => Promise<string>;
+  /** Run only after the user chooses to discard local work and update these PRs. */
+  readonly replaceReviews: (reviews: readonly ReviewReplacement[]) => Promise<string>;
   /**
    * What `/propose` would do to one worktree, read before the question.
    *
@@ -386,7 +397,10 @@ export function createSetupService(
 function describeSync(outcomes: readonly SyncOutcome[]): string {
   const [only] = outcomes;
   if (only === undefined) return "nothing to sync";
-  if (outcomes.length === 1) return `${only.dir} ${only.kind}`;
+  if (outcomes.length === 1) {
+    const reason = only.reason === undefined ? "" : ` — ${only.reason}`;
+    return `${only.dir} ${only.kind}${reason}`;
+  }
 
   const counts = new Map<string, number>();
   for (const outcome of outcomes) counts.set(outcome.kind, (counts.get(outcome.kind) ?? 0) + 1);
@@ -603,17 +617,39 @@ export function createWorktreeService(
         cwd,
         { pr: String(number), setup: true, trust: false, open: true },
         reporter,
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof PrLocalWorkError) throw new ReviewUpdateRequired([error.review]);
+        throw error;
+      });
 
       const copied = await copyToClipboard(cdCommand(result.path));
       const suffix = copied ? ", cd copied" : "";
 
+      if (result.updated === "replaced") {
+        return `${result.dir} updated to the rewritten pull request; previous commits saved at ${result.backup}${suffix}`;
+      }
       if (result.updated === "unchanged") return `pr/${number} is already up to date${suffix}`;
       if (result.updated === "fast-forwarded") {
         return `pr/${number} caught up with the pull request${suffix}`;
       }
 
       return `added pr/${number} — ${result.title}${suffix}`;
+    },
+
+    replaceReviews: async (reviews) => {
+      const updated: string[] = [];
+      let backedUp = false;
+      for (const review of reviews) {
+        const result = await checkoutPullRequest(
+          repo,
+          cwd,
+          { pr: review.url, replace: true, setup: false, trust: false, open: false },
+          reporter,
+        );
+        updated.push(result.dir);
+        backedUp ||= result.backup !== undefined;
+      }
+      return `updated ${updated.join(", ")} to the latest PR${backedUp ? "; local work backed up" : ""}`;
     },
 
     pendingPropose: async (target) => {
@@ -727,6 +763,11 @@ export function createWorktreeService(
       // place that decides a conflict outranks a refused push.
       const failure = syncFailureFor(outcomes.filter((outcome) => outcome.kind !== "skipped"));
       if (failure) throw failure;
+
+      const replacements = outcomes.flatMap((outcome) =>
+        outcome.replacement === undefined ? [] : [outcome.replacement],
+      );
+      if (replacements.length > 0) throw new ReviewUpdateRequired(replacements);
 
       return `${describeSync(outcomes)}${describeUnpublished(outcomes)}`;
     },

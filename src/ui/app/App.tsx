@@ -754,7 +754,9 @@ export function App({
 
         return void perform(`checking out pull request ${pr.number}`, () =>
           service.checkoutPr(pr.number),
-        ).then(() => runPendingCommands(`pr/${pr.number}`));
+        ).then((succeeded) => {
+          if (succeeded) return runPendingCommands(`pr/${pr.number}`);
+        });
       }
 
       return;
