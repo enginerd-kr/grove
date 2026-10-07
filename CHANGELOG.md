@@ -4,6 +4,11 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.5.6 — 2026-10-07
+
+- PR review sync verifies the fetched commit against the PR's current head, so a stale branch ref after a force-push can no longer report a successful update while leaving local files unchanged. Fetches use a private temporary ref and fall back to the PR's canonical head; a mismatched revision is reported instead of accepted.
+- Long branch lists in the rebase picker use two columns when the terminal has room. Left and right move between columns, up and down stay within a column, and Enter selects the highlighted branch. Narrow terminals keep a single column.
+
 ## 0.5.5 — 2026-09-18
 
 - PR review worktrees now receive force-pushed updates through `sync` or `pr` when the checkout is clean and still at the last recorded PR revision. The previous commits are saved under a backup ref before updating.

@@ -143,6 +143,7 @@ test("sync receives a force-pushed PR after a rename and an earlier background f
       ),
     );
     await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "feat/login"]);
+    await forge.answer();
     const remote = (await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim();
     await seedGit(forge.repo.gitDir, ["fetch", "--all"]);
 

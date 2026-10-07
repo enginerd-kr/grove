@@ -2145,6 +2145,32 @@ describe("the rebase picker", () => {
     { base: { kind: "ref", ref: "feat/search" }, ref: "feat/search", label: "feat/search" },
   ];
 
+  test("left and right move between branch columns, and enter uses the highlighted branch", async () => {
+    const choices: RebaseChoice[] = Array.from({ length: 12 }, (_, index) => {
+      const ref = `feat/branch-${index}`;
+      return { base: { kind: "ref", ref }, ref, label: ref };
+    });
+    const { service, calls } = stub({ rebaseChoices: async () => choices });
+    const ui = await opened_with(service);
+    await toLogin(ui);
+    await run(ui, "rebase");
+    await settled(ui, (frame) => frame.includes("enter rebase"));
+
+    await press(ui, keys.right);
+    await settled(ui, (frame) => /▸ +feat\/branch-6\b/.test(frame));
+    await press(ui, keys.left);
+    await settled(ui, (frame) => /▸ +feat\/branch-0\b/.test(frame));
+    // Both keys must apply even before React paints the intermediate choice.
+    ui.stdin.write(keys.right);
+    ui.stdin.write(keys.down);
+    await settled(ui, (frame) => /▸ +feat\/branch-7\b/.test(frame));
+    await press(ui, keys.enter);
+    await settled(ui, (frame) => IN_LIST(frame));
+    expect(calls.rebased).toEqual([
+      { target: "/repo/feat/login", base: { kind: "ref", ref: "feat/branch-7" } },
+    ]);
+  });
+
   test("`/rebase` lists the bases for the row, esc leaves it, and enter rebases onto the one picked", async () => {
     const asked: string[] = [];
     const { service, calls } = stub({

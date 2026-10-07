@@ -489,6 +489,44 @@ describe("createWorktreeService", () => {
   );
 
   test(
+    "review sync updates local files after an external force-push, including after a background fetch",
+    async () => {
+      await withForge(async (forge) => {
+        await forge.answer();
+        await forge.propose("fix/crash", "first\n", "first");
+        const { service } = serviceAt(forge.repo);
+        await service.checkoutPr(42);
+        const path = join(forge.repo.root, "pr", "42");
+        const before = (await seedGit(path, ["rev-parse", "HEAD"])).trim();
+        const author = join(forge.temp.root, "fork-work");
+        await Bun.write(join(author, "crash.txt"), "force-pushed\n");
+        await seedGit(author, ["add", "-A"]);
+        await seedGit(author, ["commit", "--amend", "-m", "Rewritten elsewhere"]);
+        await seedGit(author, ["push", "--force", "origin", "fix/crash"]);
+        await forge.answer();
+        const expected = (await seedGit(author, ["rev-parse", "HEAD"])).trim();
+
+        await service.fetch();
+        expect(await service.sync(path)).toBe("pr/42 replaced");
+        expect(await Bun.file(join(path, "crash.txt")).text()).toBe("force-pushed\n");
+        expect((await seedGit(path, ["rev-parse", "HEAD"])).trim()).toBe(expected);
+        expect((await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim()).toBe(expected);
+        expect(
+          (
+            await seedGit(forge.repo.gitDir, [
+              "for-each-ref",
+              "--format=%(objectname)",
+              "refs/grove/review-backups/42/",
+            ])
+          ).trim(),
+        ).toBe(before);
+        expect(await service.sync(path)).toBe("pr/42 up-to-date");
+      });
+    },
+    SLOW,
+  );
+
+  test(
     "review updates ask before replacing local work and keep a recoverable backup",
     async () => {
       await withForge(async (forge) => {
@@ -497,6 +535,7 @@ describe("createWorktreeService", () => {
         const { service } = serviceAt(forge.repo);
         await service.checkoutPr(42);
         await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "feat/login"]);
+        await forge.answer();
 
         const updated = await service.checkoutPr(42);
 
@@ -506,6 +545,7 @@ describe("createWorktreeService", () => {
         expect(await Bun.file(join(path, "login.txt")).text()).toBe("login\n");
         await Bun.write(join(path, "notes.txt"), "local notes\n");
         await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "main"]);
+        await forge.answer();
 
         const blocked: unknown = await service.sync("pr/42").catch((error: unknown) => error);
 

@@ -138,6 +138,25 @@ export async function withForge(body: (forge: Forge) => Promise<void>): Promise<
 
     const log = join(temp.root, "gh.log");
     const out = join(temp.root, "gh.json");
+    let detail: Readonly<Record<string, unknown>> | undefined;
+    const writeDetail = async () => {
+      if (!detail) return;
+      const headRepo =
+        (detail.headRepositoryOwner as { login?: string })?.login === "acme" ? base : fork;
+      const head = await probeGit(headRepo, [
+        "rev-parse",
+        "--verify",
+        `refs/heads/${detail.headRefName}`,
+      ]);
+      const sha =
+        head.code === 0
+          ? head
+          : await probeGit(base, ["rev-parse", "--verify", `refs/pull/${detail.number}/head`]);
+      await Bun.write(
+        out,
+        JSON.stringify({ headRefOid: sha.code === 0 ? sha.stdout.trim() : "", ...detail }),
+      );
+    };
     const answers = join(temp.root, "gh-answers");
     await Bun.write(log, "");
     await mkdir(answers, { recursive: true });
@@ -170,7 +189,8 @@ export async function withForge(body: (forge: Forge) => Promise<void>): Promise<
         base,
         fork,
         answer: async (over = {}) => {
-          await Bun.write(out, JSON.stringify({ ...OPEN_PR, ...over }));
+          detail = { ...OPEN_PR, ...over };
+          await writeDetail();
         },
         answerTo: async (call, text) => {
           await Bun.write(join(answers, call.split(" ").join("-")), text);
@@ -186,6 +206,7 @@ export async function withForge(body: (forge: Forge) => Promise<void>): Promise<
           await seedGit(work, ["add", "-A"]);
           await seedGit(work, ["-c", "commit.gpgsign=false", "commit", "-m", message]);
           await seedGit(work, ["push", "origin", branch]);
+          await writeDetail();
         },
         fails: (code, stderr) => {
           process.env.GROVE_GH_EXIT = code;

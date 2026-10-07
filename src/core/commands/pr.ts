@@ -40,6 +40,7 @@ const PR_FIELDS = [
   "isDraft",
   "baseRefName",
   "headRefName",
+  "headRefOid",
   "isCrossRepository",
   "headRepository",
   "headRepositoryOwner",
@@ -70,6 +71,7 @@ type PrDetail = {
   readonly state: PrState;
   readonly isDraft: boolean;
   readonly headRefName: string;
+  readonly headSha: string;
   readonly base: string;
   readonly headOwner: string;
   readonly headRepo: string;
@@ -527,20 +529,23 @@ async function detailOf(repo: RepoPaths, pr: string): Promise<PrDetail> {
     state: state === "MERGED" || state === "CLOSED" ? state : "OPEN",
     isDraft: row.isDraft === true,
     headRefName: text(row.headRefName),
+    headSha: text(row.headRefOid),
     base: text(row.baseRefName) || (await trunkOf(repo.gitDir)).branch,
     headOwner: text(record(row.headRepositoryOwner).login),
     headRepo: text(record(row.headRepository).name),
   };
 
-  // Refused here, before `configureRemote` writes anything. These four are the
-  // ones spelled into config rather than merely printed — the remote's name and
+  // Refused here, before `configureRemote` writes anything. The identity fields
+  // are spelled into config rather than merely printed — the remote's name and
   // URL and both of its refspecs — and a blank in any of them is written as a
   // refspec git will not parse, after which every `git remote` and `git fetch`
   // in the repository exits 128 and the sweep that would clean it up dies on
-  // the same read. An answer we cannot use is gh's to explain, like any other.
+  // the same read. The head SHA is the revision every successful fetch must
+  // prove it received. An answer we cannot use is gh's to explain.
   const missing = Object.entries({
     number: detail.number > 0,
     headRefName: detail.headRefName !== "",
+    headRefOid: /^[a-f0-9]{40}$/.test(detail.headSha),
     headRepositoryOwner: detail.headOwner !== "",
     headRepository: detail.headRepo !== "",
   })
@@ -651,7 +656,7 @@ async function pruneOrphanRemotes(repo: RepoPaths): Promise<void> {
 type Head = { readonly sha: string; readonly remote?: string };
 
 /**
- * Fetches the head, falling back to `refs/pull/<n>/head` when the branch is gone.
+ * Fetches the head, verifying it against the PR revision reported by the forge.
  *
  * Deleting the head branch is what a merge does by default, so the common case
  * for a pull request worth looking back at is that its branch no longer exists.
@@ -659,42 +664,60 @@ type Head = { readonly sha: string; readonly remote?: string };
  * enough to check the work out — just not to push anything back, so the remote
  * is removed rather than left pointing at a fork that cannot serve it.
  *
- * Only "the ref is not there" falls back. A network failure is still a network
- * failure, and answering it with a second request to a different host would
- * report the wrong problem.
+ * A branch endpoint can also serve a different revision from the PR. In that
+ * case the base repository's PR ref is authoritative. Never call a stale
+ * checkout up to date merely because it matches the head branch we fetched.
  */
 async function fetchHead(repo: RepoPaths, detail: PrDetail, reporter: Reporter): Promise<Head> {
   const remote = remoteFor(detail.number);
   const label = `${detail.headOwner}:${detail.headRefName}`;
   const step = reporter.step(`fetching ${label}`);
-  const fetched = await runGit(["fetch", remote], { cwd: repo.gitDir });
+  // Background refreshes share FETCH_HEAD and remote-tracking refs with this
+  // command. A private ref keeps this fetch's answer stable until verified.
+  const ref = `refs/grove/pr-fetch/${crypto.randomUUID()}`;
+  const fetchedSha = () =>
+    gitOutput(["rev-parse", "--verify", `${ref}^{commit}`], { cwd: repo.gitDir });
+  try {
+    const fetched = await runGit(
+      ["fetch", "--no-tags", remote, `+refs/heads/${detail.headRefName}:${ref}`],
+      { cwd: repo.gitDir },
+    );
+    const pushable = fetched.code === 0;
+    if (pushable) {
+      const sha = await fetchedSha();
+      if (sha === detail.headSha) {
+        step.succeed(`fetched ${label}`);
+        return { sha, remote };
+      }
+    } else {
+      if (!/couldn't find remote ref|Repository not found|not found/i.test(fetched.stderr)) {
+        throw new GroveError("remote", `git fetch ${remote} failed (exit ${fetched.code})`, {
+          details: stderrDetails(fetched.stderr),
+        });
+      }
+      await runGit(["remote", "remove", remote], { cwd: repo.gitDir });
+    }
 
-  if (fetched.code === 0) {
-    const sha = await gitOutput(["rev-parse", `refs/remotes/${remote}/${detail.headRefName}`], {
+    // In a fork this is upstream, whose PR numbers belong to the base repo.
+    const base = (await trunkOf(repo.gitDir)).remote;
+    await runGitOrThrow(["fetch", "--no-tags", base, `+refs/pull/${detail.number}/head:${ref}`], {
       cwd: repo.gitDir,
     });
-    step.succeed(`fetched ${label}`);
-
-    return { sha: sha.trim(), remote };
+    const sha = await fetchedSha();
+    if (sha !== detail.headSha) {
+      throw new GroveError("remote", `pull request ${detail.number} changed while fetching`, {
+        hint: "sync again to receive the latest PR revision",
+        details: [`the forge reported ${detail.headSha}, but git fetched ${sha}`],
+      });
+    }
+    step.succeed(`fetched pull request ${detail.number}`);
+    return { sha, ...(pushable ? { remote } : {}) };
+  } catch (error) {
+    step.fail(`could not fetch pull request ${detail.number}`);
+    throw error;
+  } finally {
+    await runGit(["update-ref", "-d", ref], { cwd: repo.gitDir });
   }
-
-  if (!/couldn't find remote ref|Repository not found|not found/i.test(fetched.stderr)) {
-    step.fail(`could not fetch ${label}`);
-    throw new GroveError("remote", `git fetch ${remote} failed (exit ${fetched.code})`, {
-      details: stderrDetails(fetched.stderr),
-    });
-  }
-
-  await runGit(["remote", "remove", remote], { cwd: repo.gitDir });
-  // `refs/pull/<n>/head` lives on the repository the pull request was opened
-  // against, which is the trunk's remote — in a fork that is `upstream`, and
-  // origin's `refs/pull/42/head` is a different pull request or none.
-  const base = (await trunkOf(repo.gitDir)).remote;
-  await runGitOrThrow(["fetch", base, `refs/pull/${detail.number}/head`], { cwd: repo.gitDir });
-  const sha = await gitOutput(["rev-parse", "FETCH_HEAD"], { cwd: repo.gitDir });
-  step.succeed(`fetched pull request ${detail.number}`);
-
-  return { sha: sha.trim() };
 }
 
 /** Receive PR updates; replacing local work requires an explicit request. */
