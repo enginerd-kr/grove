@@ -111,7 +111,13 @@ async function withForge(body: (forge: Forge) => Promise<void>): Promise<void> {
       barePath,
       env: { PATH: `${bin}:${process.env.PATH}`, GROVE_GH_OUT: out },
       answer: async (over = {}) => {
-        await Bun.write(out, JSON.stringify({ ...OPEN_PR, ...over }));
+        const detail = { ...OPEN_PR, ...over };
+        const head = await probeGit(base, [
+          "rev-parse",
+          "--verify",
+          `refs/heads/${detail.headRefName}`,
+        ]);
+        await Bun.write(out, JSON.stringify({ headRefOid: head.stdout.trim(), ...detail }));
       },
     });
   });
@@ -164,6 +170,7 @@ describe.skipIf(!POSIX)("grove pr", () => {
       // pointing the head there is the fast-forward a reviewer comes back to.
       const ahead = (await probeGit(forge.base, ["rev-parse", "feat/login"])).stdout.trim();
       await seedGit(forge.base, ["update-ref", "refs/heads/main", ahead]);
+      await forge.answer();
 
       const caught = await runCli(["pr", "7"], { cwd: root, env: forge.env });
       expect(caught.exitCode).toBe(ExitCode.ok);
@@ -177,6 +184,7 @@ describe.skipIf(!POSIX)("grove pr", () => {
       // A force-push can withdraw a commit. The review still has no local work,
       // so sync receives the rewrite and reports the retained revision in JSON.
       await seedGit(forge.base, ["update-ref", "refs/heads/main", `${ahead}~1`]);
+      await forge.answer();
       const rewritten = await runCli(["sync", "pr/7", "--json"], { cwd: root, env: forge.env });
       expect(rewritten.exitCode).toBe(ExitCode.ok);
       const [synced] = JSON.parse(rewritten.stdout);

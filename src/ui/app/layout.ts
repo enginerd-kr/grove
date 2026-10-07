@@ -175,7 +175,7 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
     { keys: "esc", action: "cancel" },
   ],
   onto: [
-    { keys: "↑↓", action: "move" },
+    { keys: "↑↓←→", action: "move" },
     { keys: "enter", action: "rebase" },
     { keys: "esc", action: "cancel" },
   ],
@@ -395,7 +395,7 @@ export function regionsFor({
     // The box, and the two lines above it that say what enter will do.
     (mode.kind === "upstream" ? 5 : 0) +
     (mode.kind === "pick" ? pullRequestRows(mode.prs.length, prBody) : 0) +
-    (mode.kind === "onto" ? baseRows(mode.choices.length, baseBody) : 0) +
+    (mode.kind === "onto" ? baseRows(mode.choices.length, baseBody, columns) : 0) +
     (mode.kind === "menu" ? menuRows(mode.matches, menuBody) : 0) +
     (mode.kind === "confirm" ? 1 : 0) +
     // `busy` takes the message row rather than leaving it empty: it is one

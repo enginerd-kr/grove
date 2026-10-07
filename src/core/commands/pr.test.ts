@@ -3,7 +3,15 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode, errorToExitCode } from "../../cli/exit-codes.ts";
 import { pathExists } from "../fs.ts";
-import { type Attempt, attempt, probeGit, refused, seedGit, succeeded } from "../test-utils.ts";
+import {
+  type Attempt,
+  attempt,
+  probeGit,
+  recorder,
+  refused,
+  seedGit,
+  succeeded,
+} from "../test-utils.ts";
 import { type Forge, withForge } from "./forge-test-utils.ts";
 import {
   type BranchPullRequest,
@@ -52,7 +60,7 @@ const POSIX = process.platform !== "win32";
 
 /** The fields `gh pr view` is asked for, in the order `pr.ts` asks for them. */
 const PR_FIELDS =
-  "number,title,url,state,isDraft,baseRefName,headRefName,isCrossRepository,headRepository,headRepositoryOwner,author";
+  "number,title,url,state,isDraft,baseRefName,headRefName,headRefOid,isCrossRepository,headRepository,headRepositoryOwner,author";
 
 type PrCall = {
   /**
@@ -366,6 +374,66 @@ describe.skipIf(!POSIX)("the worktree a pull request gets", () => {
 });
 
 describe.skipIf(!POSIX)("running it again", () => {
+  test.each(["current", "stale"] as const)(
+    "sync verifies the %s PR ref when the head branch serves an older revision",
+    async (prRef) => {
+      await withForge(async (forge) => {
+        await forge.answer();
+        await forge.propose("fix/crash", "original\n", "Original fix");
+        const first = await pr(forge, "42");
+        const before = await headOf(first.path);
+        const author = join(forge.temp.root, "fork-work");
+        await Bun.write(join(author, "crash.txt"), "force-pushed\n");
+        await seedGit(author, ["add", "-A"]);
+        await seedGit(author, ["commit", "--amend", "-m", "Rewritten fix"]);
+        await seedGit(author, ["push", "--force", "origin", "fix/crash"]);
+        const expected = await headOf(author);
+        await seedGit(forge.base, ["fetch", forge.fork, "+refs/heads/fix/crash:refs/pull/42/head"]);
+        await forge.answer({ headRefOid: expected });
+        // The forge's PR ref has the rewrite, while the head branch endpoint
+        // still serves the old revision. A successful fetch alone is not proof
+        // that we received the PR revision the user asked to sync.
+        await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", before]);
+        if (prRef === "stale")
+          await seedGit(forge.base, [
+            "fetch",
+            forge.fork,
+            "+refs/heads/fix/crash:refs/pull/42/head",
+          ]);
+
+        const [outcome] = await syncWorktrees(
+          forge.repo,
+          forge.repo.root,
+          { target: "pr/42", all: false, abortOnConflict: true, push: true, publish: false },
+          recorder().reporter,
+        );
+
+        if (prRef === "current") {
+          expect(outcome?.kind).toBe("replaced");
+          expect(await headOf(first.path)).toBe(expected);
+          expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("force-pushed\n");
+          expect(
+            (await seedGit(forge.repo.gitDir, ["rev-parse", outcome?.backup ?? ""])).trim(),
+          ).toBe(before);
+        } else {
+          expect(outcome?.kind).toBe("skipped");
+          expect(outcome?.reason).toContain("changed while fetching");
+          expect(await headOf(first.path)).toBe(before);
+          expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("original\n");
+          expect(JSON.parse(await config(forge.repo.gitDir, "branch.pr/42.grovepr")).headSha).toBe(
+            before,
+          );
+        }
+        expect((await seedGit(forge.fork, ["rev-parse", "fix/crash"])).trim()).toBe(before);
+        expect(outcome?.pushed).toBeUndefined();
+        expect(
+          (await seedGit(forge.repo.gitDir, ["for-each-ref", "refs/grove/pr-fetch/"])).trim(),
+        ).toBe("");
+      });
+    },
+    90_000,
+  );
+
   test.each(["rewritten", "rewound"] as const)(
     "updates an untouched review when the remote PR is %s, keeping the old commits",
     async (change) => {
@@ -383,6 +451,7 @@ describe.skipIf(!POSIX)("running it again", () => {
           await seedGit(author, ["reset", "--hard", "HEAD~1"]);
         }
         await seedGit(author, ["push", "--force", "origin", "fix/crash"]);
+        await forge.answer();
 
         const updated = await pr(forge, "42");
 
@@ -446,6 +515,7 @@ describe.skipIf(!POSIX)("running it again", () => {
         const before = await headOf(first.path);
         const status = await seedGit(first.path, ["status", "--porcelain"]);
         await seedGit(forge.fork, ["update-ref", "refs/heads/fix/crash", "feat/login"]);
+        await forge.answer();
 
         const error = refused(await attemptPr(forge, "42"));
 
@@ -776,7 +846,7 @@ describe.skipIf(!POSIX)("when gh cannot answer", () => {
       // could not tell from any other gh failure, and the one that says which
       // half of the answer to go and look at.
       expect(error.message).toBe(
-        "gh pr view answered without number, headRefName, headRepositoryOwner, headRepository",
+        "gh pr view answered without number, headRefName, headRefOid, headRepositoryOwner, headRepository",
       );
       expect(error.hint).toBe(`see what it answers: gh pr view 42 --json ${PR_FIELDS}`);
 

@@ -13,7 +13,7 @@ import { StepRow } from "../components/StepRow.tsx";
 import { useInterval } from "../hooks/useInterval.ts";
 import { theme } from "../theme.ts";
 import { Banner } from "./Banner.tsx";
-import { Bases } from "./Bases.tsx";
+import { Bases, baseGrid, moveBaseIndex } from "./Bases.tsx";
 import { Files } from "./Files.tsx";
 import { Log } from "./Log.tsx";
 import { columnWidths, GAP, hintsFor, LOG_ROWS, regionsFor } from "./layout.ts";
@@ -766,15 +766,27 @@ export function App({
       // The picker's keys, for the picker's reasons: arrows and enter, clamped
       // at both ends, and nothing that types.
       if (key.escape || input === "q") return setMode({ kind: "list" });
-      if (key.upArrow || input === "k") {
-        return setMode((now) =>
-          now.kind === "onto" ? { ...now, index: Math.max(0, now.index - 1) } : now,
-        );
-      }
-      if (key.downArrow || input === "j") {
+      const direction =
+        key.upArrow || input === "k"
+          ? "up"
+          : key.downArrow || input === "j"
+            ? "down"
+            : key.leftArrow || input === "h"
+              ? "left"
+              : key.rightArrow || input === "l"
+                ? "right"
+                : undefined;
+      if (direction) {
         return setMode((now) =>
           now.kind === "onto"
-            ? { ...now, index: Math.min(now.choices.length - 1, now.index + 1) }
+            ? {
+                ...now,
+                index: moveBaseIndex(
+                  baseGrid(now.choices.length, baseBody, columns),
+                  now.index,
+                  direction,
+                ),
+              }
             : now,
         );
       }
@@ -1194,7 +1206,13 @@ export function App({
       ) : null}
 
       {mode.kind === "onto" ? (
-        <Bases dir={mode.summary.dir} choices={mode.choices} index={mode.index} rows={baseBody} />
+        <Bases
+          dir={mode.summary.dir}
+          choices={mode.choices}
+          index={mode.index}
+          rows={baseBody}
+          columns={columns}
+        />
       ) : null}
 
       {mode.kind === "menu" ? (
