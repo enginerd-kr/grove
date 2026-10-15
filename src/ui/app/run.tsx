@@ -148,11 +148,13 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: Grove
 export type AppOutcome = "quit" | "interrupted";
 
 export async function runApp({ cwd, repo, onReporter }: AppOptions): Promise<AppOutcome> {
-  const found = await findRepo(cwd, repo);
-  // Where discovery looked from, which is where a clone should land. With `-C`
+  // Where discovery starts, which is where a clone should land. With `-C`
   // that is the directory the user named, not the one they happen to be in.
   const folder = resolve(cwd, repo ?? ".");
-  const inPlace = found.kind === "none" && (await isEmptyOrMissing(folder));
+  // An empty folder is a new workspace, even when git or an ancestor's .bare
+  // marker would associate it with a repository above it.
+  const inPlace = await isEmptyOrMissing(folder);
+  const found: Discovery = inPlace ? { kind: "none", from: folder } : await findRepo(cwd, repo);
 
   const store = new LineStore();
 

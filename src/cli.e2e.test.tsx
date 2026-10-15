@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { version } from "../package.json";
 import { ExitCode, type ExitCodeValue } from "./cli/exit-codes.ts";
 import { runCli } from "./cli/test-cli.ts";
-import { seedGit, withTempRepo } from "./core/test-utils.ts";
+import { managedRepo, seedGit, withTempRepo } from "./core/test-utils.ts";
 import { startUi } from "./ui/e2e-utils.ts";
+import { keys } from "./ui/test-utils.ts";
 
 /**
  * The entry point, run as the binary.
@@ -18,7 +19,7 @@ import { startUi } from "./ui/e2e-utils.ts";
  *
  * `.e2e.` in the name because none of it can move in-process, and the name is
  * what `scripts/test.sh` sorts the tiers by. Every test here spawns `cli.tsx`,
- * two of them over a real PTY or a signal: a decision made *from* `isTTY` and
+ * some of them over a real PTY or a signal: a decision made *from* `isTTY` and
  * `process.exitCode` cannot be observed by the process making it, and there is
  * no argument to pass that would let it be.
  *
@@ -119,6 +120,80 @@ describeUi("a bare `grove` on a real terminal", () => {
     } finally {
       session.kill();
     }
+  }, 60_000);
+
+  test.each(["managed workspace", "linked worktree", "ordinary clone", "sibling repository"])(
+    "an empty folder starts setup near an existing %s",
+    async (location) => {
+      await withTempRepo(async (temp) => {
+        const repo = await managedRepo(temp);
+        let parent = repo.root;
+        if (location === "linked worktree") parent = join(repo.root, "main");
+        if (location === "sibling repository") parent = temp.work;
+        if (location === "ordinary clone") {
+          parent = join(temp.work, "ordinary");
+          await seedGit(temp.work, ["clone", temp.originUrl, parent]);
+        }
+        const folder = join(parent, "new-project");
+        await mkdir(folder);
+        const session = startUi({ cwd: folder });
+
+        try {
+          // Either screen is ready: a wrong discovery fails on the screen it
+          // actually drew, without waiting for a setup prompt that never comes.
+          const frame = await session.waitForFrame(
+            (value) => value.includes("enter clone") || value.includes("q quit"),
+          );
+          expect(frame).toContain("This folder is empty, so it becomes the repository.");
+          expect(frame).toContain("enter clone");
+          expect(await session.pressUntilExit(keys.esc)).toBe(ExitCode.ok);
+          expect(await readdir(folder)).toEqual([]);
+        } finally {
+          session.kill();
+        }
+      });
+    },
+    60_000,
+  );
+
+  test("-C chooses the folder for setup and can still select an existing repository", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const folder = join(repo.root, "new-project");
+      await mkdir(folder);
+      const setup = startUi({ cwd: repo.root, args: ["-C", "new-project"], cols: 160 });
+
+      try {
+        const frame = await setup.waitForFrame(
+          (value) => value.includes("enter clone") || value.includes("q quit"),
+        );
+        expect(frame).toContain("This folder is empty, so it becomes the repository.");
+        setup.press(temp.originUrl);
+        await setup.waitForFrame((value) => value.includes(temp.originUrl));
+        setup.press(keys.enter);
+        await setup.waitForFrame((value) => value.includes("q quit"));
+        expect(await setup.pressUntilExit("q")).toBe(ExitCode.ok);
+        expect(await readdir(folder)).toContain(".bare");
+        expect((await seedGit(join(folder, "main"), ["rev-parse", "--show-toplevel"])).trim()).toBe(
+          join(folder, "main"),
+        );
+      } finally {
+        setup.kill();
+      }
+
+      const elsewhere = join(repo.root, "another-project");
+      await mkdir(elsewhere);
+      const existing = startUi({ cwd: elsewhere, args: ["-C", "../main"] });
+      try {
+        const frame = await existing.waitForFrame((value) => value.includes("q quit"));
+        expect(frame).toContain("main");
+        expect(frame).not.toContain("enter clone");
+        expect(await existing.pressUntilExit("q")).toBe(ExitCode.ok);
+        expect(await readdir(elsewhere)).toEqual([]);
+      } finally {
+        existing.kill();
+      }
+    });
   }, 60_000);
 });
 
