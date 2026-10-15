@@ -396,6 +396,55 @@ describe("against real git", () => {
     });
   });
 
+  test("statusOf counts untracked files hidden by the user's status settings", async () => {
+    await withTempRepo(async ({ work, originUrl }) => {
+      const app = join(work, "app");
+      await seedGit(work, ["clone", originUrl, app]);
+      await seedGit(app, ["config", "status.showUntrackedFiles", "no"]);
+      await Bun.write(join(app, "new.txt"), "unfinished\n");
+
+      expect((await probeGit(app, ["status", "--porcelain"])).stdout).toBe("");
+      expect(await statusOf(app)).toMatchObject({
+        dirty: true,
+        changed: ["new.txt"],
+        untracked: ["new.txt"],
+      });
+    });
+  });
+
+  test("statusOf fails closed when Git cannot read the index", async () => {
+    await withTempRepo(async (repo) => {
+      const app = join(repo.work, "app");
+      await seedGit(repo.work, ["clone", repo.originUrl, app]);
+      await Bun.write(join(app, ".git", "index"), "broken index");
+
+      await expect(statusOf(app)).rejects.toMatchObject({ code: "git-failed" });
+      // Read-only listings explicitly tolerate stale worktree registrations.
+      expect((await statusOf(app, { allowFailure: true })).dirty).toBe(false);
+    });
+  });
+
+  test("statusOf includes dirty submodules even when Git's display settings hide them", async () => {
+    await withTempRepo(async (repo) => {
+      const app = join(repo.work, "app");
+      await seedGit(repo.work, ["clone", repo.originUrl, app]);
+      await seedGit(app, [
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        repo.originUrl,
+        "vendor",
+      ]);
+      await seedGit(app, ["commit", "-am", "Add submodule"]);
+      await seedGit(app, ["config", "submodule.vendor.ignore", "all"]);
+      await Bun.write(join(app, "vendor", "app.txt"), "unfinished\n");
+
+      expect((await probeGit(app, ["status", "--porcelain"])).stdout).toBe("");
+      expect(await statusOf(app)).toMatchObject({ dirty: true, changed: ["vendor"] });
+    });
+  });
+
   test("a worktree stopped mid-rebase is reported under the branch being rebased", async () => {
     await withTempRepo(async ({ work, originUrl }) => {
       const app = join(work, "app");

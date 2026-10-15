@@ -7,15 +7,17 @@ import {
   type Trunk,
   trunkOf,
 } from "../branches.ts";
-import { GroveError, isGroveError } from "../errors.ts";
-import { gitOutput, runGit } from "../git.ts";
+import { GroveError, type GroveErrorCode, isGroveError } from "../errors.ts";
+import { gitFailure, gitOutput, runGit } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { abortRebase, conflictedPaths } from "../rebase-state.ts";
 import { reviewOf } from "../review.ts";
 import { ancestry, clearParent, readStack, type Stack, setParent, stackOrder } from "../stack.ts";
 import { toLines } from "../text.ts";
 import {
   LISTED,
   listWorktrees,
+  operationInProgress,
   resolveTarget,
   statusOf,
   type WorktreeRecord,
@@ -83,6 +85,7 @@ export type SyncOutcome = {
     | "replaced"
     | "rebased"
     | "skipped"
+    | "failed"
     | "conflicted";
   /** Previous PR commits retained when receiving rewritten remote history. */
   readonly backup?: string;
@@ -90,6 +93,10 @@ export type SyncOutcome = {
   readonly replacement?: ReviewReplacement;
   /** Why it was skipped, or what conflicted. Absent when nothing went wrong. */
   readonly reason?: string;
+  /** Preserve operational failures instead of treating every failure as a dirty tree or conflict. */
+  readonly errorCode?: GroveErrorCode;
+  readonly details?: readonly string[];
+  readonly hint?: string;
   readonly conflicts?: readonly string[];
   /**
    * What this worktree was brought up to date against.
@@ -108,7 +115,7 @@ export type SyncOutcome = {
    * is one they find out about from the rebase it caused.
    */
   readonly reparented?: string;
-  /** Absent when there was nothing to publish; false when the remote refused. */
+  /** Absent when there was nothing to publish; false when the push failed. */
   readonly pushed?: boolean;
   /** Why the push did not happen, when it was meant to. */
   readonly pushRefusal?: string;
@@ -141,14 +148,15 @@ export async function syncWorktrees(
   // One fetch for the whole run: the remote does not change between worktrees,
   // and `--all` over ten of them should not mean ten round trips.
   const step = reporter.step("fetching");
-  // Answered rather than thrown — see `fetchRemotes` — but never silently: the
-  // trunk this rebases onto is a local ref, so a fetch that did not happen
-  // means every worktree below is measured against whatever was last seen. A
-  // `✓ fetched` over that is the stale-trunk sync this command exists to
-  // prevent, reported as the success it was not.
+  // A failed `fetch --all` can still have updated the trunk: a deleted PR
+  // branch on another remote is enough to fail the overall command. Report
+  // the actual Git error without claiming that every remote ref is stale.
   const fetch = await fetchRemotes(repo.gitDir);
   if (fetch.fetched) step.succeed("fetched");
-  else step.fail("could not fetch — the trunk below is as it was last seen");
+  else {
+    step.fail("could not fetch all remotes — some refs may be out of date");
+    for (const detail of fetch.details ?? []) reporter.warn(detail);
+  }
   // The one refusal that leaves `fetched` standing — the branches all arrived,
   // so the sync below is sound, but a tag the remote re-cut stays stale here
   // until somebody deletes the local copy, and it is warned about because
@@ -162,70 +170,131 @@ export async function syncWorktrees(
 
   const trunk = await trunkOf(repo.gitDir);
   const outcomes: SyncOutcome[] = [];
+  const blocked = new Set<string>();
 
   for (const target of targets) {
-    // Resolved inside the loop rather than up front, because the answer depends
-    // on what the branches above this one have just become: a parent that was
-    // rebased two iterations ago is where this one is going.
-    const review =
-      target.branch === undefined ? undefined : await reviewOf(repo.gitDir, target.branch);
-    // Legacy review branches predate metadata but have an explicit PR remote.
-    const legacy = /^pr\/(\d+)$/.exec(target.branch ?? "");
-    const tracking = legacy ? (await statusOf(target.path)).upstream : undefined;
-    const reviewNumber =
-      review?.number ??
-      (tracking?.startsWith(`pr-${legacy?.[1]}/`) ? Number(legacy?.[1]) : undefined);
-    if (reviewNumber !== undefined && !options.contribute) {
-      try {
-        if (target.rebasing)
-          throw new GroveError("refused", "a rebase is already in progress here");
-        const result = await checkoutPullRequest(
-          repo,
-          cwd,
-          {
-            pr: review?.url ?? String(reviewNumber),
-            setup: false,
-            open: false,
-          },
-          reporter,
-        );
-        outcomes.push({
+    const parent =
+      target.branch === undefined
+        ? undefined
+        : ancestry(stack, target.branch).find(
+            (branch) => branch !== trunk.branch && blocked.has(branch),
+          );
+    let result: SyncOutcome;
+    try {
+      if (parent !== undefined) {
+        const reason = `${parent} did not sync; sync that parent before this branch`;
+        reporter.warn(`${worktreeDir(repo.root, target.path)} skipped — ${reason}`);
+        result = {
           path: target.path,
           dir: worktreeDir(repo.root, target.path),
           branch: target.branch,
-          kind:
-            result.updated === "unchanged"
-              ? "up-to-date"
-              : result.updated === "replaced"
-                ? "replaced"
-                : "fast-forwarded",
-          onto: result.upstream,
-          ...(result.backup === undefined ? {} : { backup: result.backup }),
-        });
-      } catch (error) {
-        if (!isGroveError(error)) throw error;
-        outcomes.push({
+          kind: "skipped",
+          reason,
+        };
+      } else {
+        result = await syncTarget(repo, cwd, target, trunk, stack, options, reporter);
+      }
+    } catch (error) {
+      if (!isGroveError(error)) throw error;
+      if (error instanceof PrLocalWorkError) {
+        result = {
           path: target.path,
           dir: worktreeDir(repo.root, target.path),
           branch: target.branch,
           kind: "skipped",
           reason: `${error.message}${error.hint ? `; ${error.hint}` : ""}`,
-          ...(error instanceof PrLocalWorkError ? { replacement: error.review } : {}),
-        });
+          replacement: error.review,
+        };
+      } else {
+        result = failedOutcome(target, repo.root, error, reporter);
       }
-      continue;
     }
-    const base =
-      reviewNumber !== undefined && options.contribute
-        ? {
-            onto: `${trunk.remote}/${await pullRequestBase(repo, review?.url ?? String(reviewNumber))}`,
-          }
-        : await baseFor(repo, target.branch, trunk, stack, reporter);
-
-    outcomes.push(await syncOne(target, repo.root, trunk, base, options, reporter));
+    outcomes.push(result);
+    if (
+      target.branch !== undefined &&
+      (result.kind === "failed" ||
+        result.kind === "skipped" ||
+        result.kind === "conflicted" ||
+        result.pushed === false)
+    ) {
+      blocked.add(target.branch);
+    }
   }
 
   return outcomes;
+}
+
+async function syncTarget(
+  repo: RepoPaths,
+  cwd: string,
+  target: WorktreeRecord,
+  trunk: Trunk,
+  stack: Stack,
+  options: SyncOptions,
+  reporter: Reporter,
+): Promise<SyncOutcome> {
+  const review =
+    target.branch === undefined ? undefined : await reviewOf(repo.gitDir, target.branch);
+  const legacy = /^pr\/(\d+)$/.exec(target.branch ?? "");
+  const tracking = legacy ? (await statusOf(target.path)).upstream : undefined;
+  const reviewNumber =
+    review?.number ??
+    (tracking?.startsWith(`pr-${legacy?.[1]}/`) ? Number(legacy?.[1]) : undefined);
+  if (reviewNumber !== undefined && !options.contribute) {
+    const operation = await operationInProgress(target.path);
+    if (operation !== undefined)
+      throw new GroveError("refused", `a ${operation} is already in progress here`);
+    const result = await checkoutPullRequest(
+      repo,
+      cwd,
+      {
+        pr: review?.url ?? String(reviewNumber),
+        setup: false,
+        open: false,
+      },
+      reporter,
+    );
+    return {
+      path: target.path,
+      dir: worktreeDir(repo.root, target.path),
+      branch: target.branch,
+      kind:
+        result.updated === "unchanged"
+          ? "up-to-date"
+          : result.updated === "replaced"
+            ? "replaced"
+            : "fast-forwarded",
+      onto: result.upstream,
+      ...(result.backup === undefined ? {} : { backup: result.backup }),
+    };
+  }
+  const base =
+    reviewNumber !== undefined && options.contribute
+      ? {
+          onto: `${trunk.remote}/${await pullRequestBase(repo, review?.url ?? String(reviewNumber))}`,
+        }
+      : await baseFor(repo, target.branch, trunk, stack, reporter);
+  return syncOne(target, repo.root, trunk, base, options, reporter);
+}
+
+function failedOutcome(
+  record: WorktreeRecord,
+  root: string,
+  error: GroveError,
+  reporter: Reporter,
+): SyncOutcome {
+  const dir = worktreeDir(root, record.path);
+  reporter.warn(`${dir}: ${error.message}`);
+  return {
+    path: record.path,
+    dir,
+    branch: record.branch,
+    kind: "failed",
+    reason: error.message,
+    errorCode: error.code,
+    details: error.details,
+    ...(error.hint === undefined ? {} : { hint: error.hint }),
+  };
 }
 
 /** The base a worktree is rebased onto, and the record that had to be repaired to say so. */
@@ -384,8 +453,10 @@ async function syncOne(
     ...repaired,
     ...extra,
   });
-  const skip = (reason: string, conflicts?: readonly string[]): SyncOutcome =>
-    outcome("skipped", { reason, conflicts });
+  const skip = (reason: string, conflicts?: readonly string[]): SyncOutcome => {
+    reporter.warn(`${name} skipped — ${reason}`);
+    return outcome("skipped", { reason, conflicts });
+  };
   /** The two facts about the base, put on an outcome `settle` built without them. */
   const stamp = (settled: SyncOutcome): SyncOutcome => ({
     ...settled,
@@ -404,6 +475,14 @@ async function syncOne(
     return skip("detached HEAD, so there is no branch to move");
   }
 
+  const operation = await operationInProgress(record.path);
+  if (operation !== undefined) return skip(`a ${operation} is already in progress here`);
+  const branch = await gitOutput(["symbolic-ref", "--quiet", "--short", "HEAD"], {
+    cwd: record.path,
+  });
+  if (branch !== record.branch)
+    return skip(`the checked-out branch changed to ${branch}; sync again`);
+
   const status = await statusOf(record.path);
   if (status.dirty) {
     // Checked before anything is run, not after: this is the difference between
@@ -415,6 +494,22 @@ async function syncOne(
   // `origin/<trunk>` for a branch that hangs off the trunk, and the parent
   // branch — a local one — for a branch in a stack. See `baseFor`.
   const onto = base.onto;
+  // Validate every base before the first rebase. Otherwise a missing trunk
+  // can be discovered only after the branch has already moved onto its upstream.
+  await gitOutput(["rev-parse", "--verify", `${onto}^{commit}`], { cwd: record.path });
+  const trackedArgs = ["rev-parse", "--verify", "--quiet", "@{upstream}^{commit}"];
+  const tracked =
+    status.upstream === undefined ? undefined : await runGit(trackedArgs, { cwd: record.path });
+  if (
+    tracked !== undefined &&
+    tracked.code !== 0 &&
+    (tracked.code !== 1 || tracked.stderr.trim().length > 0)
+  )
+    throw gitFailure(trackedArgs, tracked);
+  const upstream = tracked?.code === 0 ? status.upstream : undefined;
+  // An explicit push lease must describe what was integrated, before any
+  // background fetch can advance the tracking ref while we rebase.
+  const integrated = tracked?.code === 0 ? tracked.stdout.trim() : undefined;
   const step = reporter.step(`syncing ${name}`);
 
   /**
@@ -434,14 +529,48 @@ async function syncOne(
    * worse than it was.
    */
   const rebaseOnto = async (ref: string): Promise<SyncOutcome | undefined> => {
-    const result = await runGit(["rebase", "--fork-point", ref], { cwd: record.path });
+    const stageBefore = await gitOutput(["rev-parse", "HEAD"], { cwd: record.path });
+    const args = ["rebase", "--fork-point", ref];
+    const result = await runGit(args, { cwd: record.path });
     if (result.code === 0) return undefined;
 
+    const operation = await operationInProgress(record.path);
+    const started = operation === "rebase" || operation === "rebase or am";
+    // Locks, invalid refs, dirty files and hook refusals are not content
+    // conflicts, and a rebase that never started has nothing to abort.
     const conflicts = await conflictedPaths(record.path);
-    if (options.abortOnConflict) {
-      await runGit(["rebase", "--abort"], { cwd: record.path });
+    const conflicted = started && conflicts.length > 0;
+    step.fail(
+      conflicted ? `${name} conflicts with ${ref}` : `${name} could not rebase onto ${ref}`,
+    );
+    if (started && options.abortOnConflict) {
+      try {
+        await abortRebase(record.path, stageBefore);
+      } catch (error) {
+        if (!isGroveError(error)) throw error;
+        throw new GroveError(error.code, error.message, {
+          details: [`rebase onto ${ref} failed`, ...conflicts, ...error.details],
+          hint: error.hint,
+          cause: error,
+        });
+      }
     }
-    step.fail(`${name} conflicts with ${ref}`);
+
+    if (!conflicted) {
+      const error = gitFailure(args, result);
+      throw new GroveError(
+        error.code === "rebase-conflict" ? "git-failed" : error.code,
+        error.message,
+        {
+          details: error.details,
+          hint: started
+            ? options.abortOnConflict
+              ? `the rebase onto ${ref} was rolled back`
+              : "inspect this worktree with `git status`, then finish or abort the rebase manually"
+            : undefined,
+        },
+      );
+    }
 
     return outcome("conflicted", {
       reason: options.abortOnConflict
@@ -452,48 +581,77 @@ async function syncOne(
     });
   };
 
-  // Keep the reference checkout fast-forward only; local commits stay in place.
-  if (record.branch === trunk.branch) {
-    const ff = await runGit(["merge", "--ff-only", onto], { cwd: record.path });
-    if (ff.code === 0) return stamp(await settle(record, name, before, step, "fast-forwarded"));
+  try {
+    // Keep the reference checkout fast-forward only; local commits stay in place.
+    if (record.branch === trunk.branch) {
+      const ff = await runGit(["merge", "--ff-only", onto], { cwd: record.path });
+      if (ff.code === 0) return stamp(await settle(record, name, before, step, "fast-forwarded"));
 
-    step.fail(`${name} cannot fast-forward`);
-    return skip(
-      "the trunk has diverged; move local commits to a feature branch or explicitly rebase it",
-    );
+      if (/^fatal: Not possible to fast-forward\b/m.test(ff.stderr)) {
+        step.fail(`${name} cannot fast-forward`);
+        return skip(
+          "the trunk has diverged; move local commits to a feature branch or explicitly rebase it",
+        );
+      }
+
+      // A clean status is not a guarantee: assume-unchanged edits or files
+      // written since the preflight can still block the merge. Keep Git's
+      // actual refusal instead of calling every merge failure a diverged trunk.
+      step.fail(`${name} could not update`);
+      throw gitFailure(["merge", "--ff-only", onto], ff);
+    }
+
+    /**
+     * Its own remote first, then the trunk.
+     *
+     * The order is the whole of why this works. Rebasing onto the trunk rewrites
+     * the branch's commits, so a colleague's commit sitting on `origin/<branch>`
+     * would be left behind — and the force-push at the end would then be refused
+     * by `--force-if-includes`, correctly, for trying to drop it. Taking their
+     * work first means the rebase replays ours on top of theirs and the push has
+     * nothing to destroy.
+     */
+    for (const base of [upstream, onto]) {
+      if (base === undefined) continue;
+
+      const conflicted = await rebaseOnto(base);
+      if (conflicted) return conflicted;
+    }
+
+    // Hooks and autostash can leave changes or an unfinished operation even
+    // after Git exits zero. Do not publish that state as a completed sync.
+    const finalOperation = await operationInProgress(record.path);
+    const finalStatus = await statusOf(record.path);
+    const finalBranch = await gitOutput(["symbolic-ref", "--quiet", "--short", "HEAD"], {
+      cwd: record.path,
+    });
+    if (finalOperation !== undefined || finalStatus.dirty || finalBranch !== record.branch) {
+      throw new GroveError(
+        "state-conflict",
+        "the checkout changed during sync; publishing was stopped",
+        {
+          details: [
+            ...(finalOperation === undefined ? [] : [`${finalOperation} is in progress`]),
+            ...finalStatus.changed.slice(0, LISTED),
+            ...(finalBranch === record.branch
+              ? []
+              : [`the checked-out branch is now ${finalBranch}`]),
+          ],
+          hint: "inspect this worktree with `git status`; completed rebase steps remain local",
+        },
+      );
+    }
+
+    const published = await publish(record, name, upstream, options, reporter, {
+      force: true,
+      integrated,
+    });
+
+    return stamp({ ...(await settle(record, name, before, step, "rebased")), ...published });
+  } catch (error) {
+    step.fail(`${name} could not sync`);
+    throw error;
   }
-
-  /**
-   * Its own remote first, then the trunk.
-   *
-   * The order is the whole of why this works. Rebasing onto the trunk rewrites
-   * the branch's commits, so a colleague's commit sitting on `origin/<branch>`
-   * would be left behind — and the force-push at the end would then be refused
-   * by `--force-if-includes`, correctly, for trying to drop it. Taking their
-   * work first means the rebase replays ours on top of theirs and the push has
-   * nothing to destroy.
-   */
-  // A deleted remote branch can still be named in status after fetch prunes
-  // its ref. Treat it like a new local branch for both rebase and publishing.
-  const tracked =
-    status.upstream === undefined
-      ? undefined
-      : await runGit(["rev-parse", "--verify", "--quiet", "@{upstream}^{commit}"], {
-          cwd: record.path,
-        });
-  const upstream = tracked?.code === 0 ? status.upstream : undefined;
-  for (const base of [upstream, onto]) {
-    if (base === undefined) continue;
-
-    const conflicted = await rebaseOnto(base);
-    if (conflicted) return conflicted;
-  }
-
-  const published = await publish(record, name, upstream, options, reporter, {
-    force: true,
-  });
-
-  return stamp({ ...(await settle(record, name, before, step, "rebased")), ...published });
 }
 
 /** The half of a rebase workflow that a rebase does not do. */
@@ -531,7 +689,7 @@ async function publish(
    * push suffices, and a force spelling aimed at a trunk is a habit not worth
    * teaching a tool.
    */
-  { force }: { readonly force: boolean },
+  { force, integrated }: { readonly force: boolean; readonly integrated?: string },
 ): Promise<Published> {
   if (!options.push) return {};
 
@@ -555,7 +713,10 @@ async function publish(
     if (result.code !== 0) {
       step.fail(`${name} was not published`);
 
-      return { pushed: false, pushRefusal: `${remote} refused it: ${stderrTail(result.stderr)}` };
+      return {
+        pushed: false,
+        pushRefusal: `push to ${remote} failed: ${pushDetails(result.stderr)}`,
+      };
     }
     step.succeed(`published ${name} to ${remote}/${branch}`);
 
@@ -575,12 +736,7 @@ async function publish(
 
   const step = reporter.step(`pushing ${name}`);
   const result = await runGit(
-    [
-      "push",
-      ...(force ? forceArgs(target, remote.code === 0 ? remote.stdout.trim() : undefined) : []),
-      target.remote,
-      target.refspec,
-    ],
+    ["push", ...(force ? forceArgs(target, integrated) : []), target.remote, target.refspec],
     { cwd: record.path },
   );
 
@@ -592,7 +748,7 @@ async function publish(
     // stderr twice.
     return {
       pushed: false,
-      pushRefusal: `${target.tracking} refused it: ${stderrTail(result.stderr)}`,
+      pushRefusal: `push to ${target.tracking} failed: ${pushDetails(result.stderr)}`,
     };
   }
 
@@ -632,15 +788,15 @@ export type PushTarget = {
  * moment the local branch is renamed to match.
  *
  * What if-includes was standing in for is known here exactly. `syncOne`
- * rebased onto the upstream a moment ago, so the upstream's tip as it is
- * now is by construction integrated — and a lease spelled with that sha is
+ * rebased onto the upstream a moment ago, so its tip captured before that
+ * rebase is integrated — and a lease spelled with that sha is
  * the same promise with no reflog to consult: the remote must still be
- * where the rebase took it from. Where the tracking ref cannot be read the
- * lease has nothing to lean on and falls back to the bare form.
+ * where the rebase took it from. Without that evidence, refuse the push.
  */
 function forceArgs(target: PushTarget, integrated: string | undefined): readonly string[] {
   if (target.renamed === undefined) return ["--force-with-lease", "--force-if-includes"];
-  if (integrated === undefined) return ["--force-with-lease"];
+  if (integrated === undefined)
+    throw new GroveError("refused", "cannot verify the upstream commit integrated before pushing");
 
   return [`--force-with-lease=${target.renamed}:${integrated}`];
 }
@@ -673,6 +829,12 @@ export async function pushTarget(
     runGit(["config", "--get", `branch.${branch}.remote`], { cwd: path }),
     runGit(["config", "--get", `branch.${branch}.merge`], { cwd: path }),
   ]);
+  for (const [key, result] of [
+    [`branch.${branch}.remote`, tracks],
+    [`branch.${branch}.merge`, merge],
+  ] as const) {
+    if (result.code !== 0 && result.code !== 1) throw gitFailure(["config", "--get", key], result);
+  }
   const upstreamRemote = tracks.code === 0 ? tracks.stdout.trim() : "";
   const mergeRef = merge.code === 0 ? merge.stdout.trim() : "";
 
@@ -691,24 +853,22 @@ export async function pushTarget(
 }
 
 /**
- * git says a lot when it refuses a push; this is the line that says why.
- *
- * Not simply the last one. git ends with `error: failed to push some refs`,
- * which only repeats that the push failed — the reason is in the `! [rejected]`
- * line above it, and for a hook it is the only place the hook's own words
- * appear. Preferring that line is what turns "it did not work" into something
- * a person can act on.
+ * Keep rejection, authentication, transport and hook diagnostics together.
+ * The final line is often generic advice, not the cause of the failed push.
  */
-function stderrTail(stderr: string): string {
+function pushDetails(stderr: string): string {
   const lines = toLines(stderr)
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("To "));
 
   // Both spellings: `! [rejected]` for a non-fast-forward, `! [remote rejected]`
   // when the far end's own hook turned it down.
-  const rejected = lines.filter((line) => /\[(?:remote )?rejected\]/.test(line));
-
-  return rejected.at(-1) ?? lines.at(-1) ?? "no reason given";
+  const diagnostics = lines.filter((line) =>
+    /\[(?:remote )?rejected\]|^(?:remote:|fatal:|error:|ERROR:|ssh:)|permission denied|could not resolve|connection (?:refused|timed out|reset)/i.test(
+      line,
+    ),
+  );
+  return (diagnostics.length > 0 ? diagnostics : lines).slice(0, 6).join("; ") || "no reason given";
 }
 
 /** Whether anything moved, which is the difference between the two good outcomes. */
@@ -732,20 +892,12 @@ async function settle(
   return { path: record.path, dir: name, branch: record.branch, kind: moved };
 }
 
-/** The files git stopped on, captured before the rebase is rolled back. */
-async function conflictedPaths(path: string): Promise<readonly string[]> {
-  const result = await runGit(["diff", "--name-only", "--diff-filter=U"], { cwd: path });
-  if (result.code !== 0) return [];
-
-  return result.stdout.split("\n").filter((line) => line.length > 0);
-}
-
 /**
  * Turns outcomes into the one exit code the shell sees.
  *
- * A conflict outranks a refused push, which outranks a skip: each is a result
- * that needs a decision, and with `--all` the sharper one would otherwise be
- * hidden behind a worktree that merely had uncommitted changes.
+ * Operational failures (including a failed rollback), conflicts, push failures
+ * and skips choose the exit code in that order. Details retain every failure,
+ * so a bad index in one worktree cannot hide a dirty or conflicted neighbour.
  *
  * A push that was refused is a failure even though the rebase it followed
  * worked. Exiting 0 there is what let `rebased` be printed over a branch the
@@ -753,27 +905,44 @@ async function conflictedPaths(path: string): Promise<readonly string[]> {
  * check for.
  */
 export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undefined {
+  const failed = outcomes.filter((outcome) => outcome.kind === "failed");
   const conflicted = outcomes.filter((outcome) => outcome.kind === "conflicted");
   const skipped = outcomes.filter((outcome) => outcome.kind === "skipped");
+  const refused = outcomes.filter((outcome) => outcome.pushed === false);
+  const problems = outcomes.filter(
+    (outcome) =>
+      outcome.kind === "failed" ||
+      outcome.kind === "conflicted" ||
+      outcome.kind === "skipped" ||
+      outcome.pushed === false,
+  );
+  const details = reasons(problems);
+
+  const first = failed[0];
+  if (first !== undefined) {
+    return new GroveError(first.errorCode ?? "git-failed", describe(failed, "failed"), {
+      details,
+      hint: first.hint,
+    });
+  }
 
   if (conflicted.length > 0) {
     return new GroveError("rebase-conflict", describe(conflicted, "conflicted"), {
       hint: "resolve them by hand, or sync after committing",
-      details: reasons(conflicted),
+      details,
     });
   }
 
-  const refused = outcomes.filter((outcome) => outcome.pushed === false);
   if (refused.length > 0) {
     return new GroveError("refused", describe(refused, "not pushed"), {
-      hint: "the rebase stands locally; look at what the remote gained, then sync again",
-      details: refused.map((outcome) => `${outcome.dir}: ${outcome.pushRefusal ?? ""}`),
+      hint: "the local commits are retained; address the push error, then sync again",
+      details,
     });
   }
 
   if (skipped.length > 0) {
     return new GroveError("refused", describe(skipped, "skipped"), {
-      details: reasons(skipped),
+      details,
     });
   }
 
@@ -783,8 +952,10 @@ export function failureFor(outcomes: readonly SyncOutcome[]): GroveError | undef
 /** Why each of these went the way it did, with any conflicting files indented under it. */
 function reasons(outcomes: readonly SyncOutcome[]): string[] {
   return outcomes.flatMap((outcome) => [
-    `${outcome.dir}: ${outcome.reason ?? ""}`,
+    `${outcome.dir}: ${outcome.reason ?? outcome.pushRefusal ?? ""}`,
+    ...(outcome.details ?? []).map((detail) => `  ${detail}`),
     ...(outcome.conflicts ?? []).map((file) => `  ${file}`),
+    ...(outcome.hint === undefined ? [] : [`  ${outcome.hint}`]),
   ]);
 }
 

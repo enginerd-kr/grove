@@ -655,18 +655,14 @@ export function createWorktreeService(
         reporter,
       );
 
-      // Raise failures as setup does. `abortOnConflict` has already put the
-      // worktree back, so nothing here is half-done. The screen draws the result
-      // in the same accent colour it draws `rebased` in, and a sync that stopped
-      // on a conflict is not a sync that worked. The command line has always
-      // exited 5 for this; the screen was the one surface calling it success.
-      //
-      // A skip is the exception, and stays a line rather than a refusal: `S`
-      // over a repository with one dirty worktree is an ordinary morning, and
-      // the screen reports outcomes and stays open. Dropping those from the
-      // input rather than reimplementing the test keeps `failureFor` the only
-      // place that decides a conflict outranks a refused push.
-      const failure = syncFailureFor(outcomes.filter((outcome) => outcome.kind !== "skipped"));
+      // Only skips remain a summary (a dirty worktree is ordinary). Once an
+      // operation, rollback or push fails, show every affected worktree's
+      // reason, including skips, rather than a success-coloured count.
+      const failed = outcomes.some(
+        (outcome) =>
+          outcome.kind === "failed" || outcome.kind === "conflicted" || outcome.pushed === false,
+      );
+      const failure = failed ? syncFailureFor(outcomes) : undefined;
       if (failure) throw failure;
 
       const replacements = outcomes.flatMap((outcome) =>

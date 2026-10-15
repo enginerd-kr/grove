@@ -469,7 +469,7 @@ describe("createWorktreeService", () => {
       await withTempRepo(async (temp) => {
         const paths = await managedRepo(temp);
         const root = paths.root;
-        const { service } = serviceAt(paths);
+        const { service, log } = serviceAt(paths);
 
         await service.add("feat/login");
         await Bun.write(join(root, "feat", "login", "scratch.txt"), "half-finished\n");
@@ -482,7 +482,31 @@ describe("createWorktreeService", () => {
         // same colour is the screen calling a failure a success; a skip already
         // says what happened on the line it returns.
         expect(await service.sync("feat/login")).toBe("feat/login skipped — uncommitted changes");
+        log.warnings.length = 0;
+        expect(await service.sync()).toBe("1 skipped, 1 up-to-date");
+        expect(log.warnings).toContain("feat/login skipped — uncommitted changes");
         expect(await pathExists(join(root, "feat", "login", "later.txt"))).toBe(false);
+      });
+    },
+    SLOW,
+  );
+
+  test(
+    "an unreadable worktree status reaches the UI as an error, not a successful sync summary",
+    async () => {
+      await withTempRepo(async (temp) => {
+        const paths = await managedRepo(temp);
+        const { path } = await seedWorktree(paths, "feat/login");
+        const index = (
+          await seedGit(path, ["rev-parse", "--path-format=absolute", "--git-path", "index"])
+        ).trim();
+        await Bun.write(index, "broken index");
+        const { service } = serviceAt(paths);
+
+        const error = await refusalFrom(service.sync("feat/login"));
+        expect(error.code).toBe("git-failed");
+        expect(error.message).toBe("feat/login failed");
+        expect(error.details.join("\n")).toContain("index");
       });
     },
     SLOW,

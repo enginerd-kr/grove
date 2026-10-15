@@ -170,6 +170,14 @@ Sync refuses worktrees with uncommitted changes. A conflicting rebase is aborted
 by default; check the reported state and instructions. If local commits on the
 default branch have diverged from the remote, sync stops without rebasing them.
 
+An unreadable checkout, a Git lock, a failed hook, and a failed push are reported
+with their own diagnostics. They are not treated as a diverged default branch
+or a content conflict. Existing merges, rebases, cherry-picks, reverts, and
+bisects are left alone. If rollback fails, sync reports the remaining state
+and recovery instructions. With `--all`, independent worktrees continue, while
+children of a parent that could not sync are skipped. A fetch failure warns that
+some refs may be stale; any local sync that follows uses the available refs.
+
 ## Interactive screen
 
 You can also run `grove` in the workspace or a worktree to manage tasks with the

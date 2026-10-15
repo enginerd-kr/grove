@@ -457,10 +457,16 @@ export async function runGitOrThrow(
   const result = await runGit(args, options);
   if (result.code === 0) return result.stdout;
 
-  throw new GroveError(
-    classifyGitError(result.stderr),
+  throw gitFailure(args, result);
+}
+
+/** Preserve the command, exit status and diagnostic when a caller handles a failed Git result. */
+export function gitFailure(args: readonly string[], result: GitResult): GroveError {
+  const diagnostic = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
+  return new GroveError(
+    classifyGitError(diagnostic),
     `git ${args.join(" ")} failed (exit ${result.code})`,
-    { details: stderrDetails(result.stderr) },
+    { details: stderrDetails(diagnostic, 20) },
   );
 }
 

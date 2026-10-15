@@ -415,7 +415,7 @@ describe.skipIf(!POSIX)("running it again", () => {
             (await seedGit(forge.repo.gitDir, ["rev-parse", outcome?.backup ?? ""])).trim(),
           ).toBe(before);
         } else {
-          expect(outcome?.kind).toBe("skipped");
+          expect(outcome?.kind).toBe("failed");
           expect(outcome?.reason).toContain("changed while fetching");
           expect(await headOf(first.path)).toBe(before);
           expect(await Bun.file(join(first.path, "crash.txt")).text()).toBe("original\n");

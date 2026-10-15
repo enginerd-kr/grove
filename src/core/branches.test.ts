@@ -75,6 +75,21 @@ async function failure(promise: Promise<unknown>): Promise<GroveError> {
 }
 
 describe("defaultBranch", () => {
+  test("broken branch refs are errors rather than absent branches", async () => {
+    await withTempRepo(async (repo) => {
+      const bare = await bareClone(repo);
+      await Bun.write(join(bare, "refs", "heads", "broken"), "not an object id\n");
+      await Bun.write(join(bare, "refs", "remotes", "origin", "broken"), "not an object id\n");
+
+      await expect(localBranchExists(bare, "broken")).rejects.toMatchObject({ code: "git-failed" });
+      await expect(remoteBranchExists(bare, "broken")).rejects.toMatchObject({
+        code: "git-failed",
+      });
+      expect(await localBranchExists(bare, "missing")).toBe(false);
+      expect(await remoteBranchExists(bare, "missing")).toBe(false);
+    });
+  });
+
   test("reads the trunk from origin/HEAD, and says how to fix a repo without one", async () => {
     await withTempRepo(async (repo) => {
       const bare = await bareClone(repo);
@@ -214,6 +229,31 @@ test("which branches exist, locally and on the remote", async () => {
 });
 
 describe("fetchRemotes", () => {
+  test("repairs a missing origin/HEAD after fetching, without using the checked-out branch", async () => {
+    await withTempRepo(async (repo) => {
+      const bare = await bareClone(repo);
+      // Older git versions do not create this during fetch. Pin that behavior
+      // even on newer git, and make the bare HEAD an explicitly wrong fallback.
+      await seedGit(bare, ["config", "remote.origin.followRemoteHEAD", "never"]);
+      await seedGit(bare, ["symbolic-ref", "HEAD", "refs/heads/feat/login"]);
+      await seedGit(bare, ["symbolic-ref", "-d", "refs/remotes/origin/HEAD"]);
+
+      expect((await fetchRemotes(bare)).fetched).toBe(true);
+      expect(await trunkOf(bare)).toEqual({ branch: "main", remote: "origin", ref: "origin/main" });
+    });
+  });
+
+  test("repairs origin/HEAD when its target no longer exists", async () => {
+    await withTempRepo(async (repo) => {
+      const bare = await bareClone(repo);
+      await seedGit(bare, ["config", "remote.origin.followRemoteHEAD", "never"]);
+      await seedGit(bare, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone"]);
+
+      expect((await fetchRemotes(bare)).fetched).toBe(true);
+      expect(await defaultBranch(bare)).toBe("main");
+    });
+  });
+
   test("brings a commit pushed after the clone into origin/main", async () => {
     await withTempRepo(async (repo) => {
       const bare = await bareClone(repo);
@@ -234,7 +274,9 @@ describe("fetchRemotes", () => {
       await seedGit(repo.work, ["init", "--bare", "--initial-branch=main", orphan]);
       await seedGit(orphan, ["remote", "add", "origin", `file://${join(repo.root, "gone.git")}`]);
 
-      expect(await fetchRemotes(orphan)).toEqual({ fetched: false, staleTags: [] });
+      const outcome = await fetchRemotes(orphan);
+      expect(outcome).toMatchObject({ fetched: false, staleTags: [] });
+      expect(outcome.details?.join("\n")).toContain("does not appear to be a git repository");
     });
   });
 
@@ -254,6 +296,41 @@ describe("fetchRemotes", () => {
       // The claim `fetched` makes, checked: the branches arrived even though
       // git's exit code called the whole fetch a failure.
       expect((await seedGit(bare, ["rev-parse", "origin/main"])).trim()).toBe(pushed);
+    });
+  });
+
+  test("a moved tag cannot hide a locked remote-tracking branch", async () => {
+    await withTempRepo(async (repo) => {
+      await seedGit(repo.originPath, ["tag", "v1", "main"]);
+      const bare = await bareClone(repo);
+      const before = (await seedGit(bare, ["rev-parse", "origin/main"])).trim();
+      await seedGit(repo.originPath, ["tag", "-f", "v1", "main~1"]);
+      await pushToOrigin(repo, "main", "Move main");
+      const lock = join(bare, "refs", "remotes", "origin", "main.lock");
+      await Bun.write(lock, "busy\n");
+
+      const outcome = await fetchRemotes(bare);
+      expect(outcome).toMatchObject({ fetched: false, staleTags: ["v1"] });
+      expect(outcome.details?.join("\n")).toContain("unable to update local ref");
+      expect((await seedGit(bare, ["rev-parse", "origin/main"])).trim()).toBe(before);
+      expect(await Bun.file(lock).text()).toBe("busy\n");
+    });
+  });
+
+  test("only moved tags remain benign when fetching several remotes", async () => {
+    await withTempRepo(async (repo) => {
+      await seedGit(repo.originPath, ["tag", "v1", "main"]);
+      const bare = await bareClone(repo);
+      await seedGit(bare, ["remote", "add", "upstream", repo.originUrl]);
+      await seedGit(bare, ["fetch", "upstream"]);
+      await seedGit(repo.originPath, ["tag", "-f", "v1", "main~1"]);
+      const pushed = await pushToOrigin(repo, "main", "Move main");
+
+      const outcome = await fetchRemotes(bare);
+      expect(outcome.fetched).toBe(true);
+      expect(outcome.staleTags).toContain("v1");
+      expect((await seedGit(bare, ["rev-parse", "origin/main"])).trim()).toBe(pushed);
+      expect((await seedGit(bare, ["rev-parse", "upstream/main"])).trim()).toBe(pushed);
     });
   });
 });

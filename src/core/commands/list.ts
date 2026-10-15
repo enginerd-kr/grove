@@ -274,7 +274,7 @@ export async function listWorktreeSummaries(
 
   const summaries = await Promise.all(
     records.map(async (record) => {
-      const status = await statusOf(record.path);
+      const status = await statusOf(record.path, { allowFailure: true });
       const setup = record.branch === undefined ? undefined : readiness.get(record.branch);
       let setupState = setup?.state;
       if (setup?.state === "ready" && setup.fingerprint) {

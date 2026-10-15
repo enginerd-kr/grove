@@ -178,6 +178,7 @@ describe("grove sync", () => {
       const before = await head(main);
       const rebase = await attemptSync(repo, { target: "main" });
       expect(succeeded(rebase)[0]).toMatchObject({ branch: "main", kind: "skipped" });
+      expect(succeeded(rebase)[0]?.reason).toContain("the trunk has diverged");
       expect(failureFor(succeeded(rebase))?.code).toBe("refused");
       expect(await head(main)).toBe(before);
       expect(await Bun.file(join(main, "remote-two.txt")).exists()).toBe(false);
@@ -300,13 +301,66 @@ describe("grove sync", () => {
       // would be advice about a rebase that never started.
       expect(refusal.hint).toBeUndefined();
 
-      // The fetch, and then nothing: the dirty check runs before the step for
-      // this worktree is opened, so the transcript never claims to have begun.
-      expect(outcome.log.err).toEqual(["· fetching\n", "✓ fetched\n"]);
+      // The reason also reaches the activity log, where a multi-worktree sync
+      // would otherwise leave only a count of skipped worktrees on screen.
+      expect(outcome.log.err).toEqual([
+        "· fetching\n",
+        "✓ fetched\n",
+        "! feat/login skipped — uncommitted changes\n",
+      ]);
 
       expect(await head(worktree)).toBe(before);
       expect(await Bun.file(join(worktree, "login.txt")).text()).toBe("half-finished\n");
       expect((await probeGit(worktree, ["status", "--porcelain"])).stdout).toBe(" M login.txt\n");
+    });
+  });
+
+  test("untracked files hidden from git status still stop a trunk sync as dirty", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const main = join(repo.root, "main");
+      await commitOnOrigin(temp, "main", "new.txt", "remote\n");
+      await seedGit(repo.gitDir, ["config", "status.showUntrackedFiles", "no"]);
+      await Bun.write(join(main, "new.txt"), "mine\n");
+      const before = await head(main);
+
+      const outcome = await attemptSync(repo, { target: "main" });
+
+      expect(succeeded(outcome)[0]).toMatchObject({
+        kind: "skipped",
+        reason: "uncommitted changes",
+        conflicts: ["new.txt"],
+      });
+      expect(failure(succeeded(outcome)).code).toBe("refused");
+      expect(outcome.log.err.join("")).not.toContain("cannot fast-forward");
+      expect(await head(main)).toBe(before);
+      expect(await Bun.file(join(main, "new.txt")).text()).toBe("mine\n");
+    });
+  });
+
+  test("an assume-unchanged edit blocking a merge is not reported as a diverged trunk", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const main = join(repo.root, "main");
+      await commitOnOrigin(temp, "main", "app.txt", "remote\n");
+      // Git status can also miss a tracked edit, so the merge's own refusal
+      // must be reported accurately even after the dirty preflight passed.
+      await seedGit(main, ["update-index", "--assume-unchanged", "app.txt"]);
+      await Bun.write(join(main, "app.txt"), "mine\n");
+      const before = await head(main);
+      expect((await probeGit(main, ["status", "--porcelain"])).stdout).toBe("");
+
+      const outcome = await attemptSync(repo, { target: "main" });
+      const [skipped] = succeeded(outcome);
+
+      expect(skipped?.kind).toBe("failed");
+      const details = failure(succeeded(outcome)).details.join("\n");
+      expect(details).toContain("local changes");
+      expect(details).toContain("app.txt");
+      expect(details).not.toContain("trunk has diverged");
+      expect(outcome.log.err.join("")).not.toContain("cannot fast-forward");
+      expect(await head(main)).toBe(before);
+      expect(await Bun.file(join(main, "app.txt")).text()).toBe("mine\n");
     });
   });
 
@@ -436,6 +490,48 @@ describe("grove sync", () => {
     });
   });
 
+  test("recovers the trunk when origin/HEAD is missing", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      await seedGit(repo.gitDir, ["config", "remote.origin.followRemoteHEAD", "never"]);
+      await seedGit(repo.gitDir, ["symbolic-ref", "-d", "refs/remotes/origin/HEAD"]);
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+
+      const outcome = await attemptSync(repo, { target: "main" });
+
+      expect(succeeded(outcome)[0]).toMatchObject({
+        branch: "main",
+        kind: "fast-forwarded",
+        onto: "origin/main",
+      });
+      expect(await Bun.file(join(repo.root, "main", "trunk.txt")).text()).toBe("trunk\n");
+    });
+  });
+
+  test("reports a missing PR remote branch without blaming the fetched trunk", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      // A merged PR's remote can outlive its remote branch while its local
+      // worktree is still present. `fetch --all` fails even though origin works.
+      await seedGit(repo.gitDir, ["remote", "add", "-t", "gone", "pr-42", temp.originUrl]);
+      // A failure on the PR remote must not stop origin's missing default
+      // ref from being recovered after its own successful fetch.
+      await seedGit(repo.gitDir, ["config", "remote.origin.followRemoteHEAD", "never"]);
+      await seedGit(repo.gitDir, ["symbolic-ref", "-d", "refs/remotes/origin/HEAD"]);
+      await commitOnOrigin(temp, "main", "trunk.txt", "trunk\n");
+
+      const outcome = await attemptSync(repo, { target: "main" });
+
+      expect(succeeded(outcome)[0]).toMatchObject({
+        kind: "fast-forwarded",
+        onto: "origin/main",
+      });
+      expect(outcome.log.err.join("")).toContain("couldn't find remote ref refs/heads/gone");
+      expect(outcome.log.err.join("")).not.toContain("the trunk below is as it was last seen");
+      expect(await Bun.file(join(repo.root, "main", "trunk.txt")).text()).toBe("trunk\n");
+    });
+  });
+
   test("says the fetch failed instead of reporting a stale answer as up to date", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
@@ -452,8 +548,9 @@ describe("grove sync", () => {
       // The whole sentence, not a substring of it: the warning has to say what
       // is now uncertain, or it is only an apology.
       expect(outcome.log.err).toContain(
-        "✗ could not fetch — the trunk below is as it was last seen\n",
+        "✗ could not fetch all remotes — some refs may be out of date\n",
       );
+      expect(outcome.log.err.join("")).toContain("does not appear to be a git repository");
 
       // And the sync still answers, over what was last seen — which is exactly
       // why the line above has to be there. A caller reading only the outcome
@@ -690,6 +787,29 @@ describe("grove sync over a stack", () => {
 
     return { a, b };
   }
+
+  test("a blocked parent leaves its children untouched while independent worktrees sync", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const { a, b } = await twoDeep(repo);
+      const before = await head(b);
+      await Bun.write(join(a, "a.txt"), "unfinished\n");
+      await commitOnOrigin(temp, "main", "trunk.txt", "new trunk\n");
+
+      const outcomes = succeeded(await attemptSync(repo, { all: true }));
+      expect(outcomes.find((entry) => entry.branch === "feat/a")?.reason).toBe(
+        "uncommitted changes",
+      );
+      expect(outcomes.find((entry) => entry.branch === "feat/b")).toMatchObject({
+        kind: "skipped",
+        reason: "feat/a did not sync; sync that parent before this branch",
+      });
+      expect(outcomes.find((entry) => entry.branch === "main")?.kind).toBe("fast-forwarded");
+      expect(await head(b)).toBe(before);
+      expect(await Bun.file(join(a, "a.txt")).text()).toBe("unfinished\n");
+      expect(await Bun.file(join(b, "trunk.txt")).exists()).toBe(false);
+    });
+  });
 
   test("rebases the child onto its parent, and the parent onto the trunk first", async () => {
     await withTempRepo(async (temp) => {

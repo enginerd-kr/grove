@@ -1,6 +1,13 @@
 import { type Reporter, withStep } from "../report/reporter.ts";
-import { GroveError } from "./errors.ts";
-import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "./git.ts";
+import { GroveError, stderrDetails } from "./errors.ts";
+import {
+  type GitResult,
+  gitFailure,
+  gitOutput,
+  gitSucceeds,
+  runGit,
+  runGitOrThrow,
+} from "./git.ts";
 import { toLines } from "./text.ts";
 
 /** Questions about refs, asked of the bare repository — and the calls that maintain them. */
@@ -54,6 +61,8 @@ export type FetchOutcome = {
   readonly fetched: boolean;
   /** Tags whose local copy disagrees with the remote's, and so was kept. */
   readonly staleTags: readonly string[];
+  /** Git's explanation when some refs could not be fetched. */
+  readonly details?: readonly string[];
 };
 
 /** The one refusal a fetch can exit nonzero on with every branch delivered. */
@@ -84,29 +93,60 @@ const CLOBBERED_TAG = "would clobber existing tag";
  * remote, a branch refused — is not.
  */
 export async function fetchRemotes(bare: string, timeoutMs?: number): Promise<FetchOutcome> {
+  const deadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   const result = await runGit(["fetch", "--all", "--prune", "--tags"], { cwd: bare, timeoutMs });
-  if (result.code === 0) return { fetched: true, staleTags: [] };
+  const outcome = fetchOutcome(result);
 
+  // Another remote can fail after origin was fetched successfully. Repair a
+  // missing default ref independently, within the same background deadline.
+  // Local reads such as `list` still never trigger network recovery.
+  await repairRemoteHead(bare, deadline);
+  return outcome;
+}
+
+/** A tag refusal is benign only when it is the entire failure, not a timeout or a locked ref. */
+export function fetchOutcome(result: GitResult): FetchOutcome {
   // ` ! [rejected]  v0.4.4  -> v0.4.4  (would clobber existing tag)` — the
   // parenthesised reason is git's, matched under the `LC_ALL=C` that `runGit`
   // pins, the same bargain `classifyGitError` already makes.
   const rejections = toLines(result.stderr)
-    .map((line) => /!\s+\[rejected\]\s+(\S+)\s+->\s+\S+\s+\((.+)\)/.exec(line))
+    .map((line) => /!\s+\[([^\]]+)\]\s+(\S+)\s+->\s+\S+\s+\((.+)\)/.exec(line))
     .filter((match) => match !== null);
+  const staleTags = rejections
+    .filter((match) => match[1] === "rejected" && match[3] === CLOBBERED_TAG)
+    .map((match) => match[2])
+    .filter((tag) => tag !== undefined);
 
   const fetched =
-    rejections.length > 0 &&
-    rejections.every((match) => match[2] === CLOBBERED_TAG) &&
-    // `--all` means one stderr for every remote: a clobbered tag on one does
-    // not vouch for a remote that was unreachable underneath it.
-    !/^fatal:/m.test(result.stderr);
+    result.code === 0 ||
+    (result.code === 1 &&
+      staleTags.length > 0 &&
+      staleTags.length === rejections.length &&
+      // `fetch --all` adds this summary even when its only refusal was a tag.
+      // All substantive errors and every failed non-tag ref still count.
+      !/^(?:fatal:|error:(?! could not fetch \S+\s*$))/m.test(result.stderr));
 
   return {
     fetched,
-    staleTags: fetched
-      ? rejections.map((match) => match[1]).filter((tag) => tag !== undefined)
-      : [],
+    staleTags,
+    ...(fetched
+      ? {}
+      : { details: stderrDetails(result.stderr || `git fetch failed (exit ${result.code})`) }),
   };
+}
+
+async function repairRemoteHead(bare: string, deadline?: number): Promise<void> {
+  const ref = `refs/remotes/${REMOTE}/HEAD`;
+  const [symbolic, resolves] = await Promise.all([
+    gitSucceeds(["symbolic-ref", "--quiet", ref], { cwd: bare }),
+    gitSucceeds(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd: bare }),
+  ]);
+  if (symbolic && resolves) return;
+
+  // Include the repair in the background refresh's existing time budget.
+  const remaining = deadline === undefined ? undefined : deadline - performance.now();
+  if (remaining !== undefined && remaining <= 0) return;
+  await updateRemoteHead(bare, remaining);
 }
 
 export type Drift = { readonly ahead: number; readonly behind: number };
@@ -369,6 +409,7 @@ export async function defaultBranch(bare: string): Promise<string> {
   if (result.code !== 0) {
     throw new GroveError("git-failed", `cannot tell which branch ${REMOTE} considers default`, {
       hint: `run \`git -C ${bare} remote set-head ${REMOTE} --auto\``,
+      details: stderrDetails(result.stderr),
     });
   }
 
@@ -415,6 +456,12 @@ export async function trunkOf(bare: string): Promise<Trunk> {
     runGit(["config", "--get", `branch.${branch}.remote`], { cwd: bare }),
     runGit(["config", "--get", `branch.${branch}.merge`], { cwd: bare }),
   ]);
+  for (const [key, result] of [
+    [`branch.${branch}.remote`, remote],
+    [`branch.${branch}.merge`, merge],
+  ] as const) {
+    if (result.code !== 0 && result.code !== 1) throw gitFailure(["config", "--get", key], result);
+  }
   const tracked = remote.code === 0 ? remote.stdout.trim() : "";
   const target = merge.code === 0 ? merge.stdout.trim().replace(/^refs\/heads\//, "") : "";
 
@@ -450,6 +497,7 @@ export async function publishRemote(cwd: string, branch: string): Promise<string
     `branch.${branch}.remote`,
   ]) {
     const result = await runGit(["config", "--get", key], { cwd });
+    if (result.code !== 0 && result.code !== 1) throw gitFailure(["config", "--get", key], result);
     const value = result.stdout.trim();
     if (result.code === 0 && value.length > 0 && value !== ".") return value;
   }
@@ -515,8 +563,10 @@ export async function refuseTrunk(
  * Tolerant of failure: a remote with no HEAD is unusual but not fatal, and the
  * caller has a fallback. Returns whether it worked so the caller can pick.
  */
-export async function updateRemoteHead(bare: string): Promise<boolean> {
-  return (await runGit(["remote", "set-head", REMOTE, "--auto"], { cwd: bare })).code === 0;
+export async function updateRemoteHead(bare: string, timeoutMs?: number): Promise<boolean> {
+  return (
+    (await runGit(["remote", "set-head", REMOTE, "--auto"], { cwd: bare, timeoutMs })).code === 0
+  );
 }
 
 /**
@@ -554,7 +604,7 @@ export function remoteRef(branch: string): string {
 }
 
 export async function localBranchExists(bare: string, branch: string): Promise<boolean> {
-  return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd: bare });
+  return branchRefExists(bare, `refs/heads/${branch}`);
 }
 
 export async function remoteBranchExists(
@@ -562,9 +612,16 @@ export async function remoteBranchExists(
   branch: string,
   remote: string = REMOTE,
 ): Promise<boolean> {
-  return gitSucceeds(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], {
-    cwd: bare,
-  });
+  return branchRefExists(bare, `refs/remotes/${remote}/${branch}`);
+}
+
+/** Only a silent missing-ref result means absent; broken refs must not trigger fallback bases. */
+async function branchRefExists(bare: string, ref: string): Promise<boolean> {
+  const args = ["rev-parse", "--verify", "--quiet", ref];
+  const result = await runGit(args, { cwd: bare });
+  if (result.code === 0) return true;
+  if (result.code === 1 && result.stderr.trim().length === 0) return false;
+  throw gitFailure(args, result);
 }
 
 export async function localBranches(bare: string): Promise<readonly string[]> {

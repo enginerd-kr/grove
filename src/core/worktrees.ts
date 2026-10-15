@@ -1,7 +1,8 @@
+import { lstat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { GroveError } from "./errors.ts";
 import { pathExists } from "./fs.ts";
-import { gitOutput, runGit } from "./git.ts";
+import { gitFailure, gitOutput, runGit } from "./git.ts";
 
 /**
  * Reading the repository's worktrees, and working out which one a user meant.
@@ -195,6 +196,46 @@ export async function isMidRebase(path: string): Promise<boolean> {
   return (await rebaseState(path)) !== undefined;
 }
 
+/** Check fresh operation markers before changing a checkout, including clean paused operations. */
+export async function operationInProgress(path: string): Promise<string | undefined> {
+  const markers = [
+    ["rebase-merge", "rebase"],
+    ["rebase-apply", "rebase or am"],
+    ["MERGE_HEAD", "merge"],
+    ["CHERRY_PICK_HEAD", "cherry-pick"],
+    ["REVERT_HEAD", "revert"],
+    ["sequencer", "cherry-pick or revert"],
+    ["BISECT_START", "bisect"],
+  ] as const;
+  const paths = (
+    await gitOutput(
+      [
+        "rev-parse",
+        "--path-format=absolute",
+        ...markers.flatMap(([marker]) => ["--git-path", marker]),
+      ],
+      { cwd: path },
+    )
+  ).split("\n");
+  for (const [index, [, operation]] of markers.entries()) {
+    const marker = paths[index];
+    if (marker === undefined)
+      throw new GroveError("git-failed", "could not locate Git operation state");
+    try {
+      await lstat(marker);
+      return operation;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw new GroveError("git-failed", "could not read Git operation state", {
+          details: [String(error)],
+          cause: error,
+        });
+      }
+    }
+  }
+  return undefined;
+}
+
 /**
  * Every worktree the repository has, without the bare entry nobody visits.
  *
@@ -218,12 +259,28 @@ export async function listWorktrees(bare: string): Promise<readonly WorktreeReco
   );
 }
 
-export async function statusOf(path: string): Promise<WorktreeStatus> {
-  const result = await runGit(["status", "--porcelain=v2", "--branch", "-z"], { cwd: path });
+export async function statusOf(
+  path: string,
+  { allowFailure = false }: { readonly allowFailure?: boolean } = {},
+): Promise<WorktreeStatus> {
+  // This answer decides whether a worktree can be changed safely. A user's
+  // status.showUntrackedFiles=no display preference must not hide local work.
+  const args = [
+    "status",
+    "--porcelain=v2",
+    "--branch",
+    "--untracked-files=normal",
+    "--ignore-submodules=none",
+    "-z",
+  ];
+  const result = await runGit(args, { cwd: path });
 
-  // A worktree whose directory was deleted behind git's back still appears in
-  // the list; reporting it as clean-and-unknown beats failing the whole command.
-  if (result.code !== 0) return { dirty: false, changed: [], untracked: [], ahead: 0, behind: 0 };
+  // A listing may retain a checkout deleted behind Git's back. Commands that
+  // change worktrees must never interpret an unreadable status as clean.
+  if (result.code !== 0) {
+    if (!allowFailure) throw gitFailure(args, result);
+    return { dirty: false, changed: [], untracked: [], ahead: 0, behind: 0 };
+  }
 
   return parseStatus(result.stdout);
 }

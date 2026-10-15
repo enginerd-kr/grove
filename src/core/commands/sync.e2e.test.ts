@@ -54,6 +54,24 @@ async function commitIn(worktree: string, file: string, contents: string): Promi
 }
 
 describe("grove sync, through the binary", () => {
+  test("an operational failure retains its diagnostic and every worktree row", async () => {
+    await withTempRepo(async (temp) => {
+      const repo = await managedRepo(temp);
+      const { path } = await seedWorktree(repo, "feat/login");
+      const index = (
+        await seedGit(path, ["rev-parse", "--path-format=absolute", "--git-path", "index"])
+      ).trim();
+      await Bun.write(index, "broken index");
+      await commitOnOrigin(temp, "main", "trunk.txt", "new trunk\n");
+
+      const result = await runCli(["sync", "--all"], { cwd: repo.root });
+      expect(result.exitCode).toBe(ExitCode.gitFailed);
+      expect(result.stdout).toContain("feat/login\tfailed");
+      expect(result.stdout).toContain("main\tfast-forwarded");
+      expect(result.stderr).toContain("index");
+      expect(result.stderr).not.toContain("trunk has diverged");
+    });
+  });
   test("sync in a new worktree succeeds from main without publishing", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);

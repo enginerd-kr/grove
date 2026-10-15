@@ -43,6 +43,14 @@ function stackOf(entries: readonly (readonly [string, string])[]): Stack {
   return new Map(entries);
 }
 
+test("an unreadable stack configuration is an error, not an empty stack", async () => {
+  await withTempRepo(async (temp) => {
+    const repo = await managedRepo(temp);
+    await Bun.write(join(repo.gitDir, "config"), "[broken config\n");
+    await expect(readStack(repo.gitDir)).rejects.toMatchObject({ code: "git-failed" });
+  });
+});
+
 /** `grove add --on`, at the level `cli/args.ts` calls it. */
 function addOn(repo: RepoPaths, branch: string, on: string | undefined) {
   return attempt((reporter) =>

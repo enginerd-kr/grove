@@ -1,15 +1,16 @@
 import type { Reporter } from "../../report/reporter.ts";
 import { defaultBranch, fetchRemotes, localBranchExists, REMOTE, remoteRef } from "../branches.ts";
-import { classifyGitError, GroveError, stderrDetails } from "../errors.ts";
+import { classifyGitError, GroveError, isGroveError, stderrDetails } from "../errors.ts";
 import { gitOutput, gitSucceeds, runGit, runGitOrThrow } from "../git.ts";
 import { contains, type RepoPaths } from "../layout.ts";
+import { abortRebase, conflictedPaths } from "../rebase-state.ts";
 import { recoverLine, snapshotChanges } from "../snapshot.ts";
 import { ancestry, readStack } from "../stack.ts";
 import { plural } from "../text.ts";
 import {
-  isMidRebase,
   LISTED,
   listWorktrees,
+  operationInProgress,
   refuseMidRebase,
   resolveTarget,
   statusOf,
@@ -197,10 +198,13 @@ export async function rebaseWorktree(
     });
   }
   const branch = record.branch;
+  const operation = await operationInProgress(record.path);
+  if (operation !== undefined)
+    throw new GroveError("refused", `a ${operation} is already in progress here`);
 
   // Read before the fetch, so a refusal about the working tree arrives
   // without a round trip in front of it.
-  const status = await statusOf(record.path);
+  let status = await statusOf(record.path);
   if (status.dirty && !options.carry) {
     throw new GroveError("refused", `${dir} has uncommitted changes`, {
       hint: "commit them, or leave --no-stash off to carry them through the rebase",
@@ -215,8 +219,24 @@ export async function rebaseWorktree(
   // already owns the warning about it.
   if (options.fetch) {
     const step = reporter.step("fetching");
-    if ((await fetchRemotes(repo.gitDir)).fetched) step.succeed("fetched");
-    else step.fail("could not fetch — the base below is as it was last seen");
+    const fetched = await fetchRemotes(repo.gitDir);
+    if (fetched.fetched) step.succeed("fetched");
+    else {
+      step.fail("could not fetch all remotes — some refs may be out of date");
+      for (const detail of fetched.details ?? []) reporter.warn(detail);
+    }
+    // The network round trip may have outlived a checkout or an edit in another terminal.
+    const currentOperation = await operationInProgress(record.path);
+    if (currentOperation !== undefined)
+      throw new GroveError("refused", `a ${currentOperation} is already in progress here`);
+    const currentBranch = await gitOutput(["symbolic-ref", "--quiet", "--short", "HEAD"], {
+      cwd: record.path,
+    });
+    if (currentBranch !== branch)
+      throw new GroveError("refused", "the checked-out branch changed during fetch; rebase again");
+    status = await statusOf(record.path);
+    if (status.dirty && !options.carry)
+      throw new GroveError("refused", `${dir} has uncommitted changes`);
   }
 
   const onto = await resolveBase(
@@ -227,6 +247,7 @@ export async function rebaseWorktree(
     options.base,
     reporter,
   );
+  await gitOutput(["rev-parse", "--verify", `${onto}^{commit}`], { cwd: record.path });
   const identity = { path: record.path, dir, branch, onto };
 
   // Already sitting on it: nothing to replay, so nothing is moved out of the
@@ -250,115 +271,166 @@ export async function rebaseWorktree(
    * one, and that refusal arrives below as a rebase that never started.
    */
   let stash: string | undefined;
-  const changes = status.changed.length - status.untracked.length;
-  if (status.dirty) {
-    stash = await snapshotChanges(record.path, "grove: carried through a rebase", {
-      hint: "commit them yourself, or rebase with --no-stash after stashing by hand",
-    });
-    if (stash !== undefined) await runGitOrThrow(["reset", "--hard", "HEAD"], { cwd: record.path });
-  }
-  const carried = (restored: boolean): Pick<RebaseResult, "carried"> =>
-    stash === undefined ? {} : { carried: { stash, changes, restored } };
-
-  /**
-   * `--fork-point` for the reason `sync` gives: a commit the base has since
-   * withdrawn is dropped rather than replayed onto its own replacement. With
-   * no fork point to be found — a base this branch was never on — git falls
-   * back to the plain merge base, so nothing is worse than it was.
-   */
-  const rebase = await runGit(["rebase", "--fork-point", onto], { cwd: record.path });
-
-  if (rebase.code !== 0) {
-    // Refused before it began — an untracked file in the way, most often — so
-    // there is no rebase to abort and no conflict to name. The changes go
-    // back first, and git's own sentence is the error.
-    if (!(await isMidRebase(record.path))) {
-      const restored = stash === undefined ? true : await apply(record.path, stash);
-      step.fail(`could not rebase ${dir}`);
-
-      throw new GroveError(classifyGitError(rebase.stderr), `git rebase ${onto} failed in ${dir}`, {
-        details: stderrDetails(rebase.stderr),
-        hint: stash !== undefined && !restored ? recover(stash) : undefined,
+  try {
+    const changes = status.changed.length - status.untracked.length;
+    if (status.dirty) {
+      stash = await snapshotChanges(record.path, "grove: carried through a rebase", {
+        hint: "commit them yourself, or rebase with --no-stash after stashing by hand",
       });
+      if (stash !== undefined)
+        await runGitOrThrow(["reset", "--hard", "HEAD"], { cwd: record.path });
     }
+    const carried = (restored: boolean): Pick<RebaseResult, "carried"> =>
+      stash === undefined ? {} : { carried: { stash, changes, restored } };
 
-    const conflicts = await conflictedPaths(record.path);
-    step.fail(`${dir} conflicts with ${onto}`);
+    /**
+     * `--fork-point` for the reason `sync` gives: a commit the base has since
+     * withdrawn is dropped rather than replayed onto its own replacement. With
+     * no fork point to be found — a base this branch was never on — git falls
+     * back to the plain merge base, so nothing is worse than it was.
+     */
+    const rebase = await runGit(["rebase", "--fork-point", onto], { cwd: record.path });
 
-    if (!options.abortOnConflict) {
+    if (rebase.code !== 0) {
+      // Refused before it began — an untracked file in the way, most often — so
+      // there is no rebase to abort and no conflict to name. The changes go
+      // back first, and git's own sentence is the error.
+      const operation = await operationInProgress(record.path);
+      if (operation !== "rebase" && operation !== "rebase or am") {
+        const restored = stash === undefined ? true : await apply(record.path, stash);
+        step.fail(`could not rebase ${dir}`);
+
+        const code = classifyGitError(rebase.stderr);
+        throw new GroveError(
+          code === "rebase-conflict" ? "git-failed" : code,
+          `git rebase ${onto} failed in ${dir}`,
+          {
+            details: stderrDetails(rebase.stderr),
+            hint: stash !== undefined && !restored ? recover(stash) : undefined,
+          },
+        );
+      }
+
+      const conflicts = await conflictedPaths(record.path);
+      step.fail(conflicts.length > 0 ? `${dir} conflicts with ${onto}` : `could not rebase ${dir}`);
+
+      const rollBack = async () => {
+        try {
+          await abortRebase(record.path, before);
+        } catch (error) {
+          if (!isGroveError(error)) throw error;
+          throw new GroveError(error.code, error.message, {
+            details: error.details,
+            hint: [error.hint, ...(stash === undefined ? [] : [recover(stash)])]
+              .filter(Boolean)
+              .join("; "),
+            cause: error,
+          });
+        }
+      };
+
+      if (conflicts.length === 0) {
+        let restored = stash === undefined;
+        if (options.abortOnConflict) {
+          await rollBack();
+          if (stash !== undefined) restored = await apply(record.path, stash);
+        }
+        throw new GroveError("git-failed", `git rebase ${onto} failed in ${dir}`, {
+          details: stderrDetails(rebase.stderr || rebase.stdout),
+          hint: [
+            options.abortOnConflict
+              ? "the rebase was rolled back"
+              : "inspect this worktree with git status, then finish or abort the rebase",
+            ...(stash !== undefined && !restored ? [recover(stash)] : []),
+          ].join("; "),
+        });
+      }
+
+      if (!options.abortOnConflict) {
+        return {
+          ...identity,
+          kind: "conflicted",
+          reason: `rebase onto ${onto} conflicted and was left in place to resolve`,
+          conflicts,
+          rolledBack: false,
+          ...carried(false),
+        };
+      }
+
+      // The abort puts HEAD back where the snapshot was taken, so the changes
+      // fit there exactly as they did before.
+      await rollBack();
+      const restored = stash === undefined ? true : await apply(record.path, stash);
+
       return {
         ...identity,
         kind: "conflicted",
-        reason: `rebase onto ${onto} conflicted and was left in place to resolve`,
+        reason: `rebase onto ${onto} conflicted and was rolled back`,
         conflicts,
-        rolledBack: false,
-        ...carried(false),
+        rolledBack: true,
+        ...carried(restored),
       };
     }
 
-    // The abort puts HEAD back where the snapshot was taken, so the changes
-    // fit there exactly as they did before.
-    await runGit(["rebase", "--abort"], { cwd: record.path });
-    const restored = stash === undefined ? true : await apply(record.path, stash);
+    /**
+     * The rebase stands; now the changes have to sit on it.
+     *
+     * The two are rarely on the same commit — that is what a rebase is — so this
+     * is a three-way merge and can genuinely conflict. The default answer is
+     * the same one a conflicted rebase gets: undo it. The branch is put back on
+     * `before`, the changes are re-applied where they were made, and the person
+     * is told what would not fit — because a worktree left holding conflict
+     * markers over an edit they had not finished is the state this exists to
+     * prevent. `--no-abort` keeps the rebase and the markers instead.
+     */
+    if (stash !== undefined && !(await apply(record.path, stash))) {
+      const conflicts = await conflictedPaths(record.path);
 
-    return {
-      ...identity,
-      kind: "conflicted",
-      reason: `rebase onto ${onto} conflicted and was rolled back`,
-      conflicts,
-      rolledBack: true,
-      ...carried(restored),
-    };
-  }
+      if (!options.abortOnConflict) {
+        step.fail(`${dir} rebased, but its uncommitted changes conflict with it`);
 
-  /**
-   * The rebase stands; now the changes have to sit on it.
-   *
-   * The two are rarely on the same commit — that is what a rebase is — so this
-   * is a three-way merge and can genuinely conflict. The default answer is
-   * the same one a conflicted rebase gets: undo it. The branch is put back on
-   * `before`, the changes are re-applied where they were made, and the person
-   * is told what would not fit — because a worktree left holding conflict
-   * markers over an edit they had not finished is the state this exists to
-   * prevent. `--no-abort` keeps the rebase and the markers instead.
-   */
-  if (stash !== undefined && !(await apply(record.path, stash))) {
-    const conflicts = await conflictedPaths(record.path);
+        return {
+          ...identity,
+          kind: "rebased",
+          reason:
+            "the uncommitted changes conflict with the rebased branch and were left in place to resolve",
+          conflicts,
+          rolledBack: false,
+          ...carried(false),
+        };
+      }
 
-    if (!options.abortOnConflict) {
-      step.fail(`${dir} rebased, but its uncommitted changes conflict with it`);
+      await runGitOrThrow(["reset", "--hard", before], { cwd: record.path });
+      const restored = await apply(record.path, stash);
+      step.fail(`${dir}'s uncommitted changes do not fit on ${onto}`);
 
       return {
         ...identity,
-        kind: "rebased",
-        reason:
-          "the uncommitted changes conflict with the rebased branch and were left in place to resolve",
+        kind: "conflicted",
+        reason: `the uncommitted changes did not apply on top of ${onto}, so the rebase was undone`,
         conflicts,
-        rolledBack: false,
-        ...carried(false),
+        rolledBack: true,
+        ...carried(restored),
       };
     }
 
-    await runGitOrThrow(["reset", "--hard", before], { cwd: record.path });
-    const restored = await apply(record.path, stash);
-    step.fail(`${dir}'s uncommitted changes do not fit on ${onto}`);
+    const after = await gitOutput(["rev-parse", "HEAD"], { cwd: record.path });
+    const moved = after !== before;
+    const back = stash === undefined ? "" : `, ${plural(changes, "change")} back in place`;
+    step.succeed(moved ? `${dir} rebased onto ${onto}${back}` : `${dir} already on ${onto}${back}`);
 
-    return {
-      ...identity,
-      kind: "conflicted",
-      reason: `the uncommitted changes did not apply on top of ${onto}, so the rebase was undone`,
-      conflicts,
-      rolledBack: true,
-      ...carried(restored),
-    };
+    return { ...identity, kind: moved ? "rebased" : "up-to-date", ...carried(true) };
+  } catch (error) {
+    step.fail(`could not rebase ${dir}`);
+    if (!isGroveError(error) || stash === undefined || error.hint?.includes(stash)) throw error;
+    // A failed reset, state read or restoration must not lose the only handle
+    // to changes already moved out of the worktree.
+    throw new GroveError(error.code, error.message, {
+      details: error.details,
+      hint: [error.hint, recover(stash)].filter(Boolean).join("; "),
+      cause: error,
+    });
   }
-
-  const after = await gitOutput(["rev-parse", "HEAD"], { cwd: record.path });
-  const moved = after !== before;
-  const back = stash === undefined ? "" : `, ${plural(changes, "change")} back in place`;
-  step.succeed(moved ? `${dir} rebased onto ${onto}${back}` : `${dir} already on ${onto}${back}`);
-
-  return { ...identity, kind: moved ? "rebased" : "up-to-date", ...carried(true) };
 }
 
 /**
@@ -462,15 +534,13 @@ async function apply(path: string, stash: string): Promise<boolean> {
   if (staged.code === 0) return true;
   if ((await conflictedPaths(path)).length > 0) return false;
 
-  return (await runGit(["stash", "apply", stash], { cwd: path })).code === 0;
-}
-
-/** The files git stopped on — of a rebase, or of an apply — captured before anything is rolled back. */
-async function conflictedPaths(path: string): Promise<readonly string[]> {
-  const result = await runGit(["diff", "--name-only", "--diff-filter=U"], { cwd: path });
-  if (result.code !== 0) return [];
-
-  return result.stdout.split("\n").filter((line) => line.length > 0);
+  const plain = await runGit(["stash", "apply", stash], { cwd: path });
+  if (plain.code === 0) return true;
+  if ((await conflictedPaths(path)).length > 0) return false;
+  throw new GroveError("git-failed", "could not restore the uncommitted changes", {
+    details: stderrDetails(`${staged.stderr}\n${plain.stderr}`),
+    hint: recover(stash),
+  });
 }
 
 /** The one line that recovers changes this command could not put back itself. */
@@ -498,7 +568,9 @@ export function failureFor(result: RebaseResult): GroveError | undefined {
     return new GroveError("rebase-conflict", `${dir} conflicted`, {
       hint:
         result.rolledBack === true
-          ? "nothing has changed — commit first, pick another base, or --no-abort to resolve it by hand"
+          ? carried === undefined || carried.restored
+            ? "nothing has changed — commit first, pick another base, or --no-abort to resolve it by hand"
+            : "the rebase was undone; resolve the remaining changes or restore the snapshot named below"
           : `finish it in the worktree: git -C ${result.path} rebase --continue, or rebase --abort`,
       details: [`${dir}: ${result.reason ?? ""}`, ...files, ...unrestored],
     });

@@ -1,4 +1,4 @@
-import { runGit } from "./git.ts";
+import { gitFailure, runGit, runGitOrThrow } from "./git.ts";
 
 /**
  * Which branch a branch was cut from, when it was cut from another one.
@@ -65,10 +65,12 @@ function keyFor(branch: string): string {
  * would have to keep re-discovering.
  */
 export async function readStack(bare: string): Promise<Stack> {
-  const result = await runGit(["config", "--get-regexp", `^branch\\..*\\.${KEY}$`], { cwd: bare });
+  const args = ["config", "--get-regexp", `^branch\\..*\\.${KEY}$`];
+  const result = await runGit(args, { cwd: bare });
 
   const stack = new Map<string, string>();
-  if (result.code !== 0) return stack;
+  if (result.code === 1) return stack;
+  if (result.code !== 0) throw gitFailure(args, result);
 
   for (const line of result.stdout.split("\n")) {
     const space = line.indexOf(" ");
@@ -86,19 +88,21 @@ export async function readStack(bare: string): Promise<Stack> {
 }
 
 export async function setParent(bare: string, branch: string, parent: string): Promise<void> {
-  await runGit(["config", keyFor(branch), parent], { cwd: bare });
+  await runGitOrThrow(["config", keyFor(branch), parent], { cwd: bare });
 }
 
 /**
  * Forgets one branch's parent.
  *
- * Answers rather than throws, and exit 5 — "the key was not there" — is the
+ * Exit 5 — "the key was not there" — is the
  * ordinary case: every caller here clears records it is not certain exist, and
  * a branch that never had a parent is exactly the state this was asked to
  * produce.
  */
 export async function clearParent(bare: string, branch: string): Promise<void> {
-  await runGit(["config", "--unset", keyFor(branch)], { cwd: bare });
+  const args = ["config", "--unset-all", keyFor(branch)];
+  const result = await runGit(args, { cwd: bare });
+  if (result.code !== 0 && result.code !== 5) throw gitFailure(args, result);
 }
 
 /**

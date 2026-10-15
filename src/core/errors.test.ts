@@ -474,7 +474,7 @@ describe("against real git", () => {
     });
   });
 
-  test("a lock is not a category of its own and falls through to git-failed", async () => {
+  test("Git index and worktree locks are reported as state conflicts", async () => {
     await withTempRepo(async (repo) => {
       const app = await clone(repo);
       const bare = join(repo.work, "bare.git");
@@ -493,10 +493,8 @@ describe("against real git", () => {
 
       expect(locked.stderr).toContain("index.lock");
       expect(lockedWorktree.stderr).toContain("locked working tree");
-      // No pattern claims either message, and inventing one would be guesswork
-      // about a message that means "wait", not "this will never work".
-      expect(classifyGitError(locked.stderr)).toBe("git-failed");
-      expect(classifyGitError(lockedWorktree.stderr)).toBe("git-failed");
+      expect(classifyGitError(locked.stderr)).toBe("state-conflict");
+      expect(classifyGitError(lockedWorktree.stderr)).toBe("state-conflict");
     });
   });
 
