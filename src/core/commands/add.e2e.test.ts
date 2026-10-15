@@ -129,7 +129,7 @@ describe("grove add", () => {
       // `runCli` gives the child pipes, which is the whole point: this is
       // `grove add | tee` and CI, and it is the one place the tool is allowed
       // to behave differently under a terminal.
-      const added = await runCli(["add", "feat/login", "--trust"], { cwd: root });
+      const added = await runCli(["add", "feat/login"], { cwd: root });
 
       expect([added.exitCode, added.stderr]).toEqual([ExitCode.ok, added.stderr]);
 
@@ -147,7 +147,7 @@ test("a failed setup returns exit 9 with the created checkout and failed readine
   await withTempRepo(async (temp) => {
     const repo = await managedRepo(temp);
     await Bun.write(join(repo.root, "main", ".grove.toml"), '[setup]\nrun = ["exit 7"]\n');
-    const result = await runCli(["add", "feat/setup-failure", "--trust", "--json"], {
+    const result = await runCli(["add", "feat/setup-failure", "--json"], {
       cwd: repo.root,
     });
     expect(result.exitCode).toBe(ExitCode.setupFailed);

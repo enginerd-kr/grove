@@ -221,14 +221,11 @@ export async function buildFixture(options: FixtureOptions = {}): Promise<Fixtur
   await Bun.write(join(trunk, ".env"), "DATABASE_URL=postgres://localhost/acme\n");
   await mkdir(join(trunk, "node_modules", ".bin"), { recursive: true });
 
-  // `trust: false`, deliberately: the file's commands stay unread, so the `a`
-  // in the pictures is the first time anything has agreed to run them — which
-  // is the row the setup picture is of.
   for (const branch of BRANCHES) {
     await addWorktree(
       repo,
       cloned.root,
-      { branch, fetch: false, push: false, setup: true, trust: false, take: false },
+      { branch, fetch: false, push: false, setup: true, take: false },
       quiet,
     );
   }

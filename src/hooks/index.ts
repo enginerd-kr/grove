@@ -6,8 +6,7 @@
  * None of that is in here, and nothing in here is that. A hook is a line
  * somebody wrote in `.grove.toml` — copy this, link that, run these, open the
  * editor afterwards, and stop the container on the way out — and grove's part
- * is to read it, refuse what it cannot act on, ask before running what arrived
- * over the network, and say what happened.
+ * is to read it, run its configured hooks, and say what happened.
  *
  * That is why it is a package and not two files under `core/`: the worktree
  * commands call in here, and nothing here calls back. `add` makes a worktree
@@ -19,9 +18,8 @@
  * Inside, one file per hook and three they share:
  *
  * - `config.ts`   the files: what they say, and how the three of them stack up
- * - `trust.ts`    the record of having read it, kept out of the repository
  * - `applied.ts`  the record of which version each worktree was filled in from
- * - `command.ts`  a command line, its environment, and the gate they pass
+ * - `command.ts`  a command line and its environment
  * - `setup.ts`    `[setup]` — filling a new worktree in
  * - `teardown.ts` `[teardown]` — what to stop before the directory goes
  * - `open.ts`     `open` — the one hook whose subject is a person
@@ -31,9 +29,8 @@
  */
 
 export { appliedFingerprints, clearApplied, isStale } from "./applied.ts";
-export { commandEnvFor, failureFor, type HookTarget, pendingCommands } from "./command.ts";
+export { commandEnvFor, failureFor, type HookTarget } from "./command.ts";
 export { HOOKS_FILE, type Hooks, readHooks } from "./config.ts";
-export { type PendingOpen, pendingOpen } from "./open.ts";
-export { describeSetup, runSetup, type SetupResult, trustAndRun } from "./setup.ts";
+export { describeSetup, runSetup, type SetupResult } from "./setup.ts";
 export { repoHooks } from "./source.ts";
 export { runTeardown, type TeardownResult } from "./teardown.ts";

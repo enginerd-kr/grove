@@ -3,7 +3,8 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ExitCode } from "../../cli/exit-codes.ts";
 import { runCli } from "../../cli/test-cli.ts";
-import { withTempRepo } from "../test-utils.ts";
+import type { SetupResult } from "../../hooks/index.ts";
+import { managedRepo, seedGit, withTempRepo } from "../test-utils.ts";
 
 /**
  * `grove clone` through the real binary.
@@ -29,9 +30,45 @@ type CloneJson = {
   readonly defaultBranch: string;
   readonly branch: string;
   readonly worktree: string;
+  readonly setup?: readonly SetupResult[];
 };
 
 describe("grove clone", () => {
+  test.each(["automatic", "failed", "skipped"])(
+    "%s setup is reported through the CLI without approval",
+    async (mode) => {
+      await withTempRepo(async (temp) => {
+        const source = await managedRepo(temp);
+        const main = join(source.root, "main");
+        const command = "echo setup >> ran.txt";
+        const commands = mode === "automatic" ? [command] : [command, "exit 3"];
+        await Bun.write(join(main, ".grove.toml"), `[setup]\nrun = ${JSON.stringify(commands)}\n`);
+        await seedGit(main, ["add", ".grove.toml"]);
+        await seedGit(main, ["commit", "-m", "Configure setup"]);
+        await seedGit(main, ["push"]);
+
+        const result = await runCli(
+          ["clone", temp.originUrl, "app", "--json", ...(mode === "skipped" ? ["--no-setup"] : [])],
+          { cwd: temp.work },
+        );
+        expect(result.exitCode).toBe(mode === "failed" ? ExitCode.setupFailed : ExitCode.ok);
+        expect(result.stderr).not.toContain("--trust");
+        expect(result.stderr).not.toContain("[y/N]");
+        const cloned = JSON.parse(result.stdout) as CloneJson;
+        expect(await Bun.file(join(cloned.worktree, ".grove.toml")).exists()).toBe(true);
+        if (mode === "skipped") {
+          expect(cloned.setup).toBeUndefined();
+          expect(await Bun.file(join(cloned.worktree, "ran.txt")).exists()).toBe(false);
+        } else {
+          expect(cloned.setup?.[0]?.ran).toEqual([command]);
+          expect(cloned.setup?.[0]?.failed?.code).toBe(mode === "failed" ? 3 : undefined);
+          expect(await Bun.file(join(cloned.worktree, "ran.txt")).text()).toBe("setup\n");
+        }
+      });
+    },
+    60_000,
+  );
+
   test("the row on stdout is the worktree and its branch, tab separated", async () => {
     await withTempRepo(async (temp) => {
       const named = await runCli(["clone", temp.originUrl, "app"], { cwd: temp.work });

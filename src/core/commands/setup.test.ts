@@ -31,11 +31,11 @@ import { failureFor, setUpWorktrees } from "./setup.ts";
 
 function attemptSetup(
   repo: RepoPaths,
-  options: { target?: string; all?: boolean; trust?: boolean } = {},
+  options: { target?: string; all?: boolean } = {},
 ): Promise<Attempt<readonly SetupResult[]>> {
-  const { target, all = false, trust = false } = options;
+  const { target, all = false } = options;
 
-  return attempt((reporter) => setUpWorktrees(repo, repo.root, { target, all, trust }, reporter));
+  return attempt((reporter) => setUpWorktrees(repo, repo.root, { target, all }, reporter));
 }
 
 /** The trunk's file, which is the one that governs every worktree. */
@@ -110,7 +110,7 @@ describe("grove setup", () => {
       await seedWorktree(repo, "feat/login");
       await configure(repo, '[setup]\nopen = "true"\n');
 
-      const run = await attemptSetup(repo, { target: "feat/login", trust: true });
+      const run = await attemptSetup(repo, { target: "feat/login" });
       const results = succeeded(run);
 
       // Not refused and not reported — an `--all` over eleven worktrees would
@@ -121,26 +121,18 @@ describe("grove setup", () => {
     });
   });
 
-  test("holds the commands back until --trust, and then runs them", async () => {
+  test("runs committed setup commands immediately", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
       await seedWorktree(repo, "feat/login");
       const worktree = join(repo.root, "feat", "login");
       await configure(repo, '[setup]\nrun = ["touch installed"]\n');
 
-      // Committed, because that is what the gate is about: a `run` line waits
-      // for `--trust` when a `git pull` could have written it, and an untracked
-      // file of your own is not one of those.
       const trunk = join(repo.root, "main");
       await seedGit(trunk, ["add", "-A"]);
       await seedGit(trunk, ["-c", "commit.gpgsign=false", "commit", "-m", "Add .grove.toml"]);
 
-      const held = succeeded(await attemptSetup(repo, { target: "feat/login" }));
-      expect(held[0]?.untrusted).toBe(true);
-      expect(held[0]?.ran).toEqual([]);
-      expect(await Bun.file(join(worktree, "installed")).exists()).toBe(false);
-
-      const run = succeeded(await attemptSetup(repo, { target: "feat/login", trust: true }));
+      const run = succeeded(await attemptSetup(repo, { target: "feat/login" }));
       expect(run[0]?.ran).toEqual(["touch installed"]);
       expect(await Bun.file(join(worktree, "installed")).exists()).toBe(true);
     });
@@ -152,7 +144,7 @@ describe("grove setup", () => {
       await seedWorktree(repo, "feat/login");
       await configure(repo, '[setup]\nrun = ["exit 3"]\n');
 
-      const results = succeeded(await attemptSetup(repo, { all: true, trust: true }));
+      const results = succeeded(await attemptSetup(repo, { all: true }));
       const failure = failureFor(results);
 
       // Every worktree still had its turn — the run is not abandoned at the
@@ -171,9 +163,7 @@ describe("grove setup", () => {
       // The repository root is not a worktree in a managed layout, which is
       // exactly where somebody types this by mistake.
       const error = refused(
-        await attempt((reporter) =>
-          setUpWorktrees(repo, repo.root, { all: false, trust: false }, reporter),
-        ),
+        await attempt((reporter) => setUpWorktrees(repo, repo.root, { all: false }, reporter)),
       );
 
       expect(error.code).toBe("usage");

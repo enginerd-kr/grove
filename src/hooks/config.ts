@@ -1,9 +1,9 @@
 import { homedir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { basename, join } from "node:path";
 import { GroveError } from "../core/errors.ts";
 import { runGit } from "../core/git.ts";
 import { BARE_DIR } from "../core/layout.ts";
-import { fingerprintOf } from "./trust.ts";
+import { fingerprintOf } from "./fingerprint.ts";
 
 /**
  * `.grove.toml` — how a repository says what it wants done around a worktree.
@@ -27,13 +27,6 @@ import { fingerprintOf } from "./trust.ts";
  * This module is the file and nothing else: what it says, where it is read
  * from, and what each key is refused for. Doing what it says belongs to the
  * hooks beside it — see `index.ts` for why they are their own package.
- *
- * The cost of travelling is `run`: a `git pull` can now hand you a command that
- * executes on your machine. So `copy` and `link` apply on sight — they move
- * files that are already on your disk, inside a directory you asked to be
- * created — and `run` does not, until `--trust` says so. See `trust.ts`: the
- * record is a fingerprint of these exact contents, kept in the bare
- * repository's config, so an edit withdraws it.
  *
  * `copy` takes a directory as readily as a file — `certs` above. A file already
  * in the worktree is overwritten with the trunk's copy, and a directory the
@@ -110,10 +103,6 @@ export const HOOKS_FILE = ".grove.toml";
  * no. `run = []` is the project's install turned off on this machine, in a line
  * somebody can read, without an edit to a file that would be pushed.
  *
- * It is not gated on `--trust`, because trust answers a question this file does
- * not raise: a `run` line is dangerous when a `git pull` can change it, and
- * nothing pulls this. The exception is the repository that commits one anyway —
- * see `gatedLayer`, which asks git rather than taking the name's word for it.
  */
 export const LOCAL_HOOKS_FILE = ".grove.local.toml";
 
@@ -219,7 +208,7 @@ export function wantsOpen(open: OpenHook): boolean {
  * The `open` line for the platform this is running on, or `""`.
  *
  * The platform is read once, here, so that every question about `open` — what
- * is pending, what the trust gate counts, what actually starts — is answering
+ * is configured and what actually starts — is answering
  * about the same line. A file that names only `macos` gives a Linux machine
  * nothing, which is "nothing to open" and not an error.
  */
@@ -273,48 +262,32 @@ export type Hooks = {
    * Kept for one question: whether the file asked for anything. A file whose
    * every line is for Windows has, on a Mac, nothing to do — and "nothing to
    * do" is a different answer from "no file at all", which is what a count of
-   * zero would otherwise read as. See `plannedCount`. Not in `GatedCounts`,
-   * because those lines never run here and there is nothing for trust to hold
-   * back; `[teardown]` is left out as `plannedCount` leaves it out.
+   * zero would otherwise read as. See `plannedCount`.
    */
   readonly elsewhere: number;
   /**
    * `[teardown]`, carried on the same record.
    *
-   * One read of one file, because it is one file: `trust` records the whole of
-   * its contents and both sections answer to that record, so splitting them
-   * into two plans would mean two reads that could disagree about which
-   * version of the file they were reading.
+   * Both sections come from the same read of the configuration.
    */
   readonly teardown: TeardownHook;
   /**
    * The files this was read from, lowest priority first.
    *
-   * Kept rather than thrown away after the merge, because two questions later
-   * on can only be answered by the layer a line came from: which files the
-   * trust record covers, and which file to name when telling somebody to go
-   * and read one.
+   * Used to report command sources and detect changes since setup.
    */
   readonly layers: readonly HookLayer[];
   /** Which of the list keys above this spoke for. See `Said` and `mergeHooks`. */
   readonly said: Said;
-  /** How much of the above came from a file git could hand you. See `GatedCounts`. */
-  readonly gated: GatedCounts;
-  /** The gated layers' contents, hashed — what `trust` records and compares. */
+  /** Hash of the project layers, used to detect stale setup. */
   readonly fingerprint?: string;
 };
 
-/**
- * One file that was read, and whether trust has anything to say about it.
- *
- * `gated` is the whole of the security story for layering: a `run` line waits
- * for `--trust` when a `git pull` could have written it, and does not when it
- * could not. See `gatedLayer` for how that question is put to git.
- */
+/** One configuration source, retained for reporting and setup fingerprints. */
 export type HookLayer = {
   readonly path: string;
-  readonly gated: boolean;
-  /** The file as it was read, for the fingerprint the gated ones are keyed on. */
+  /** Whether this layer contributes to the project setup fingerprint. */
+  readonly tracked: boolean;
   readonly text: string;
 };
 
@@ -342,47 +315,7 @@ export type Said = {
 
 export const SAID_NOTHING: Said = { copy: false, link: false, run: false, teardown: false };
 
-/**
- * How much of a merged file came from a layer that answers to `--trust`.
- *
- * Counted per section, and per platform for `open`, because that is the
- * precision the gate needs: a `.grove.toml` that only copies files has nothing
- * for trust to hold back, and holding back the `run` line your own
- * `.grove.local.toml` wrote in its place would be asking you to agree to your
- * own file. Zero here means the gate is not in the way at all.
- *
- * `commands` counts the platform's own lines and nothing written for another:
- * a `[setup.run] windows = […]` in a tracked file is not held back on a Mac,
- * and is not offered there either, because it will not run there. The same
- * rule `open` already follows, one slot at a time.
- */
-export type GatedCounts = {
-  readonly commands: number;
-  readonly teardown: number;
-  /** Per platform, because `open` merges per platform — see `mergeHooks`. */
-  readonly open: Readonly<Record<PlatformKey, boolean>>;
-};
-
-export const NOTHING_GATED: GatedCounts = {
-  commands: 0,
-  teardown: 0,
-  open: mapPlatforms(() => false),
-};
-
-/** Whether the `open` line that would actually run came from a gated layer. */
-export function openGatedHere(hooks: Hooks, platform: NodeJS.Platform = process.platform): boolean {
-  return hooks.gated.open[platformKeyFor(platform)];
-}
-
-/**
- * Every file that was read, by the name it is written as.
- *
- * `governingFiles`'s counterpart, and the difference is the subject: that one
- * answers "what do I have to read before this will run", which only a gated
- * file can be the answer to, and this one answers "where was this decided",
- * which any layer can be. Bare names, because the sentence it feeds is about
- * the configuration and not about a file to go and open.
- */
+/** Names of the configuration files that contributed to this setup. */
 export function configuredFiles(hooks: Hooks): readonly string[] {
   return hooks.layers.length === 0
     ? [HOOKS_FILE]
@@ -406,29 +339,6 @@ export function namesSources(hooks: Hooks): boolean {
   return hooks.layers.length > 1;
 }
 
-/**
- * The gated files, as paths somebody can open.
- *
- * Relative to the repository root, so the answer is `main/.grove.toml` and not
- * `.grove.toml`: the sentence this feeds says "go and read this", and there is
- * a copy of that name in every worktree, only one of which governs.
- *
- * An ungated layer is left out on purpose — there is nothing to go and read in
- * a file you wrote yourself — and a gated one is inside the repository by
- * construction, which is why the relative path is the readable spelling.
- */
-export function governingFiles(hooks: Hooks, root: string): readonly string[] {
-  const gated = hooks.layers
-    .filter((layer) => layer.gated)
-    .map((layer) => {
-      const rel = relative(root, layer.path);
-
-      return rel === "" || rel.startsWith("..") ? basename(layer.path) : rel;
-    });
-
-  return gated.length === 0 ? [HOOKS_FILE] : gated;
-}
-
 export const NO_TEARDOWN: TeardownHook = { env: [], commands: [] };
 
 export const NO_HOOKS: Hooks = {
@@ -441,7 +351,6 @@ export const NO_HOOKS: Hooks = {
   teardown: NO_TEARDOWN,
   layers: [],
   said: SAID_NOTHING,
-  gated: NOTHING_GATED,
 };
 
 /** How much of the file asked for something. Zero means there is nothing to do. */
@@ -808,7 +717,7 @@ function envAt(
  * Read for one platform, which is the one this is running on unless a caller
  * says otherwise. The lists come back already decided — see `Hooks.copy` — and
  * the platform is taken here, once, so that every question downstream about
- * what is copied, what waits for trust, and what runs is about the same lines.
+ * what is copied and what runs is about the same lines.
  */
 export function parseHooks(
   text: string,
@@ -859,9 +768,7 @@ export function parseHooks(
       env: envAt(file, "teardown", teardown, platform),
       commands: wrote(leaving.here),
     },
-    // What was read, and not where from: a text alone has no path and answers
-    // to no trust record. `readLayer` is what knows both, and it is the only
-    // caller that can say either honestly.
+    // The parser has no source path; readLayer supplies it.
     layers: [],
     said: {
       copy: copy.saysHere,
@@ -869,7 +776,6 @@ export function parseHooks(
       run: run.saysHere,
       teardown: leaving.saysHere,
     },
-    gated: NOTHING_GATED,
   };
 }
 
@@ -898,16 +804,10 @@ function tableAt(
   return section;
 }
 
-/**
- * One file, parsed, and told what trust has to say about it.
- *
- * A file that is not there is `undefined` and not `NO_HOOKS`: the difference
- * matters one level up, where a layer that exists and asks for nothing is still
- * a layer whose contents the trust record covers.
- */
+/** Read one source without losing an explicitly empty configuration layer. */
 async function readLayer(
   path: string,
-  gated: boolean,
+  tracked: boolean,
   platform?: NodeJS.Platform,
 ): Promise<Hooks | undefined> {
   const file = Bun.file(path);
@@ -915,18 +815,7 @@ async function readLayer(
 
   const text = await file.text();
   const hooks = parseHooks(text, basename(path), platform);
-
-  return {
-    ...hooks,
-    layers: [{ path, gated, text }],
-    gated: gated
-      ? {
-          commands: hooks.commands.length,
-          teardown: hooks.teardown.commands.length,
-          open: mapPlatforms((target) => hooks.open[target] !== ""),
-        }
-      : NOTHING_GATED,
-  };
+  return { ...hooks, layers: [{ path, tracked, text }] };
 }
 
 /** The same answer for each platform, which is what half the merging here is. */
@@ -937,19 +826,8 @@ function mapPlatforms<T>(of: (target: PlatformKey) => T): Readonly<Record<Platfo
   >;
 }
 
-/**
- * Whether git tracks a file, which is whether a pull could have written it.
- *
- * The question the trust gate actually wants asked. `.grove.local.toml` is not
- * gated because nothing pushes it — but that is a claim about your repository,
- * not about the name, and a project that commits one has made it false. So it
- * is put to git rather than assumed, once, when the file turns up.
- *
- * A repository that cannot answer — no index, a worktree that has gone —
- * counts as tracked. The costly direction is the one that runs a command
- * nobody agreed to, and "ask again after `--trust`" is the cheap one.
- */
-async function gatedLayer(worktree: string, name: string): Promise<boolean> {
+/** Include a committed local layer in the project setup fingerprint. */
+async function trackedLayer(worktree: string, name: string): Promise<boolean> {
   const result = await runGit(["ls-files", "--error-unmatch", "--", name], { cwd: worktree });
 
   return result.code === 0 || result.code > 1;
@@ -1008,39 +886,17 @@ export function mergeHooks(base: Hooks, over: Hooks): Hooks {
       run: base.said.run || over.said.run,
       teardown: base.said.teardown || over.said.teardown,
     },
-    gated: {
-      // The lines that would run are the ones whose gating counts, so each of
-      // these follows the key above it exactly: whoever supplied the list
-      // supplied the answer, and a list that was replaced is not held back by a
-      // trust record about the file it is no longer read from.
-      commands: over.said.run ? over.gated.commands : base.gated.commands,
-      teardown: over.said.teardown ? over.gated.teardown : base.gated.teardown,
-      open: mapPlatforms((target) =>
-        takes(target) ? over.gated.open[target] : base.gated.open[target],
-      ),
-    },
   };
 }
 
-/**
- * What `trust` records, once there can be more than one file to record.
- *
- * Only the gated layers, because they are the only ones the record is about —
- * and a change to your own `.grove.local.toml` withdrawing the agreement you
- * gave to the project's file would be a question asked for no reason.
- *
- * One gated layer hashes its own text and nothing else, which is what this did
- * before layers existed. That is deliberate: every repository already carrying a
- * trust record has exactly one, and a fingerprint that changed shape would ask
- * every one of them to agree again to a file they have not touched.
- */
+/** Preserve the project fingerprint format used by existing setup records. */
 function fingerprintOfLayers(layers: readonly HookLayer[]): string | undefined {
-  const gated = layers.filter((layer) => layer.gated);
-  const first = gated[0];
+  const tracked = layers.filter((layer) => layer.tracked);
+  const first = tracked[0];
   if (first === undefined) return undefined;
-  if (gated.length === 1) return fingerprintOf(first.text);
+  if (tracked.length === 1) return fingerprintOf(first.text);
 
-  return fingerprintOf(gated.map((layer) => `${basename(layer.path)}\0${layer.text}`).join("\0"));
+  return fingerprintOf(tracked.map((layer) => `${basename(layer.path)}\0${layer.text}`).join("\0"));
 }
 
 /**
@@ -1103,7 +959,7 @@ export async function readHooks(worktree: string, options: HooksOptions = {}): P
     // Asked of git only once there is a file to ask about: the tracked check is
     // a process, and the repository that has no local layer is every repository.
     (await Bun.file(local).exists())
-      ? await readLayer(local, await gatedLayer(worktree, LOCAL_HOOKS_FILE), options.platform)
+      ? await readLayer(local, await trackedLayer(worktree, LOCAL_HOOKS_FILE), options.platform)
       : undefined,
   ].filter((layer): layer is Hooks => layer !== undefined);
 

@@ -1,11 +1,4 @@
-import {
-  type Hooks,
-  failureFor as hookFailure,
-  repoHooks,
-  runSetup,
-  type SetupResult,
-  trustAndRun,
-} from "../../hooks/index.ts";
+import { failureFor as hookFailure, runSetup, type SetupResult } from "../../hooks/index.ts";
 import { type ConfigSource, setConfigSource } from "../../hooks/source.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import { GroveError } from "../errors.ts";
@@ -43,8 +36,6 @@ export type SetupCommandOptions = {
   /** Which worktree. Omitted, and without `--all`, means the one you are standing in. */
   readonly target?: string;
   readonly all: boolean;
-  /** Record the file's commands as read, and run them. See `AddOptions.trust`. */
-  readonly trust: boolean;
 };
 
 export async function setUpWorktrees(
@@ -61,31 +52,17 @@ export async function setUpWorktrees(
     if (options.configSource !== undefined && record.branch !== undefined) {
       await setConfigSource(repo, record.branch, options.configSource);
     }
-    const hooks = options.trust ? undefined : await repoHooks(repo, record.path);
-    results.push(await setUpOne(repo, record, hooks, reporter));
+    results.push(
+      await runSetup(
+        repo,
+        { path: record.path, branch: record.branch },
+        { opens: false },
+        reporter,
+      ),
+    );
   }
 
   return results;
-}
-
-/**
- * One worktree, filled in — and the `--trust` decision, read off `hooks`.
- *
- * Absent is what `--trust` left behind above, and it means "read the file for
- * yourself, having first recorded it as read". Present is the copy every
- * worktree in this run shares.
- */
-async function setUpOne(
-  repo: RepoPaths,
-  record: WorktreeRecord,
-  hooks: Hooks | undefined,
-  reporter: Reporter,
-): Promise<SetupResult> {
-  const target = { path: record.path, branch: record.branch };
-
-  return hooks === undefined
-    ? trustAndRun(repo, target, reporter, { opens: false })
-    : runSetup(repo, target, { hooks, opens: false }, reporter);
 }
 
 /**
@@ -117,10 +94,7 @@ function chooseTargets(
 /**
  * Turns the results into the one exit code the shell sees.
  *
- * A command that failed is the only failure here. Untrusted is not one: the
- * files still landed, and what did not run is waiting on somebody having read
- * the file rather than on anything going wrong — the same line `add` draws, and
- * the warning has already been printed by the time this is asked.
+ * A command that failed determines the exit code after results are reported.
  *
  * Reported after every worktree has had its turn, the way `sync --all` does it.
  */

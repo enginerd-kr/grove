@@ -8,12 +8,11 @@ import { plural } from "../core/text.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
 import { clearApplied, recordApplied } from "./applied.ts";
-import { type HookFailure, type HookTarget, runCommands, setupGate } from "./command.ts";
+import { type HookFailure, type HookTarget, runCommands } from "./command.ts";
 import { configuredFiles, HOOKS_FILE, type Hooks, plannedCount, platformKeyFor } from "./config.ts";
 import { openWhatItAsksFor } from "./open.ts";
 import { repoHooks, sourceWorktree } from "./source.ts";
 import { recordSetupState, setupFingerprint } from "./state.ts";
-import { trust } from "./trust.ts";
 
 /**
  * `[setup]` — making a new worktree one you can actually work in.
@@ -82,35 +81,7 @@ export type SetupResult = {
   readonly overwritten: readonly string[];
   /** Set when a command exited non-zero. The ones after it were not run. */
   readonly failed?: HookFailure;
-  /**
-   * True when there were commands and this machine has not trusted the file.
-   *
-   * Not a failure — the copies and links still happened, and what did not is
-   * waiting on somebody having read the file rather than on anything going
-   * wrong. The caller says so and offers `--trust`.
-   */
-  readonly untrusted: boolean;
 };
-
-/**
- * Records the file as read, and then does what it says.
- *
- * The only way commands ever run: `--trust` on the command line, or `y` to the
- * screen's question. Both land here, and both record the same fingerprint, so
- * answering in one place answers for the other.
- */
-export async function trustAndRun(
-  repo: RepoPaths,
-  target: HookTarget,
-  reporter: Reporter,
-  /** Everything but `hooks`, which this reads for itself once trust is recorded. */
-  options: Omit<SetupOptions, "hooks"> = {},
-): Promise<SetupResult> {
-  const hooks = await repoHooks(repo, target.path);
-  if (hooks.fingerprint !== undefined) await trust(repo.gitDir, hooks.fingerprint);
-
-  return runSetup(repo, target, { ...options, hooks }, reporter);
-}
 
 /** In words, for the line a command prints when it is done. */
 export function describeSetup(result: SetupResult): string {
@@ -125,7 +96,6 @@ export function describeSetup(result: SetupResult): string {
   // put together. The line itself was printed when it started.
   if (result.opened !== undefined) parts.push("opened");
   if (result.kept.length > 0) parts.push(`${result.kept.length} kept`);
-  if (result.untrusted) parts.push("commands not trusted");
   if (parts.length === 0) return result.planned === 0 ? `no ${HOOKS_FILE}` : "nothing to do";
 
   return parts.join(", ");
@@ -253,7 +223,7 @@ async function leadsTo(path: string): Promise<string> {
  * `checkedPath` vets the string a config file wrote; this vets what it
  * reaches. A repository can commit `certs -> /Users/you/.ssh` and then ask for
  * `certs/id_rsa` in a value with no `..` anywhere in it — and `copy` and `link`
- * apply on sight, without `--trust`, so a `git pull` would be the whole of it,
+ * apply automatically, so a `git pull` would be the whole of it,
  * with the key landing as an untracked change in a worktree somebody is about
  * to commit from. Both halves are needed: the string check catches the value
  * nobody meant, this one catches the value somebody meant.
@@ -410,11 +380,8 @@ async function applySetup(
   const missing: string[] = [];
   const kept: string[] = [];
 
-  // A file that asks for nothing falls straight through: nothing to take, no trust to ask
-  // about, no commands to run. No file is the common case, and it costs one
-  // `stat` and not one line of output — a tool that announced "nothing to set
-  // up" after every `add` would have made the screen worse for everybody who
-  // never asked for this.
+  // No configuration is common. Keep that case silent instead of announcing
+  // "nothing to set up" after every add.
   const wanted = [
     ...hooks.copy.map((path) => ({ kind: "copy" as const, path })),
     ...hooks.link.map((path) => ({ kind: "link" as const, path })),
@@ -502,15 +469,7 @@ async function applySetup(
     }
   }
 
-  const { ran, failed, untrusted } = await runCommands(
-    repo,
-    target,
-    hooks,
-    hooks,
-    { noun: "command", tail: "read it, then add with --trust" },
-    reporter,
-    setupGate(hooks),
-  );
+  const { ran, failed } = await runCommands(repo, target, hooks, hooks, reporter);
 
   const opened =
     options.opens === false
@@ -519,18 +478,15 @@ async function applySetup(
           repo,
           target,
           hooks,
-          { untrusted, failed, allowed: options.open !== false },
+          { failed, allowed: options.open !== false },
           reporter,
         );
 
-  // Written down only when the whole file has been applied: commands held
-  // back for trust, or one that failed, leave the worktree filled in from the
-  // version it was already filled in from — so the record stays, and the
-  // badge that says "set this up again" stays with it. A project with no
-  // tracked file has nothing to be stale against, and forgets. See `applied.ts`.
+  // Keep the previous fingerprint when a command fails, so a stale setup
+  // remains visible until a later run succeeds.
   if (target.branch !== undefined) {
     if (hooks.fingerprint === undefined) await clearApplied(repo.gitDir, target.branch);
-    else if (!untrusted && failed === undefined) {
+    else if (failed === undefined) {
       await recordApplied(repo.gitDir, target.branch, hooks.fingerprint);
     }
   }
@@ -547,7 +503,6 @@ async function applySetup(
     kept,
     overwritten,
     failed,
-    untrusted,
   };
 }
 
@@ -563,11 +518,7 @@ export async function runSetup(
     const hooks = options.hooks ?? (await repoHooks(repo, target.path));
     const fingerprint = await setupFingerprint(hooks, target.path);
     const result = await applySetup(repo, target, { ...options, hooks }, reporter);
-    const state = result.failed
-      ? "failed"
-      : result.untrusted || result.missing.length > 0
-        ? "pending"
-        : "ready";
+    const state = result.failed ? "failed" : result.missing.length > 0 ? "pending" : "ready";
     if (target.branch) await recordSetupState(repo.gitDir, target.branch, state, fingerprint);
     return result;
   } catch (error) {

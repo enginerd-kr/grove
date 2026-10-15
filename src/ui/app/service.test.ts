@@ -716,7 +716,7 @@ describe("createWorktreeService", () => {
   );
 
   test(
-    "the commands a new worktree was denied are offered, and running them trusts the file for good",
+    "new worktrees run setup automatically through the service and core command",
     async () => {
       await withTempRepo(async (temp) => {
         const paths = await managedRepo(temp);
@@ -729,30 +729,13 @@ describe("createWorktreeService", () => {
           '[setup]\nrun = ["echo ran > ran.txt"]\n',
         );
 
-        // Making the worktree does not run it: `add` passes `trust: false`,
-        // exactly like the command line without `--trust`.
         expect(await service.add("feat/login")).toStartWith("added feat/login (remote)");
-        expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(false);
-        expect(log.warnings.join("\n")).toContain("not been trusted");
-
-        // What the app asks straight afterwards, and what it puts the question on.
-        expect(await service.pendingCommands()).toEqual(["echo ran > ran.txt"]);
-
-        // Using the screen is the consent, so `y` runs them — reported as a
-        // step while it runs, and answered with what was done and where.
-        expect(await service.trustAndRun("feat/login")).toBe("1 run in feat/login");
+        expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(true);
+        expect(log.warnings.join("\n")).not.toContain("not been trusted");
         expect(log.steps).toContain("running echo ran > ran.txt");
         expect(log.succeeded).toContain("ran echo ran > ran.txt");
-        expect(await pathExists(join(root, "feat", "login", "ran.txt"))).toBe(true);
+        expect(await service.setup("feat/login")).toBe("1 run in feat/login");
 
-        // Trusted now, so nothing is left to ask about.
-        expect(await service.pendingCommands()).toEqual([]);
-
-        // The same record `--trust` writes: the command line stops asking too,
-        // and a worktree it makes runs the commands without being told again.
-        // `addWorktree` with these options *is* `grove add chore/tidy` — the
-        // trust is in a file on disk, so it does not matter which of the two
-        // entry points reads it, only that both read the same one.
         await addWorktree(
           paths,
           root,
@@ -762,7 +745,7 @@ describe("createWorktreeService", () => {
             fetch: true,
             push: false,
             setup: true,
-            trust: false,
+
             take: false,
           },
           recorder().reporter,
@@ -775,7 +758,7 @@ describe("createWorktreeService", () => {
   );
 
   test(
-    "an edit to the file withdraws the trust, and a command that fails is raised with what it said",
+    "edited setup runs and command failures are raised with their output",
     async () => {
       await withTempRepo(async (temp) => {
         const paths = await managedRepo(temp);
@@ -785,14 +768,10 @@ describe("createWorktreeService", () => {
 
         await Bun.write(file, '[setup]\nrun = ["echo ran > ran.txt"]\n');
         await service.add("feat/login");
-        await service.trustAndRun("feat/login");
 
-        // Trust is of the contents, so a pull that changes them asks again.
         await Bun.write(file, '[setup]\nrun = ["echo ran > ran.txt", "exit 3"]\n');
 
-        expect(await service.pendingCommands()).toEqual(["echo ran > ran.txt", "exit 3"]);
-
-        const failure = await refusalFrom(service.trustAndRun("feat/login"));
+        const failure = await refusalFrom(service.setup("feat/login"));
 
         expect(failure.code).toBe("setup-failed");
         expect(failure.message).toBe('"exit 3" exited 3');
@@ -804,25 +783,22 @@ describe("createWorktreeService", () => {
   );
 
   test(
-    "an ordinary repository has nothing pending and nothing to run",
+    "an ordinary repository has nothing to run",
     async () => {
       await withTempRepo(async (temp) => {
         const paths = await managedRepo(temp);
         const { service } = serviceAt(paths);
 
-        expect(await service.pendingCommands()).toEqual([]);
-
         await service.add("feat/login");
 
-        expect(await service.pendingCommands()).toEqual([]);
-        expect(await service.trustAndRun("feat/login")).toBe("no .grove.toml in feat/login");
+        expect(await service.setup("feat/login")).toBe("no .grove.toml in feat/login");
       });
     },
     SLOW,
   );
 
   test(
-    "the open line waits for the same answer, and the screen is where it is given",
+    "the open command launches the configured program immediately",
     async () => {
       await withTempRepo(async (temp) => {
         const paths = await managedRepo(temp);
@@ -831,32 +807,11 @@ describe("createWorktreeService", () => {
 
         // `touch` stands in for an editor: grove lets go of the line it starts,
         // so a file turning up is all there is to look at.
-        await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nopen = "touch opened.txt"\n');
         await service.add("feat/login");
+        await Bun.write(join(root, "main", ".grove.toml"), '[setup]\nopen = "touch opened.txt"\n');
 
-        // What `/open` reads before it decides whether to ask: the exact line,
-        // and the file to go and read it in.
-        expect(await service.pendingOpen("feat/login")).toEqual({
-          command: "touch opened.txt",
-          files: ["main/.grove.toml"],
-        });
-
-        // Unanswered, it is the refusal the command line gives.
-        expect(await service.open("feat/login")).toBe(
-          "feat/login has an open line nobody has read here",
-        );
-        expect(await pathExists(join(root, "feat", "login", "opened.txt"))).toBe(false);
-
-        // `y`, which is `--trust`: the line runs.
-        expect(await service.open("feat/login", true)).toBe(
-          "opened feat/login with touch opened.txt",
-        );
+        expect(await service.open("feat/login")).toBe("opened feat/login with touch opened.txt");
         expect(await waitForEntry(join(root, "feat", "login", "opened.txt"))).toBe(true);
-
-        // One record for the whole file, so nothing is left to ask about — from
-        // this key or from the one that runs the setup commands.
-        expect(await service.pendingOpen("feat/login")).toBeUndefined();
-        expect(await service.pendingCommands()).toEqual([]);
       });
     },
     SLOW,
@@ -983,7 +938,7 @@ describe("createSetupService", () => {
   );
 
   test(
-    "a clone whose file wants to run something says so and runs none of it",
+    "a clone runs its configured setup before returning",
     async () => {
       await withTempRepo(async (temp) => {
         scratchCount += 1;
@@ -1000,16 +955,8 @@ describe("createSetupService", () => {
           temp.originUrl,
         );
 
-        // The worst moment there has ever been to run a command is ten seconds
-        // after downloading it, so the clone names it and leaves it.
-        expect(log.warnings.join("\n")).toContain("wants to run");
-        expect(await pathExists(join(paths.root, "main", "ran.txt"))).toBe(false);
-
-        // It is waiting on the screen instead, which is where the question gets
-        // asked with the file in front of you.
-        const { service } = serviceAt(paths);
-
-        expect(await service.pendingCommands()).toEqual(["echo ran > ran.txt"]);
+        expect(log.succeeded).toContain("ran echo ran > ran.txt");
+        expect(await Bun.file(join(paths.root, "main", "ran.txt")).text()).toBe("ran\n");
       });
     },
     SLOW,

@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { repoHooks } from "../../hooks/source.ts";
 import { waitForEntry } from "../../hooks/test-utils.ts";
-import { trust } from "../../hooks/trust.ts";
+
 import {
   attempt,
   managedRepo,
@@ -52,13 +51,12 @@ describe("openWorktree", () => {
       const result = await openWorktree(
         repo,
         repo.root,
-        { target: "feat/login", trust: true, open: true },
+        { target: "feat/login", open: true },
         log.reporter,
       );
 
       expect(result.dir).toBe("feat/login");
       expect(result.opened).toBe("touch opened.txt");
-      expect(result.untrusted).toBe(false);
       // The line runs in the worktree, so `.` there is the worktree.
       expect(await waitForEntry(join(worktree, "opened.txt"))).toBe(true);
     });
@@ -70,7 +68,7 @@ describe("openWorktree", () => {
       await Bun.write(join(inside, "keep.txt"), "");
 
       const log = recorder();
-      const result = await openWorktree(repo, inside, { trust: true, open: true }, log.reporter);
+      const result = await openWorktree(repo, inside, { open: true }, log.reporter);
 
       expect(result.dir).toBe("feat/login");
       expect(await waitForEntry(join(worktree, "opened.txt"))).toBe(true);
@@ -80,9 +78,7 @@ describe("openWorktree", () => {
   test("the repository root is in no worktree, and the refusal lists the ones there are", async () => {
     await withOpener('"touch opened.txt"', async ({ repo }) => {
       const error = refused(
-        await attempt((reporter) =>
-          openWorktree(repo, repo.root, { trust: true, open: true }, reporter),
-        ),
+        await attempt((reporter) => openWorktree(repo, repo.root, { open: true }, reporter)),
       );
 
       expect(error.code).toBe("usage");
@@ -98,7 +94,7 @@ describe("openWorktree", () => {
 
       const error = refused(
         await attempt((reporter) =>
-          openWorktree(repo, repo.root, { target: "main", trust: true, open: true }, reporter),
+          openWorktree(repo, repo.root, { target: "main", open: true }, reporter),
         ),
       );
 
@@ -108,64 +104,17 @@ describe("openWorktree", () => {
     });
   });
 
-  test("an untrusted line is not run, and the warning says where to read it", async () => {
-    await withOpener('"touch opened.txt"', async ({ repo, worktree }) => {
-      const log = recorder();
-      const result = await openWorktree(
-        repo,
-        repo.root,
-        { target: "feat/login", trust: false, open: true },
-        log.reporter,
-      );
-
-      expect(result.untrusted).toBe(true);
-      expect(result.opened).toBeUndefined();
-      expect(log.err.join("")).toContain("main/.grove.toml");
-      // Long enough to catch a launch that should not have happened.
-      await Bun.sleep(200);
-      expect(await Bun.file(join(worktree, "opened.txt")).exists()).toBe(false);
-    });
-  });
-
-  test("the trust it records is the one the commands answer to", async () => {
-    await withOpener('"touch opened.txt"', async ({ repo }) => {
-      const log = recorder();
-      await openWorktree(
-        repo,
-        repo.root,
-        { target: "feat/login", trust: true, open: true },
-        log.reporter,
-      );
-
-      // One record for the whole file, so agreeing here is agreeing for `add`.
-      const hooks = await repoHooks(repo);
-      expect(
-        await openWorktree(
-          repo,
-          repo.root,
-          { target: "feat/login", trust: false, open: true },
-          recorder().reporter,
-        ),
-      ).toMatchObject({ untrusted: false });
-      expect(hooks.fingerprint).toBeDefined();
-    });
-  });
-
   test("nowhere to open into is not a failure, and it says so", async () => {
     await withOpener('"touch opened.txt"', async ({ repo, worktree }) => {
-      const hooks = await repoHooks(repo);
-      await trust(repo.gitDir, hooks.fingerprint ?? "");
-
       const log = recorder();
       const result = await openWorktree(
         repo,
         repo.root,
-        { target: "feat/login", trust: false, open: false },
+        { target: "feat/login", open: false },
         log.reporter,
       );
 
       expect(result.opened).toBeUndefined();
-      expect(result.untrusted).toBe(false);
       expect(log.err.join("")).toContain("not a terminal");
       await Bun.sleep(200);
       expect(await Bun.file(join(worktree, "opened.txt")).exists()).toBe(false);

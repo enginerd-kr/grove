@@ -90,8 +90,6 @@ export type PrOptions = {
   readonly replace?: boolean;
   /** Copy, link and run whatever `.grove.toml` asks for. On by default. */
   readonly setup: boolean;
-  /** Record the trunk's `.grove.toml` commands as read, and run them. */
-  readonly trust: boolean;
   /** Whether `[setup] open` may start the app it names. See `AddOptions.open`. */
   readonly open?: boolean;
 };
@@ -923,7 +921,6 @@ export async function checkoutPullRequest(
       push: false,
       setup: options.setup,
       configSource: options.configSource,
-      trust: options.trust,
       open: options.open,
       take: false,
     },

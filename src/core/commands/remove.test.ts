@@ -77,21 +77,9 @@ async function commit(worktree: string, name: string): Promise<void> {
   await seedGit(worktree, ["-c", "commit.gpgsign=false", "commit", "-m", `Add ${name}`]);
 }
 
-/**
- * Records `.grove.toml`'s contents as trusted, the way `--trust` would.
- *
- * Written here rather than by running `grove add --trust` so the fixture says
- * what it means: teardown commands run only for a fingerprint git config has
- * seen, and that is the whole of the precondition.
- */
-async function trustSetupFile(repo: RepoPaths, contents: string): Promise<void> {
+/** Configure cleanup without creating any approval record. */
+async function configureSetupFile(repo: RepoPaths, contents: string): Promise<void> {
   await Bun.write(join(repo.root, "main", ".grove.toml"), contents);
-  await seedGit(repo.gitDir, [
-    "config",
-    "--replace-all",
-    "grove.trusted",
-    Bun.SHA256.hash(contents, "hex"),
-  ]);
 }
 
 describe("grove remove", () => {
@@ -151,7 +139,7 @@ describe("grove remove", () => {
         unpushedWarning: undefined,
         // `[teardown]` ran, in the sense that it was asked and had nothing to
         // do: no `.grove.toml` in the trunk means an empty plan, not a skip.
-        teardown: { dir: "fix/bug-7", planned: 0, ran: [], failed: undefined, untrusted: false },
+        teardown: { dir: "fix/bug-7", planned: 0, ran: [], failed: undefined },
       });
 
       const byDir = succeeded(await attemptRemove(repo, "chore/tidy-up"));
@@ -379,7 +367,7 @@ describe("grove remove", () => {
 
       // The marker is written outside the worktree on purpose: anything written
       // inside it would go with the directory and prove nothing about ordering.
-      await trustSetupFile(
+      await configureSetupFile(
         repo,
         [
           "[teardown]",
@@ -404,7 +392,6 @@ describe("grove remove", () => {
         planned: 2,
         ran: [`pwd > "$GROVE_ROOT/teardown-$GROVE_BRANCH"`, `test "$GROVE_BRANCH" != boom`],
         failed: undefined,
-        untrusted: false,
       });
 
       const quiet = succeeded(await attemptRemove(repo, "quiet", { teardown: false }));
@@ -431,32 +418,24 @@ describe("grove remove", () => {
     });
   });
 
-  test("an edit to the file withdraws its trust, and the worktree still goes", async () => {
+  test("uses edited teardown configuration when removing a worktree", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
       const root = repo.root;
 
-      const trusted = ["[teardown]", `run = ['touch "$GROVE_ROOT/ran-$GROVE_BRANCH"']`, ""].join(
+      const configured = ["[teardown]", `run = ['touch "$GROVE_ROOT/ran-$GROVE_BRANCH"']`, ""].join(
         "\n",
       );
-      await trustSetupFile(repo, trusted);
+      await configureSetupFile(repo, configured);
       await seedWorktree(repo, "alpha");
 
-      // The same file, one line longer. Trust is keyed on the contents, so this
-      // is a command that arrived over the network since anybody read it.
-      await Bun.write(join(root, "main", ".grove.toml"), `${trusted}# pulled\n`);
+      await Bun.write(join(root, "main", ".grove.toml"), `${configured}# pulled\n`);
 
       const outcome = await attemptRemove(repo, "alpha");
       const removed = succeeded(outcome);
 
-      expect(removed.teardown?.untrusted).toBe(true);
-      expect(removed.teardown?.ran).toEqual([]);
-      expect(await pathExists(join(root, "ran-alpha"))).toBe(false);
-      // Said out loud, and said with the way back in it — an untrusted file is
-      // not a failure, so this is a warning beside a removal that happened.
-      expect(outcome.log.err.join("")).toContain(
-        "1 teardown command in main/.grove.toml has not been trusted here",
-      );
+      expect(removed.teardown?.ran).toEqual(['touch "$GROVE_ROOT/ran-$GROVE_BRANCH"']);
+      expect(await pathExists(join(root, "ran-alpha"))).toBe(true);
       expect(await pathExists(join(root, "alpha"))).toBe(false);
     });
   });

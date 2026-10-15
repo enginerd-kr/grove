@@ -680,7 +680,7 @@ describe("grove sync over a stack", () => {
         fetch: false,
         push: false,
         setup: false,
-        trust: false,
+
         take: false,
       },
       recorder().reporter,

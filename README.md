@@ -47,8 +47,8 @@ cd feat/login
 ```
 
 Edit code and commit with Git as usual inside `feat/login`. If the project has
-setup commands, grove shows them and asks for approval before running them for
-the first time. You can create worktrees without a setup file, too.
+setup commands, grove runs them automatically when cloning or creating a worktree.
+Use `--no-setup` to skip them. You can create worktrees without a setup file, too.
 
 Run `grove` anywhere in the workspace to see all your worktrees. Press `a` to
 start a new task or `s` to sync the selected worktree.

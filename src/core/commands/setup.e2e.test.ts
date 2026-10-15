@@ -7,12 +7,6 @@ import { managedRepo, seedGit, seedWorktree, withTempRepo } from "../test-utils.
 /**
  * `grove setup` through the real binary.
  *
- * What only the child can answer is the trust gate as a person meets it: a
- * `run` line out of a tracked file is printed and skipped, the exit code stays
- * 0 because the files did land, and `--trust` is what changes that. In-process
- * the same facts are fields on a result; here they are the sentence somebody
- * reads and the number a script branches on.
- *
  * The `open` line is in the fixture on purpose. `add` would have started it and
  * this command must not, and a pipe is where that would be hardest to notice —
  * so the assertion is that nothing about opening is even mentioned.
@@ -36,7 +30,7 @@ describe("grove setup", () => {
     });
   }, 60_000);
 
-  test("holds a tracked file's commands back, exits 0, and offers --trust", async () => {
+  test("runs tracked setup commands immediately without prompting", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
       const added = await seedWorktree(repo, "feat/login");
@@ -46,18 +40,12 @@ describe("grove setup", () => {
       await seedGit(trunk, ["add", "-A"]);
       await seedGit(trunk, ["-c", "commit.gpgsign=false", "commit", "-m", "Add .grove.toml"]);
 
-      const held = await runCli(["setup", "feat/login"], { cwd: repo.root });
+      const result = await runCli(["setup", "feat/login"], { cwd: repo.root });
 
-      // Not a failure: what did not happen is waiting on somebody having read
-      // the file, which is a different thing from something going wrong.
-      expect(held.exitCode).toBe(ExitCode.ok);
-      expect(held.stderr).toContain("--trust");
-      expect(await Bun.file(join(added.path, "installed")).exists()).toBe(false);
-
-      const trusted = await runCli(["setup", "feat/login", "--trust"], { cwd: repo.root });
-
-      expect(trusted.exitCode).toBe(ExitCode.ok);
-      expect(trusted.stdout).toBe("feat/login\t1 run\n");
+      expect(result.stderr).not.toContain("--trust");
+      expect(result.stderr).not.toContain("[y/N]");
+      expect(result.exitCode).toBe(ExitCode.ok);
+      expect(result.stdout).toBe("feat/login\t1 run\n");
       expect(await Bun.file(join(added.path, "installed")).exists()).toBe(true);
     });
   }, 60_000);
@@ -68,7 +56,7 @@ describe("grove setup", () => {
       const added = await seedWorktree(repo, "feat/login");
       await Bun.write(join(repo.root, "main", ".grove.toml"), '[setup]\nopen = "touch opened"\n');
 
-      const result = await runCli(["setup", "feat/login", "--trust"], { cwd: repo.root });
+      const result = await runCli(["setup", "feat/login"], { cwd: repo.root });
 
       expect(result.exitCode).toBe(ExitCode.ok);
       expect(await Bun.file(join(added.path, "opened")).exists()).toBe(false);
@@ -87,7 +75,7 @@ describe("grove setup", () => {
         '[setup]\nrun = ["echo nope >&2; exit 3"]\n',
       );
 
-      const result = await runCli(["setup", "feat/login", "--trust"], { cwd: repo.root });
+      const result = await runCli(["setup", "feat/login"], { cwd: repo.root });
 
       expect(result.exitCode).toBe(ExitCode.setupFailed);
       expect(result.stderr).toContain("nope");

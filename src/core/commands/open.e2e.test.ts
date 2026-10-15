@@ -25,7 +25,7 @@ describe("grove open", () => {
       await Bun.write(join(repo.root, "main", ".grove.toml"), '[setup]\nopen = "touch opened"\n');
       const added = await seedWorktree(repo, "feat/login");
 
-      const result = await runCli(["open", "feat/login", "--trust"], { cwd: repo.root });
+      const result = await runCli(["open", "feat/login"], { cwd: repo.root });
 
       expect(result.exitCode).toBe(ExitCode.ok);
       expect(result.stderr).toContain("not a terminal");

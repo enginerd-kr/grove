@@ -194,17 +194,12 @@ const MODE_HINTS: Partial<Record<ModeKind, readonly Hint[]>> = {
  * A prompt that asks about discarding changes and offers `y remove` is two
  * answers to one question. `n` is spelled the same way: it is `keep` where
  * something was about to be taken away, and `leave it` where nothing was —
- * a sync that does not happen leaves the branch where it stands, and an open
- * line nobody trusted stays a line in a file.
+ * a sync that does not happen leaves the branch where it stands.
  *
  * A record rather than a chain of ternaries, so a new confirmation cannot be
  * added without deciding what its two keys say.
  */
 const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
-  "trust-setup": [
-    { keys: "y", action: "approve setup" },
-    { keys: "n", action: "skip" },
-  ],
   one: [
     { keys: "y", action: "remove" },
     { keys: "n", action: "keep" },
@@ -232,12 +227,6 @@ const CONFIRM_WORDS: Record<ConfirmKind, readonly Hint[]> = {
   prune: [
     { keys: "y", action: "remove" },
     { keys: "n", action: "keep" },
-  ],
-  // The one `y` that is an answer to "have you read this" rather than to "shall
-  // I", so it says both halves: what is being agreed to and what happens next.
-  "trust-open": [
-    { keys: "y", action: "trust and open" },
-    { keys: "n", action: "leave it" },
   ],
   upstream: [
     { keys: "y", action: "replace" },

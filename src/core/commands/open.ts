@@ -30,14 +30,10 @@ export type OpenResult = {
    * costs and why it is worth paying.
    */
   readonly opened?: string;
-  /** The `open` line comes from a file git tracks, unread on this machine. */
-  readonly untrusted: boolean;
 };
 
 export type OpenOptions = {
   readonly target?: string;
-  /** `--trust`: run the line, recording that this file has been read. */
-  readonly trust: boolean;
   /** Whether there is a terminal to open into — see `SetupOptions.open`. */
   readonly open?: boolean;
 };
@@ -55,19 +51,15 @@ export async function openWorktree(
       ? here(repo, cwd, worktrees)
       : resolveTarget(options.target, worktrees, { root: repo.root, cwd });
 
-  const { opened, untrusted } = await openNow(
-    repo,
-    { path: record.path, branch: record.branch },
-    reporter,
-    { trust: options.trust, allowed: options.open !== false },
-  );
+  const { opened } = await openNow(repo, { path: record.path, branch: record.branch }, reporter, {
+    allowed: options.open !== false,
+  });
 
   return {
     path: record.path,
     dir: worktreeDir(repo.root, record.path),
     branch: record.branch,
     opened,
-    untrusted,
   };
 }
 

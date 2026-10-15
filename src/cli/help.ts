@@ -59,15 +59,10 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "Clones <url> as a bare repository and checks out its default branch as",
       "the first worktree. The result is one directory holding .bare and a",
       "sibling worktree per branch, created under the current directory.",
-      "Setup runs after checkout; unapproved commands wait for confirmation.",
+      "Setup runs automatically after checkout; --no-setup skips it.",
     ],
     flags: [
       { name: "no-setup", type: "boolean", summary: "create the worktrees without project setup" },
-      {
-        name: "trust",
-        type: "boolean",
-        summary: "approve the project setup commands and run them",
-      },
       {
         name: "branch",
         short: "b",
@@ -121,8 +116,7 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "remote, and otherwise creates it from the default branch.",
       "",
       "The new worktree is then filled in from .grove.toml, if the default",
-      "branch's worktree has one: `copy` and `link` apply on sight, and `run`",
-      "commands are printed and skipped until --trust says you have read them.",
+      "branch's worktree has one: `copy`, `link`, and `run` apply automatically.",
       "`open` then starts what the file says to open it with — written per",
       "platform — and is skipped when there is no terminal to open into.",
       "",
@@ -172,11 +166,6 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         type: "boolean",
         summary: "skip the copies, links, and commands .grove.toml asks for",
       },
-      {
-        name: "trust",
-        type: "boolean",
-        summary: "approve and run .grove.toml's commands",
-      },
     ],
   },
   {
@@ -215,11 +204,6 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         name: "no-setup",
         type: "boolean",
         summary: "skip the copies, links, and commands .grove.toml asks for",
-      },
-      {
-        name: "trust",
-        type: "boolean",
-        summary: "approve and run .grove.toml's commands",
       },
     ],
   },
@@ -328,16 +312,9 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
       "— the worktree is still there next week and the editor window is not.",
       "",
       "No [target] is the worktree you are standing in, which is where this is",
-      "usually reached for. It waits for the same --trust the commands do, and",
-      "a platform the file wrote no line for opens nothing.",
+      "usually reached for. A platform the file wrote no line for opens nothing.",
     ],
-    flags: [
-      {
-        name: "trust",
-        type: "boolean",
-        summary: "run .grove.toml's open line, recording that you have read it",
-      },
-    ],
+    flags: [],
   },
   {
     name: "setup",
@@ -371,11 +348,6 @@ export const SUBCOMMANDS: readonly SubcommandSpec[] = [
         summary: "setup recipe source; files still come from trunk",
       },
       { name: "all", type: "boolean", summary: "fill in every worktree instead of one" },
-      {
-        name: "trust",
-        type: "boolean",
-        summary: "approve and run .grove.toml's commands",
-      },
     ],
   },
   {

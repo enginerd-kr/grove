@@ -544,7 +544,7 @@ describe("rebaseChoices", () => {
           fetch: false,
           push: false,
           setup: false,
-          trust: false,
+
           take: false,
         },
         recorder().reporter,

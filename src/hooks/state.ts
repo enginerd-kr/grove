@@ -10,7 +10,7 @@ export type SetupRecord = {
 };
 const SUFFIX = ".grovesetupstate";
 
-/** Readiness includes local layers and dependency manifests, independently of trust. */
+/** Readiness includes local layers and dependency manifests. */
 export async function setupFingerprint(hooks: Hooks, path: string): Promise<string> {
   const files = [
     "package.json",

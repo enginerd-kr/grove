@@ -4,12 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { ExitCode, errorToExitCode } from "../cli/exit-codes.ts";
 import { entryExists } from "../core/fs.ts";
 import { seedGit } from "../core/test-utils.ts";
-import { failureFor, pendingCommands } from "./command.ts";
+import { failureFor } from "./command.ts";
 import { HOOKS_FILE, NO_HOOKS, platformKeyFor } from "./config.ts";
-import { describeSetup, runSetup, type SetupResult, trustAndRun } from "./setup.ts";
-import { repoHooks } from "./source.ts";
+import { describeSetup, runSetup, type SetupResult } from "./setup.ts";
 import { recorder, refusalFromRun, setUp, withRepo } from "./test-utils.ts";
-import { trust } from "./trust.ts";
 
 /**
  * `[setup]` against a real repository, because almost everything here is about
@@ -27,7 +25,7 @@ describe("runSetup", () => {
         copied: [],
         linked: [],
         ran: [],
-        untrusted: false,
+
         dir: "feat/login",
       });
       expect(describeSetup(result)).toBe(`no ${HOOKS_FILE}`);
@@ -231,55 +229,32 @@ describe("runSetup", () => {
       `run = ['printf "%s|%s|%s|%s" "$GREETING" "$(pwd)" "$GROVE_WORKTREE" "$GROVE_BRANCH" > ran.txt']`,
     ].join("\n");
 
-    test("waits for trust, and lets the files land anyway", async () => {
+    test("runs commands after copying the configured files", async () => {
       await withRepo(async (fixture) => {
         await Bun.write(join(fixture.trunk, ".env"), "SECRET=1\n");
         await fixture.configure(`[setup]\ncopy = [".env"]\nrun = ["touch ran.txt"]\n`);
 
         const result = await setUp(fixture);
 
-        expect(result.untrusted).toBe(true);
-        expect(result.ran).toEqual([]);
-        expect(await entryExists(join(fixture.worktree, "ran.txt"))).toBe(false);
-        // The copy is the half that moves files already on this disk.
+        expect(result.ran).toEqual(["touch ran.txt"]);
+        expect(await entryExists(join(fixture.worktree, "ran.txt"))).toBe(true);
         expect(result.copied).toEqual([".env"]);
-        expect(fixture.log.warnings.join("\n")).toContain("--trust");
-        expect(describeSetup(result)).toBe("1 copied, commands not trusted");
+        expect(fixture.log.warnings.join("\n")).not.toContain("--trust");
+        expect(describeSetup(result)).toBe("1 copied, 1 run");
       });
     });
 
-    test("pendingCommands is what the screen offers, and empties once trusted", async () => {
-      await withRepo(async (fixture) => {
-        await fixture.configure('[setup]\nrun = ["bun install", "bun run build"]\n');
-
-        expect(await pendingCommands(fixture.repo)).toEqual(["bun install", "bun run build"]);
-
-        const hooks = await repoHooks(fixture.repo);
-        await trust(fixture.repo.gitDir, hooks.fingerprint ?? "");
-
-        expect(await pendingCommands(fixture.repo)).toEqual([]);
-      });
-    });
-
-    test("nothing pending for a repository that configures no commands", async () => {
-      await withRepo(async (fixture) => {
-        await fixture.configure('[setup]\ncopy = [".env"]\n');
-
-        expect(await pendingCommands(fixture.repo)).toEqual([]);
-      });
-    });
-
-    test("trustAndRun records the file and then does what it says", async () => {
+    test("runs commands with the configured environment and worktree context", async () => {
       await withRepo(async (fixture) => {
         await fixture.configure(`${RUNS}\n`);
 
-        const result = await trustAndRun(
+        const result = await runSetup(
           fixture.repo,
           { path: fixture.worktree, branch: fixture.branch },
+          {},
           fixture.log.reporter,
         );
 
-        expect(result.untrusted).toBe(false);
         expect(result.ran).toHaveLength(1);
         expect(await Bun.file(join(fixture.worktree, "ran.txt")).text()).toBe(
           // The environment, the cwd, and grove's own answer to "where am I".
@@ -288,33 +263,29 @@ describe("runSetup", () => {
       });
     });
 
-    test("a trusted file keeps running without asking again", async () => {
+    test("setup runs again when explicitly requested", async () => {
       await withRepo(async (fixture) => {
         await fixture.configure('[setup]\nrun = ["touch ran.txt"]\n');
-        await trustAndRun(fixture.repo, { path: fixture.worktree }, recorder().reporter);
+        await runSetup(fixture.repo, { path: fixture.worktree }, {}, recorder().reporter);
         await rm(join(fixture.worktree, "ran.txt"));
 
         const again = await setUp(fixture);
 
-        expect(again.untrusted).toBe(false);
         expect(again.ran).toEqual(["touch ran.txt"]);
       });
     });
 
-    test("one edit to the file withdraws the trust it was given", async () => {
+    test("edited commands run on the next setup", async () => {
       await withRepo(async (fixture) => {
         await fixture.configure('[setup]\nrun = ["touch ran.txt"]\n');
-        await trustAndRun(fixture.repo, { path: fixture.worktree }, recorder().reporter);
+        await runSetup(fixture.repo, { path: fixture.worktree }, {}, recorder().reporter);
 
-        // What a `git pull` does: the commands change, so the answer no longer
-        // covers them.
         await fixture.configure('[setup]\nrun = ["touch ran.txt", "touch surprise.txt"]\n');
 
         const again = await setUp(fixture);
 
-        expect(again.untrusted).toBe(true);
-        expect(again.ran).toEqual([]);
-        expect(await entryExists(join(fixture.worktree, "surprise.txt"))).toBe(false);
+        expect(again.ran).toEqual(["touch ran.txt", "touch surprise.txt"]);
+        expect(await entryExists(join(fixture.worktree, "surprise.txt"))).toBe(true);
       });
     });
 
@@ -328,7 +299,7 @@ describe("runSetup", () => {
           ].join("\n"),
         );
 
-        await trustAndRun(fixture.repo, { path: fixture.worktree }, fixture.log.reporter);
+        await runSetup(fixture.repo, { path: fixture.worktree }, {}, fixture.log.reporter);
 
         expect(await Bun.file(join(fixture.worktree, "where.txt")).text()).toBe(fixture.worktree);
       });
@@ -343,9 +314,10 @@ describe("runSetup", () => {
           ].join("\n"),
         );
 
-        const result = await trustAndRun(
+        const result = await runSetup(
           fixture.repo,
           { path: fixture.worktree },
+          {},
           fixture.log.reporter,
         );
 
@@ -367,9 +339,10 @@ describe("runSetup", () => {
       await withRepo(async (fixture) => {
         await fixture.configure('[setup]\nrun = ["true"]\n');
 
-        const result = await trustAndRun(
+        const result = await runSetup(
           fixture.repo,
           { path: fixture.worktree },
+          {},
           fixture.log.reporter,
         );
 
@@ -407,7 +380,6 @@ describe("describeSetup", () => {
     missing: [],
     kept: [],
     overwritten: [],
-    untrusted: false,
   };
 
   test("nothing configured reads differently from nothing to do", () => {
@@ -427,10 +399,6 @@ describe("describeSetup", () => {
         kept: ["build"],
       }),
     ).toBe("2 copied, 1 overwritten, 1 linked, 1 run, 1 kept");
-  });
-
-  test("says when the commands are waiting on somebody", () => {
-    expect(describeSetup({ ...base, planned: 1, untrusted: true })).toBe("commands not trusted");
   });
 });
 

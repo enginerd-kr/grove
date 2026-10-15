@@ -286,7 +286,7 @@ export async function seedWorktree(
   return addWorktree(
     repo,
     repo.root,
-    { branch, from: undefined, fetch, push, setup: false, trust: false, take: false },
+    { branch, from: undefined, fetch, push, setup: false, take: false },
     recorder().reporter,
   );
 }

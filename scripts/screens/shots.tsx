@@ -189,8 +189,6 @@ const add: Shot = {
     await session.press("a");
     await session.type("feat/paging");
     await session.press(keys.enter);
-    await session.until("y approve setup");
-    await session.press("y");
     // The settled spelling, not the ambiguous one: the step reads `running bun
     // install` while it runs and `ran bun install` once it has, and a wait on
     // `bun install` alone is satisfied by the first — so the picture was a
@@ -203,7 +201,7 @@ const add: Shot = {
   // The worktree the shot is of, the file's own command having run in it, and
   // the summary the setup closes with — which is the shot's real subject, and
   // the last thing drawn, so a frame holding it is a frame that waited.
-  expects: ["paging", "ran bun install", "kept in feat/paging"],
+  expects: ["paging", "ran bun install", "added feat/paging"],
 };
 
 /** The command menu: one keystroke, and every verb the list does not spell out. */

@@ -1,7 +1,7 @@
 import type { RepoPaths } from "../core/layout.ts";
 import { worktreeDir } from "../core/worktrees.ts";
 import type { Reporter } from "../report/reporter.ts";
-import { type HookFailure, type HookTarget, runCommands, teardownGate } from "./command.ts";
+import { type HookFailure, type HookTarget, runCommands } from "./command.ts";
 import { repoHooks } from "./source.ts";
 
 /**
@@ -21,8 +21,6 @@ export type TeardownResult = {
   readonly ran: readonly string[];
   /** Set when a command exited non-zero. The ones after it were not run. */
   readonly failed?: HookFailure;
-  /** True when there were commands and this machine has not trusted the file. */
-  readonly untrusted: boolean;
 };
 
 /**
@@ -35,9 +33,6 @@ export type TeardownResult = {
  * running. So a failure is loud and the removal carries on, and `--no-teardown`
  * is there for the repository whose cleanup is broken enough to want skipping
  * outright.
- *
- * Trust is the same record `[setup]`'s commands answer to, because it is the
- * same file: one `--trust` covers both, and one edit withdraws both.
  */
 export async function runTeardown(
   repo: RepoPaths,
@@ -48,18 +43,7 @@ export async function runTeardown(
   const hooks = await repoHooks(repo, target.path);
   const { commands } = hooks.teardown;
 
-  const { ran, failed, untrusted } = await runCommands(
-    repo,
-    target,
-    hooks,
-    hooks.teardown,
-    {
-      noun: "teardown command",
-      tail: "the worktree still goes, but nothing was run in it",
-    },
-    reporter,
-    teardownGate(hooks),
-  );
+  const { ran, failed } = await runCommands(repo, target, hooks, hooks.teardown, reporter);
 
-  return { dir, planned: commands.length, ran, failed, untrusted };
+  return { dir, planned: commands.length, ran, failed };
 }

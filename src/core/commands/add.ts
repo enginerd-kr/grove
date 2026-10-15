@@ -4,7 +4,6 @@ import {
   repoHooks,
   runSetup,
   type SetupResult,
-  trustAndRun,
 } from "../../hooks/index.ts";
 import { type ConfigSource, setConfigSource } from "../../hooks/source.ts";
 import { recordSetupState } from "../../hooks/state.ts";
@@ -53,16 +52,6 @@ export type AddOptions = {
    * time — is the bookkeeping this tool is for.
    */
   readonly setup: boolean;
-  /**
-   * Record the file's commands as read, and run them.
-   *
-   * Off by default, and it has to be: `copy` and `link` move files already on
-   * your disk, while a `run` command is code that arrived with a pull. Without
-   * this the commands are printed and skipped, which is the honest thing for a
-   * command line to do — there is nothing to prompt on in a pipe, and a tool
-   * that behaved differently under a terminal would be two tools.
-   */
-  readonly trust: boolean;
   /**
    * Whether `[setup] open` may start the app it names. Defaults to allowed.
    *
@@ -148,7 +137,7 @@ export async function addWorktree(
           repo,
           path,
           options.branch,
-          options.trust ? undefined : await repoHooks(repo, path),
+          await repoHooks(repo, path),
           reporter,
           options.open,
         );
@@ -229,7 +218,7 @@ export async function addWorktree(
         repo,
         path,
         options.branch,
-        options.trust ? undefined : await repoHooks(repo, path),
+        await repoHooks(repo, path),
         reporter,
         options.open,
       )
@@ -361,29 +350,18 @@ async function setUpWorktree(
   repo: RepoPaths,
   path: string,
   branch: string,
-  /** Absent when `--trust` was passed: the file is re-read after it is recorded. */
-  hooks: Hooks | undefined,
+  hooks: Hooks,
   reporter: Reporter,
   open?: boolean,
 ): Promise<SetupResult> {
   const target = { path, branch };
-  const result =
-    hooks === undefined
-      ? await trustAndRun(repo, target, reporter, { open })
-      : await runSetup(repo, target, { hooks, open }, reporter);
+  const result = await runSetup(repo, target, { hooks, open }, reporter);
   warnSetupFailure(result, reporter);
 
   return result;
 }
 
-/**
- * The failed command, said as a warning under a worktree that exists.
- *
- * Exported for the one other place that runs `[setup]` on `add`'s behalf: the
- * command line, when it has asked about the commands `add` was denied and been
- * told yes. The worktree is just as much there, so the failure is just as much
- * a warning.
- */
+/** Report setup failure while preserving the worktree that was created. */
 export function warnSetupFailure(result: SetupResult, reporter: Reporter): void {
   const failure = failureFor(result);
   if (!failure) return;

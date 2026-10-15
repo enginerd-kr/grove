@@ -49,7 +49,7 @@ function addOn(repo: RepoPaths, branch: string, on: string | undefined) {
     addWorktree(
       repo,
       repo.root,
-      { branch, on, fetch: false, push: false, setup: false, trust: false, take: false },
+      { branch, on, fetch: false, push: false, setup: false, take: false },
       reporter,
     ),
   );

@@ -2,29 +2,11 @@ import { GroveError } from "../core/errors.ts";
 import { runShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import { runtimeEnv } from "../core/runtime.ts";
-import { plural, toLines } from "../core/text.ts";
+import { toLines } from "../core/text.ts";
 import type { Reporter } from "../report/reporter.ts";
-import {
-  governingFiles,
-  type HookCommand,
-  type HookEnv,
-  type Hooks,
-  namesSources,
-  openGatedHere,
-  openHere,
-} from "./config.ts";
-import { repoHooks } from "./source.ts";
-import { awaitingTrust } from "./trust.ts";
+import { type HookCommand, type HookEnv, type Hooks, namesSources } from "./config.ts";
 
-/**
- * What every hook has in common: a command line, an environment, and a gate.
- *
- * `[setup]` and `[teardown]` differ in which commands they hold and in what the
- * warning says; everything else about running them is the same, and being the
- * same is the point — one `--trust` covers the whole file and one edit
- * withdraws it, which only stays true while one piece of code decides it. So
- * the gate lives here, with the runner, rather than once per hook.
- */
+/** Shared execution and environment for setup and teardown commands. */
 
 /** Which worktree a hook runs in. `add` has one before git reports it. */
 export type HookTarget = {
@@ -36,72 +18,6 @@ export type HookFailure = {
   readonly command: string;
   readonly code: number;
   readonly details: readonly string[];
-};
-
-/**
- * The commands a worktree was just denied, if any.
- *
- * The screen asks this straight after making a worktree, because that is the
- * moment the question means something: the files are in place, the commands are
- * not, and what is being agreed to is on the row in front of you. An empty
- * answer is every ordinary repository, and nothing is drawn for it.
- */
-export async function pendingCommands(
-  repo: RepoPaths,
-  /** Where to read from when the trunk has no worktree yet — `clone`'s case. */
-  fallback?: string,
-): Promise<readonly string[]> {
-  const hooks = await repoHooks(repo, fallback);
-  // `open` is in here with the rest, because the question is "what would this
-  // file run on your machine" and the answer has to be the whole answer. It is
-  // the same shell on the same line; that grove stops watching it afterwards
-  // makes it more worth listing rather than less.
-  const opening = openHere(hooks);
-  const lines = hooks.commands.map((command) => command.line);
-  const waiting = opening === "" ? lines : [...lines, opening];
-  // Nothing gated is nothing to ask about, whatever else the file asks for: a
-  // `.grove.local.toml` you wrote is not a thing to be shown and asked to agree
-  // to. Those commands run, and this returns the empty answer that says so.
-  if (waiting.length === 0) return [];
-
-  return (await awaitingTrust(repo.gitDir, setupGate(hooks).gated > 0, hooks.fingerprint))
-    ? waiting
-    : [];
-}
-
-/**
- * How much of `[setup]` the trust record answers for, and how much there is.
- *
- * Both halves, because the warning needs both: the count that has not been
- * trusted is the one to name, and the difference is what is being held back
- * with it. `open` is one either way — one application, however many arguments
- * spell it — and it is in here because the gate has to cover the whole of what
- * the file would start.
- */
-export function setupGate(hooks: Hooks): Gate {
-  return {
-    gated: hooks.gated.commands + (openGatedHere(hooks) ? 1 : 0),
-    total: hooks.commands.length + (openHere(hooks) === "" ? 0 : 1),
-  };
-}
-
-/** `[teardown]`'s half of the same question. It has no `open`, so it is a count. */
-export function teardownGate(hooks: Hooks): Gate {
-  return { gated: hooks.gated.teardown, total: hooks.teardown.commands.length };
-}
-
-/**
- * What waits for `--trust`, and what waits with it.
- *
- * `gated` is what a `git pull` could have written — the part trust is actually
- * about. `total` is every command the section holds, gated or not, because a
- * refusal stops all of them: they were written as a sequence, and running the
- * half nobody had to agree to would be running it against the absence of the
- * other half.
- */
-export type Gate = {
-  readonly gated: number;
-  readonly total: number;
 };
 
 /**
@@ -158,61 +74,15 @@ export async function commandEnvFor(
   };
 }
 
-/**
- * The commands one section asks for, run once somebody has read the file.
- *
- * This is the whole price of a configuration that travels with the project:
- * `copy` and `link` move files already on your disk, and `run` is a command
- * that arrived over the network. So the files land either way and the commands
- * do not, until `--trust` records these exact contents — and they stop again
- * the moment a pull changes them.
- */
+/** Run the configured commands in order, stopping at the first failure. */
 export async function runCommands(
   repo: RepoPaths,
   target: HookTarget,
-  /** The whole file, for the fingerprint that trust is keyed on and the path to name. */
   hooks: Hooks,
   section: { readonly commands: readonly HookCommand[]; readonly env: readonly HookEnv[] },
-  /** How the refusal reads: `2 teardown commands in … — the worktree still goes`. */
-  warning: { readonly noun: string; readonly tail: string },
   reporter: Reporter,
-  /**
-   * How much of this section the trust record answers for — see `Gate`.
-   *
-   * Worked out by the caller, which is the one that knows whether `open` is
-   * part of its question, and passed rather than recomputed here so that the
-   * promise this file makes stays literally true: one piece of code decides
-   * trust for the whole file.
-   */
-  gate: Gate,
-): Promise<{ ran: readonly string[]; failed?: HookFailure; untrusted: boolean }> {
+): Promise<{ ran: readonly string[]; failed?: HookFailure }> {
   const { commands, env } = section;
-
-  const untrusted = await awaitingTrust(repo.gitDir, gate.gated > 0, hooks.fingerprint);
-
-  if (untrusted) {
-    // Named by the files that actually govern, which are the trunk's — pointing
-    // at the worktree being set up would send somebody to read a copy that
-    // nothing consults, or to a file that is not there at all. Only the gated
-    // ones: there is nothing to go and read in a file you wrote yourself.
-    const where = governingFiles(hooks, repo.root).join(" and ");
-
-    reporter.warn(
-      `${plural(gate.gated, warning.noun)} in ${where} ${
-        gate.gated === 1 ? "has" : "have"
-      } not been trusted here — ${warning.tail}`,
-    );
-
-    // The ones nobody has to agree to, held back with the ones they do. Said
-    // out loud because it is otherwise a file of your own that silently did
-    // nothing, which is the failure `.grove.toml` refuses unknown keys over.
-    const held = gate.total - gate.gated;
-    if (held > 0) {
-      reporter.info(`${plural(held, warning.noun)} of your own waited with ${where}`);
-    }
-
-    return { ran: [], untrusted };
-  }
 
   const commandEnv = commands.length > 0 ? await commandEnvFor(repo, target, env) : {};
 
@@ -248,7 +118,7 @@ export async function runCommands(
     ran.push(command.line);
   }
 
-  return { ran, failed, untrusted };
+  return { ran, failed };
 }
 
 /** The last few lines a failed command said, on whichever stream it said them. */

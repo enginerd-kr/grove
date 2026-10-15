@@ -4,10 +4,9 @@ import { join } from "node:path";
 import { entryExists } from "../core/fs.ts";
 import { seedGit } from "../core/test-utils.ts";
 import { HOOKS_FILE, platformKeyFor } from "./config.ts";
-import { trustAndRun } from "./setup.ts";
+import { runSetup } from "./setup.ts";
 import { runTeardown } from "./teardown.ts";
 import { type Fixture, withRepo } from "./test-utils.ts";
-import { fingerprintOf, isTrusted, trust } from "./trust.ts";
 
 describe("runTeardown", () => {
   const teardown = (fixture: Fixture) =>
@@ -21,7 +20,7 @@ describe("runTeardown", () => {
     await withRepo(async (fixture) => {
       await fixture.configure('[setup]\ncopy = [".env"]\n');
 
-      expect(await teardown(fixture)).toMatchObject({ planned: 0, ran: [], untrusted: false });
+      expect(await teardown(fixture)).toMatchObject({ planned: 0, ran: [] });
       expect(fixture.log.warnings).toEqual([]);
     });
   });
@@ -37,7 +36,6 @@ describe("runTeardown", () => {
         `run = ['printf "%s|%s" "$TOKEN" "$(pwd)" > /dev/stderr; printf "%s|%s" "$TOKEN" "$(pwd)" > gone.txt']`,
       ].join("\n");
       await fixture.configure(`${text}\n`);
-      await trust(fixture.repo.gitDir, fingerprintOf(`${text}\n`));
 
       const result = await teardown(fixture);
 
@@ -64,7 +62,6 @@ describe("runTeardown", () => {
         `${elsewhere} = ['touch elsewhere.txt']`,
       ].join("\n");
       await fixture.configure(`${text}\n`);
-      await trust(fixture.repo.gitDir, fingerprintOf(`${text}\n`));
 
       const result = await teardown(fixture);
 
@@ -83,7 +80,6 @@ describe("runTeardown", () => {
         `run = ['echo docker is not running >&2; exit 7', 'touch never.txt']`,
       ].join("\n");
       await fixture.configure(`${text}\n`);
-      await trust(fixture.repo.gitDir, fingerprintOf(`${text}\n`));
 
       // Resolves rather than throws — that is the whole rule.
       const result = await teardown(fixture);
@@ -100,19 +96,19 @@ describe("runTeardown", () => {
     });
   });
 
-  test("untrusted commands are skipped and the worktree still goes", async () => {
+  test("runs teardown commands without a prior setup", async () => {
     await withRepo(async (fixture) => {
-      await fixture.configure('[teardown]\nrun = ["touch never.txt"]\n');
+      await fixture.configure('[teardown]\nrun = ["touch cleanup.txt"]\n');
 
       const result = await teardown(fixture);
 
-      expect(result).toMatchObject({ planned: 1, ran: [], untrusted: true });
-      expect(await entryExists(join(fixture.worktree, "never.txt"))).toBe(false);
-      expect(fixture.log.warnings.join("\n")).toContain("the worktree still goes");
+      expect(result).toMatchObject({ planned: 1, ran: ["touch cleanup.txt"] });
+      expect(await entryExists(join(fixture.worktree, "cleanup.txt"))).toBe(true);
+      expect(fixture.log.warnings).toEqual([]);
     });
   });
 
-  test("one trust covers both sections, and one edit withdraws both", async () => {
+  test("setup edits do not prevent teardown from running", async () => {
     await withRepo(async (fixture) => {
       const text = [
         "[setup]",
@@ -123,23 +119,20 @@ describe("runTeardown", () => {
       ].join("\n");
       await fixture.configure(`${text}\n`);
 
-      // One `--trust`, given for the whole file by the setup half.
-      await trustAndRun(fixture.repo, { path: fixture.worktree }, fixture.log.reporter);
+      await runSetup(fixture.repo, { path: fixture.worktree }, {}, fixture.log.reporter);
 
       expect(await entryExists(join(fixture.worktree, "setup-ran.txt"))).toBe(true);
-      expect((await teardown(fixture)).untrusted).toBe(false);
+      expect((await teardown(fixture)).ran).toEqual(["touch teardown-ran.txt"]);
       expect(await entryExists(join(fixture.worktree, "teardown-ran.txt"))).toBe(true);
 
-      // One edit, in the `[setup]` half only, and the teardown stops too.
       const edited = text.replace("setup-ran.txt", "setup-ran-again.txt");
       await fixture.configure(`${edited}\n`);
       await rm(join(fixture.worktree, "teardown-ran.txt"));
 
       const after = await teardown(fixture);
 
-      expect(after.untrusted).toBe(true);
-      expect(after.ran).toEqual([]);
-      expect(await isTrusted(fixture.repo.gitDir, fingerprintOf(`${edited}\n`))).toBe(false);
+      expect(after.ran).toEqual(["touch teardown-ran.txt"]);
+      expect(await entryExists(join(fixture.worktree, "teardown-ran.txt"))).toBe(true);
     });
   });
 
@@ -151,7 +144,6 @@ describe("runTeardown", () => {
         join(fixture.worktree, HOOKS_FILE),
         "[teardown]\nrun = ['touch from-worktree.txt']\n",
       );
-      await trust(fixture.repo.gitDir, fingerprintOf(text));
 
       await teardown(fixture);
 

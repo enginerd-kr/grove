@@ -41,22 +41,14 @@ import { type Commit, recentCommits } from "../../core/history.ts";
 import { deepestFirst, type RepoPaths, repoPaths } from "../../core/layout.ts";
 import { recoverLine } from "../../core/snapshot.ts";
 import { plural } from "../../core/text.ts";
-import { listWorktrees, resolveTarget } from "../../core/worktrees.ts";
-import {
-  describeSetup,
-  failureFor,
-  type PendingOpen,
-  pendingCommands,
-  pendingOpen,
-  trustAndRun,
-} from "../../hooks/index.ts";
+import { describeSetup } from "../../hooks/index.ts";
 import type { Reporter } from "../../report/reporter.ts";
 
 /**
  * Passed straight through, so the screen holds the answer without reaching past
  * this module for the shape of it — the same way it takes `WorktreeSummary`.
  */
-export type { ExistingPullRequest, PendingOpen, PruneResult, ReviewReplacement };
+export type { ExistingPullRequest, PruneResult, ReviewReplacement };
 
 /** The screen offers discard-and-update or cancel for these named reviews. */
 export class ReviewUpdateRequired extends Error {
@@ -192,25 +184,8 @@ export type WorktreeService = {
    * line on every day after, which is when you actually want it — the worktree
    * is still there and the window is not.
    *
-   * `trust` is the answer to the question `pendingOpen` opened, and it is the
-   * only way a line out of a file nobody here has read gets to run from this
-   * key: the screen put the command on the row, somebody read it and pressed
-   * `y`, and that is the whole of what `--trust` means on the command line too.
-   * Left off — which is every file already agreed to, and every one with
-   * nothing gated — this opens what it is allowed to and says so when it is
-   * not.
    */
-  readonly open: (target: string, trust?: boolean) => Promise<string>;
-  /**
-   * The line that would open this worktree, when nobody here has read it yet.
-   *
-   * `pendingCommands`' counterpart for the one command aimed at a row, and it
-   * is here for the reason that one is: the screen can ask about what it can
-   * show. Nothing comes back for the ordinary repository — a file already
-   * trusted, a line you wrote yourself, a platform this one says nothing about
-   * — and `open` is simply run.
-   */
-  readonly pendingOpen: (target: string) => Promise<PendingOpen | undefined>;
+  readonly open: (target: string) => Promise<string>;
   /**
    * `.grove.toml`'s `[setup]`, run again in a worktree that already has one.
    *
@@ -220,12 +195,8 @@ export type WorktreeService = {
    * because that is the worktree you are about to work in and the one whose
    * failure you would read.
    *
-   * Trusted by pressing it, which `open` is not — and for the reason `a` is:
-   * the commands are what filling in *means*, the screen has already asked
-   * about them once, and a key that copied files and then declined to install
-   * anything would leave a worktree in the state this exists to get it out of.
    */
-  readonly setup: (target: string, trust?: boolean) => Promise<string>;
+  readonly setup: (target: string) => Promise<string>;
   /**
    * The open pull requests, for the popup to pick one from.
    *
@@ -330,23 +301,6 @@ export type WorktreeService = {
   readonly pendingUpstream: (url: string) => Promise<string | undefined>;
   /** `grove upstream <url>`, with `force` where the prompt's `y` answered for it. */
   readonly upstream: (url: string, force?: boolean) => Promise<string>;
-  /**
-   * The commands a worktree was just denied, if any.
-   *
-   * Checked straight after `a`, because that is when it matters: the files are
-   * in place and the commands are not. Empty for every repository that has no
-   * `.grove.toml` and every one whose file is already trusted — `add` already
-   * ran those.
-   */
-  readonly pendingCommands: (target?: string) => Promise<readonly string[]>;
-  /**
-   * Records the file as read, then runs what it says.
-   *
-   * The same record `grove add --trust` writes, so running here trusts the
-   * command line too — and a pull that changes the file runs it again from
-   * here rather than skipping it silently.
-   */
-  readonly trustAndRun: (branch: string) => Promise<string>;
 };
 
 /**
@@ -475,7 +429,6 @@ export function createWorktreeService(
           fetch: true,
           push: false,
           setup: true,
-          trust: false,
           open: true,
           take: false,
         },
@@ -566,39 +519,24 @@ export function createWorktreeService(
       return `discarded ${describeDiscard(tracked, result.untracked)} in ${result.dir}${saved}`;
     },
 
-    setup: async (target, trust = false) => {
-      const results = await setUpWorktrees(repo, cwd, { target, all: false, trust }, reporter);
+    setup: async (target) => {
+      const results = await setUpWorktrees(repo, cwd, { target, all: false }, reporter);
       const only = results[0];
       if (only === undefined) return "nothing to set up";
 
-      // Raised rather than returned, the way `trustAndRun` above raises setup's
-      // — and it is the same failure, reached by a different key.
+      // A failed command must reach the screen as a failure.
       const failure = setupFailureFor(results);
       if (failure) throw failure;
 
       return `${describeSetup(only)} in ${only.dir}`;
     },
 
-    open: async (target, trust = false) => {
-      const result = await openWorktree(repo, cwd, { target, trust, open: true }, reporter);
+    open: async (target) => {
+      const result = await openWorktree(repo, cwd, { target, open: true }, reporter);
 
-      // The unanswered path, and the same sentence `grove open` prints: `trust`
-      // records the file before the gate reads it back, so a run that carries
-      // one never lands here. It is the screen's `/open` before the question.
-      if (result.untrusted) return `${result.dir} has an open line nobody has read here`;
       if (result.opened === undefined) return `nothing opens ${result.dir} on this machine`;
 
       return `opened ${result.dir} with ${result.opened}`;
-    },
-
-    pendingOpen: async (target) => {
-      // Resolved the way `trustAndRun` resolves its branch, and for the same
-      // reason: which worktree a name means is `git worktree list`'s answer,
-      // and this has to be asking about the worktree `open` is about to act on.
-      const worktrees = await listWorktrees(repo.gitDir);
-      const record = resolveTarget(target, worktrees, { root: repo.root, cwd });
-
-      return pendingOpen(repo, { path: record.path, branch: record.branch });
     },
 
     pullRequests: () => listPullRequests(repo),
@@ -606,16 +544,11 @@ export function createWorktreeService(
     branchPullRequests: () => branchPullRequests(repo),
 
     checkoutPr: async (number) => {
-      // `setup: true, trust: false` exactly like `add` above, and the app runs
-      // the commands afterwards through `runPendingCommands`. Worth being
-      // explicit about why that is safe here: a pull request can edit
-      // `.grove.toml`, but `repoHooks` reads the *trunk's* copy, never the
-      // new worktree's — so what runs is the maintainer's file in both cases,
-      // and this key opens no door `a` did not already open.
+      // Review checkouts run the selected setup recipe just like new branches.
       const result = await checkoutPullRequest(
         repo,
         cwd,
-        { pr: String(number), setup: true, trust: false, open: true },
+        { pr: String(number), setup: true, open: true },
         reporter,
       ).catch((error: unknown) => {
         if (error instanceof PrLocalWorkError) throw new ReviewUpdateRequired([error.review]);
@@ -643,7 +576,7 @@ export function createWorktreeService(
         const result = await checkoutPullRequest(
           repo,
           cwd,
-          { pr: review.url, replace: true, setup: false, trust: false, open: false },
+          { pr: review.url, replace: true, setup: false, open: false },
           reporter,
         );
         updated.push(result.dir);
@@ -683,14 +616,6 @@ export function createWorktreeService(
       return `opened ${number} for ${result.branch} onto ${result.base} — ${result.url ?? ""}`.trimEnd();
     },
 
-    pendingCommands: async (target) => {
-      const record =
-        target === undefined
-          ? undefined
-          : resolveTarget(target, await listWorktrees(repo.gitDir), { root: repo.root, cwd });
-      return pendingCommands(repo, record?.path);
-    },
-
     pendingPrune: () =>
       pruneWorktrees(
         repo,
@@ -722,25 +647,6 @@ export function createWorktreeService(
       return `${result.trunk} now follows ${result.ref}; branches are pushed to origin`;
     },
 
-    trustAndRun: async (branch) => {
-      // Resolved rather than assembled: the directory a branch lives in is
-      // whatever `git worktree list` says, and slugging makes guessing it
-      // from the name wrong.
-      const worktrees = await listWorktrees(repo.gitDir);
-      const record = resolveTarget(branch, worktrees, { root: repo.root, cwd });
-      const result = await trustAndRun(
-        repo,
-        { path: record.path, branch: record.branch },
-        reporter,
-        { open: true },
-      );
-
-      const failure = failureFor(result);
-      if (failure) throw failure;
-
-      return `${describeSetup(result)} in ${result.dir}`;
-    },
-
     sync: async (target, { publish = false } = {}) => {
       const outcomes = await syncWorktrees(
         repo,
@@ -749,10 +655,9 @@ export function createWorktreeService(
         reporter,
       );
 
-      // Raised rather than returned, the way `trustAndRun` above raises
-      // setup's. `abortOnConflict` has already put the worktree back, so
-      // nothing here is half-done — but the screen draws what this returns in
-      // the same accent colour it draws `rebased` in, and a sync that stopped
+      // Raise failures as setup does. `abortOnConflict` has already put the
+      // worktree back, so nothing here is half-done. The screen draws the result
+      // in the same accent colour it draws `rebased` in, and a sync that stopped
       // on a conflict is not a sync that worked. The command line has always
       // exited 5 for this; the screen was the one surface calling it success.
       //

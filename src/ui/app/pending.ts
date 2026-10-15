@@ -2,13 +2,7 @@ import type { WorktreeSummary } from "../../core/commands/list.ts";
 import { describeDiscard } from "../../core/commands/reset.ts";
 import { plural } from "../../core/text.ts";
 import { theme } from "../theme.ts";
-import type {
-  PendingOpen,
-  PendingPropose,
-  PruneResult,
-  ReviewReplacement,
-  WorktreeService,
-} from "./service.ts";
+import type { PendingPropose, PruneResult, ReviewReplacement, WorktreeService } from "./service.ts";
 
 /**
  * What a key is about to do that nobody should be able to do by accident, held
@@ -18,19 +12,8 @@ import type {
  * same `y`/`n` every way: the question is the same one — is this the row you
  * meant — and the answer should not depend on how many rows are behind it or on
  * remembering which key you pressed.
- *
- * `trust-open` is the one that is not destructive at all, and it belongs here
- * anyway: what it asks about is a command somebody else wrote arriving on this
- * machine, which is a thing to agree to on purpose even though every part of it
- * can be undone.
  */
 export type Pending =
-  | {
-      readonly kind: "trust-setup";
-      readonly open?: boolean;
-      readonly branch: string;
-      readonly commands: readonly string[];
-    }
   | { readonly kind: "one"; readonly summary: WorktreeSummary }
   | {
       readonly kind: "many";
@@ -56,19 +39,6 @@ export type Pending =
    * making one.
    */
   | { readonly kind: "upstream"; readonly url: string; readonly existing: string }
-  /**
-   * `/open`, where the line that would open it is one nobody here has read.
-   *
-   * The one question here that grants something instead of taking it away, and
-   * the only one whose *text* is the point rather than the count: trust is
-   * somebody having read the exact line, so the line is what the prompt says,
-   * and pressing `y` is the reading.
-   */
-  | {
-      readonly kind: "trust-open";
-      readonly summary: WorktreeSummary;
-      readonly waiting: PendingOpen;
-    }
   /**
    * `/propose`: a pull request is about to be opened, onto the base the stack
    * says. The one question here whose subject is other people's screens — a
@@ -162,13 +132,6 @@ export function describePending(target: Pending): {
   // not red any more, and the sentence says why: what goes is saved as a
   // commit first, and the line after `y` names the `git stash apply` that
   // brings it back. A removal of a dirty worktree stays red — it keeps no copy.
-  if (target.kind === "trust-setup") {
-    return {
-      text: `set up ${target.branch}? approve: ${target.commands.map((line) => JSON.stringify(line)).join("; ")}`,
-      colour: theme.warn,
-    };
-  }
-
   if (target.kind === "reset") {
     const { dir, changed, untracked } = target.summary;
 
@@ -256,20 +219,6 @@ export function describePending(target: Pending): {
     };
   }
 
-  // The one question here that takes nothing away, and the only one that has to
-  // quote something: what `y` agrees to is this exact text, so the text is the
-  // prompt. Amber and not red, which is the distinction the two colours are
-  // carrying — a line that opens an editor is a thing to look at before it runs,
-  // not a thing there is no coming back from.
-  if (target.kind === "trust-open") {
-    const { command, files } = target.waiting;
-
-    return {
-      text: `open ${target.summary.dir} with \`${command}\`? nobody here has read ${files.join(" or ")}`,
-      colour: theme.warn,
-    };
-  }
-
   const all = `remove all ${target.paths.length} under ${target.label}?`;
   if (target.dirty > 0) {
     return {
@@ -293,14 +242,6 @@ export function commitPending(
   target: Pending,
   service: WorktreeService,
 ): { readonly label: string; readonly run: () => Promise<string> } {
-  if (target.kind === "trust-setup") {
-    return {
-      label: `setting up ${target.branch}`,
-      run: () =>
-        target.open ? service.trustAndRun(target.branch) : service.setup(target.branch, true),
-    };
-  }
-
   if (target.kind === "reset") {
     return {
       label: `discarding changes in ${target.summary.dir}`,
@@ -345,18 +286,6 @@ export function commitPending(
     return {
       label: `proposing ${target.summary.dir}`,
       run: () => service.propose(target.summary.path),
-    };
-  }
-
-  // `y` here records having read the line that was on the row, which is what
-  // the trust record is — and it is one record for the whole file, so the same
-  // `.grove.toml`'s setup commands run from `a` afterwards without asking
-  // again. That is the same thing `grove open --trust` does, reached from the
-  // one surface that can show the line first.
-  if (target.kind === "trust-open") {
-    return {
-      label: `opening ${target.summary.dir}`,
-      run: () => service.open(target.summary.path, true),
     };
   }
 

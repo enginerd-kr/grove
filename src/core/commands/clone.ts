@@ -1,12 +1,6 @@
 import { mkdir, rm, rmdir } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import {
-  HOOKS_FILE,
-  pendingCommands,
-  runSetup,
-  type SetupResult,
-  trustAndRun,
-} from "../../hooks/index.ts";
+import { runSetup, type SetupResult } from "../../hooks/index.ts";
 import { recordSetupState } from "../../hooks/state.ts";
 import type { Reporter } from "../../report/reporter.ts";
 import {
@@ -26,7 +20,6 @@ import { gitOutput, parseGitProgress, runGitOrThrow } from "../git.ts";
 import {
   GIT_FILE_CONTENTS,
   looksLikeRepoUrl,
-  type RepoPaths,
   repoNameFromUrl,
   repoPaths,
   worktreeRelPath,
@@ -43,7 +36,6 @@ import { followUpstream, type UpstreamResult } from "./upstream.ts";
 
 export type CloneOptions = {
   readonly setup?: boolean;
-  readonly trust?: boolean;
   readonly url: string;
   /** Directory name for the repo folder; defaults to the URL's last segment. */
   readonly dir?: string;
@@ -171,14 +163,8 @@ export async function cloneRepo(
     const setup: SetupResult[] = [];
     for (const name of new Set([trunk, branch])) {
       const target = { path: join(root, worktreeRelPath(name)), branch: name };
-      setup.push(
-        options.trust
-          ? await trustAndRun(paths, target, reporter, { opens: false })
-          : await runSetup(paths, target, { opens: false }, reporter),
-      );
+      setup.push(await runSetup(paths, target, { opens: false }, reporter));
     }
-    if (setup[0]?.untrusted)
-      await sayWhatTheFileWants(paths, join(root, worktreeRelPath(trunk)), reporter);
     return setup.some((item) => item.planned > 0) ? { ...completed, setup } : completed;
   };
   if (options.upstream === undefined) return bootstrap(result);
@@ -200,21 +186,6 @@ export async function cloneRepo(
     }
     throw error;
   }
-}
-
-/** Show the unapproved bootstrap recipe after the checkout has been preserved. */
-async function sayWhatTheFileWants(
-  paths: RepoPaths,
-  worktree: string,
-  reporter: Reporter,
-): Promise<void> {
-  const commands = await pendingCommands(paths, worktree);
-  if (commands.length === 0) return;
-
-  const where = relative(paths.root, join(worktree, HOOKS_FILE));
-  const what = commands.map((command) => JSON.stringify(command)).join(", ");
-
-  reporter.warn(`${where} wants to run ${what} — review it; grove setup applies it after approval`);
 }
 
 async function configureRemote(bare: string, reporter: Reporter): Promise<void> {

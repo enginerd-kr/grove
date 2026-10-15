@@ -187,7 +187,7 @@ describe("positional arity", () => {
   test("optional positionals may be left out", () => {
     expect(run(["path"]).command).toEqual({ name: "path", target: undefined });
     expect(run(["clone", "url"]).command).toMatchObject({ url: "url", dir: undefined });
-    expect(run(["open"]).command).toEqual({ name: "open", target: undefined, trust: false });
+    expect(run(["open"]).command).toEqual({ name: "open", target: undefined });
   });
 
   test("every command's arity comes from the usage line, not from a second list", () => {
@@ -236,7 +236,7 @@ describe("flags land where the command expects them", () => {
       fetch: true,
       push: false,
       setup: true,
-      trust: false,
+
       take: false,
     });
     expect(
@@ -251,7 +251,7 @@ describe("flags land where the command expects them", () => {
       fetch: false,
       push: true,
       setup: false,
-      trust: true,
+
       take: true,
     });
   });
@@ -478,5 +478,17 @@ describe("stack", () => {
       target: undefined,
       all: true,
     });
+  });
+});
+
+describe("legacy setup flags", () => {
+  test.each([
+    ["clone", "https://example.test/owner/repo.git"],
+    ["add", "feat/new"],
+    ["pr", "42"],
+    ["setup", "main"],
+    ["open", "main"],
+  ])("%s accepts --trust as a no-op", (command, target) => {
+    expect(parseCliArgs([command, target, "--trust"])).toEqual(parseCliArgs([command, target]));
   });
 });

@@ -3,17 +3,8 @@ import { openShell } from "../core/git.ts";
 import type { RepoPaths } from "../core/layout.ts";
 import type { Reporter } from "../report/reporter.ts";
 import { commandEnvFor, type HookFailure, type HookTarget } from "./command.ts";
-import {
-  configuredFiles,
-  governingFiles,
-  type Hooks,
-  openGatedHere,
-  openHere,
-  platformKeyFor,
-  wantsOpen,
-} from "./config.ts";
+import { configuredFiles, type Hooks, openHere, platformKeyFor, wantsOpen } from "./config.ts";
 import { repoHooks } from "./source.ts";
-import { awaitingTrust, trust } from "./trust.ts";
 
 /**
  * `open` — the hook whose subject is a person rather than a worktree.
@@ -44,12 +35,7 @@ import { awaitingTrust, trust } from "./trust.ts";
 /**
  * Starts `[setup] open`, once there is a worktree worth opening.
  *
- * Four things have to be true first, and each is a different kind of no.
- *
- * Trust is the same record the commands answer to — it is a shell line out of a
- * file that arrived with a pull, and `open = "curl … | sh"` reaches this
- * machine by exactly the road `run` does. Being let go of afterwards makes it
- * worse than `run`, not better, so it waits for the same `--trust`.
+ * A configured command, successful setup, and a terminal are needed.
  *
  * A failed command stops it, even though nothing here depends on that command
  * having worked. `run` is what makes the checkout runnable and `open` is what
@@ -65,14 +51,13 @@ import { awaitingTrust, trust } from "./trust.ts";
  * and it says so rather than leaving the silence to be worked out.
  *
  * And a platform the file did not write a line for opens nothing, which is the
- * only one of the four that is not really a refusal.
+ * only one of these that is not really a refusal.
  */
 export async function openWhatItAsksFor(
   repo: RepoPaths,
   target: HookTarget,
   hooks: Hooks,
   state: {
-    readonly untrusted: boolean;
     readonly failed?: HookFailure;
     /**
      * Whether there is a terminal to open into — `SetupOptions.open`, resolved.
@@ -85,14 +70,14 @@ export async function openWhatItAsksFor(
   },
   reporter: Reporter,
 ): Promise<string | undefined> {
-  const { untrusted, failed, allowed } = state;
+  const { failed, allowed } = state;
   const command = openHere(hooks);
 
   if (command === "") {
     // Said once rather than left as silence: a file that opens an editor for
     // the rest of the team and not for you is a thing to find out from the run
     // that did not open one, not from asking why afterwards.
-    if (wantsOpen(hooks.open) && !untrusted) {
+    if (wantsOpen(hooks.open)) {
       reporter.info(
         `nothing in ${configuredFiles(hooks).join(" and ")} opens on ` +
           platformKeyFor(process.platform),
@@ -101,8 +86,6 @@ export async function openWhatItAsksFor(
 
     return undefined;
   }
-
-  if (untrusted) return undefined;
 
   if (failed !== undefined) {
     reporter.info(`did not open: ${failed.command} failed`);
@@ -148,8 +131,6 @@ export async function openWhatItAsksFor(
 export type OpenNowResult = {
   /** The command that was started, if one was. See `SetupResult.opened`. */
   readonly opened?: string;
-  /** The line is from a file git tracks, and this machine has not read it. */
-  readonly untrusted: boolean;
 };
 
 /**
@@ -163,7 +144,7 @@ export type OpenNowResult = {
  *
  * Everything the hook refuses for it still refuses for, save one: there are no
  * `run` commands here to have failed, because nothing is being set up. What is
- * left is trust, a platform the file wrote no line for, and a terminal to open
+ * left is a platform the file wrote no line for, and a terminal to open
  * into — and the file that opens nothing at all, which is a mistake when it is
  * what you asked for and merely quiet when it is the tail of an `add`.
  */
@@ -171,7 +152,7 @@ export async function openNow(
   repo: RepoPaths,
   target: HookTarget,
   reporter: Reporter,
-  options: { readonly trust: boolean; readonly allowed: boolean },
+  options: { readonly allowed: boolean },
 ): Promise<OpenNowResult> {
   const hooks = await repoHooks(repo, target.path);
 
@@ -184,66 +165,13 @@ export async function openNow(
     });
   }
 
-  // Recorded before the line is read back, exactly as `trustAndRun` does it, so
-  // one answer covers the file's commands and its editor together.
-  if (options.trust && hooks.fingerprint !== undefined) {
-    await trust(repo.gitDir, hooks.fingerprint);
-  }
-
-  const untrusted = await awaitingTrust(repo.gitDir, openGatedHere(hooks), hooks.fingerprint);
-
-  if (untrusted) {
-    reporter.warn(
-      `the open line in ${governingFiles(hooks, repo.root).join(" and ")} has not been ` +
-        "trusted here — read it, then open with --trust",
-    );
-
-    return { untrusted };
-  }
-
   const opened = await openWhatItAsksFor(
     repo,
     target,
     hooks,
-    { untrusted, allowed: options.allowed },
+    { allowed: options.allowed },
     reporter,
   );
 
-  return { opened, untrusted };
-}
-
-/** The line, and where to go and read it — what a screen needs to ask. */
-export type PendingOpen = {
-  readonly command: string;
-  /** The gated files, as `governingFiles` spells them — what `trust` covers. */
-  readonly files: readonly string[];
-};
-
-/**
- * The open line waiting on somebody here having read it, when one is waiting.
- *
- * `pendingCommands`' counterpart for the one hook whose subject is a person,
- * and it is here for the reason that one is: a screen cannot ask about a line
- * it cannot show. The command line has nobody to ask — `grove open` in a pipe
- * is the same tool as under a terminal — so it warns and names `--trust`. A
- * screen can put the exact line in front of whoever is sitting at it, and
- * reading it there is the whole of what trust was ever asking for.
- *
- * `undefined` is every case where opening simply happens: a file that opens
- * nothing on this platform, an open line out of a layer you wrote yourself, and
- * a file this machine has already read.
- */
-export async function pendingOpen(
-  repo: RepoPaths,
-  target: HookTarget,
-): Promise<PendingOpen | undefined> {
-  const hooks = await repoHooks(repo, target.path);
-
-  const command = openHere(hooks);
-  if (command === "") return undefined;
-  if (!(await awaitingTrust(repo.gitDir, openGatedHere(hooks), hooks.fingerprint))) {
-    return undefined;
-  }
-
-  return { command, files: governingFiles(hooks, repo.root) };
+  return { opened };
 }

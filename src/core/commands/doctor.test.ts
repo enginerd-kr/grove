@@ -313,8 +313,7 @@ describe(".grove.toml", () => {
 
       // `addWorktree` directly rather than `seedWorktree`, which pins
       // `setup: false`: the link this test is about is the one `add` makes, so
-      // this is the one fixture in the file that needs setup turned on. `trust`
-      // stays off — a `link` needs no permission, only a `run` does.
+      // this fixture needs setup turned on.
       await addWorktree(
         repo,
         root,
@@ -324,7 +323,7 @@ describe(".grove.toml", () => {
           fetch: true,
           push: false,
           setup: true,
-          trust: false,
+
           take: false,
         },
         recorder().reporter,

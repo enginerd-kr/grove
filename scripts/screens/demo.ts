@@ -1,7 +1,6 @@
 import { setSystemTime } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fingerprintOf, trust } from "../../src/hooks/trust.ts";
 import { buildFixture, type Fixture } from "./fixture.ts";
 
 /**
@@ -113,14 +112,6 @@ setSystemTime();
 
 const fixture = await buildFixture({ now: Date.now() });
 try {
-  // The `a` in the recording runs `.grove.toml`'s commands without stopping to
-  // ask, because the agreement is already on file. Recording the question
-  // instead would be a fair demo of a different thing — the gate is `--trust`'s
-  // and the screen's story, and this eighteen seconds is about what a worktree
-  // arrives with.
-  const toml = await Bun.file(join(fixture.cwd, ".grove.toml")).text();
-  await trust(fixture.repo.gitDir, fingerprintOf(toml));
-
   const path = join(fixture.root, "demo.tape");
   await writeFile(path, tape(fixture));
 

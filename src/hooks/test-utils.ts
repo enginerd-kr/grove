@@ -12,7 +12,7 @@ import { runSetup, type SetupOptions, type SetupResult } from "./setup.ts";
  * A repository to run hooks against, shared by every test in this package.
  *
  * Almost everything here is about what lands on disk — what a `copy` line
- * reaches, where a `link` points, which commands a machine has agreed to run —
+ * reaches, where a `link` points, and which commands execute —
  * so the fixture is a real repository with two real worktrees rather than a
  * stand-in.
  */
@@ -93,10 +93,10 @@ export type Fixture = {
    */
   readonly configureGlobal: (text: string) => Promise<void>;
   /**
-   * Commits what the trunk holds, which is what makes a layer gated.
+   * Commits what the trunk holds so local layers participate in the setup fingerprint.
    *
    * The fixture's files are written and not committed, so `.grove.local.toml`
-   * arrives untracked — the ordinary case, and the one the gate lets through.
+   * arrives untracked and does not enter the project fingerprint.
    * A test about the repository that commits one anyway calls this.
    */
   readonly commitTrunk: () => Promise<void>;

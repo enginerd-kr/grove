@@ -38,12 +38,7 @@ test("review sync receives new PR commits without rebasing onto main or pushing 
     await forge.propose("fix/crash", "one\n", "first");
     const review = succeeded(
       await attempt((r) =>
-        checkoutPullRequest(
-          forge.repo,
-          forge.repo.root,
-          { pr: "42", setup: false, trust: false },
-          r,
-        ),
+        checkoutPullRequest(forge.repo, forge.repo.root, { pr: "42", setup: false }, r),
       ),
     );
     await commit(join(forge.repo.root, "main"), "trunk-only.txt", "trunk\n");
@@ -77,12 +72,7 @@ test("replacing a divergent review saves committed and uncommitted work", async 
     await forge.propose("fix/crash", "one\n", "first");
     const review = succeeded(
       await attempt((r) =>
-        checkoutPullRequest(
-          forge.repo,
-          forge.repo.root,
-          { pr: "42", setup: false, trust: false },
-          r,
-        ),
+        checkoutPullRequest(forge.repo, forge.repo.root, { pr: "42", setup: false }, r),
       ),
     );
     await commit(review.path, "local.txt", "local commit\n");
@@ -94,7 +84,7 @@ test("replacing a divergent review saves committed and uncommitted work", async 
         checkoutPullRequest(
           forge.repo,
           forge.repo.root,
-          { pr: "42", replace: true, setup: false, trust: false },
+          { pr: "42", replace: true, setup: false },
           r,
         ),
       ),
@@ -123,12 +113,7 @@ test("sync receives a force-pushed PR after a rename and an earlier background f
     await forge.propose("fix/crash", "one\n", "first");
     const review = succeeded(
       await attempt((r) =>
-        checkoutPullRequest(
-          forge.repo,
-          forge.repo.root,
-          { pr: "42", setup: false, trust: false },
-          r,
-        ),
+        checkoutPullRequest(forge.repo, forge.repo.root, { pr: "42", setup: false }, r),
       ),
     );
     const before = await head(review.path);
@@ -176,7 +161,7 @@ test("new branches report the fetched base, and main with divergent commits stay
         addWorktree(
           repo,
           main,
-          { branch: "feat/new", fetch: true, push: false, setup: false, trust: false, take: false },
+          { branch: "feat/new", fetch: true, push: false, setup: false, take: false },
           r,
         ),
       ),
@@ -195,7 +180,7 @@ test("new branches report the fetched base, and main with divergent commits stay
   });
 });
 
-test("worktree recipes keep main as copy source, require approval, and report dependency drift", async () => {
+test("worktree recipes keep main as copy source, run automatically, and report dependency drift", async () => {
   await withRepo(async (fixture) => {
     await fixture.configure('[setup]\nrun = ["echo trunk > recipe.txt"]\n');
     await Bun.write(join(fixture.trunk, ".env"), "FROM_TRUNK=1\n");
@@ -203,20 +188,20 @@ test("worktree recipes keep main as copy source, require approval, and report de
       join(fixture.worktree, ".grove.toml"),
       '[setup]\ncopy = [".env"]\nrun = ["echo branch > recipe.txt"]\n',
     );
-    const run = (trust: boolean) =>
+    const run = () =>
       setUpWorktrees(
         fixture.repo,
         fixture.repo.root,
-        { target: fixture.branch, all: false, trust, configSource: "worktree" },
+        { target: fixture.branch, all: false, configSource: "worktree" },
         fixture.log.reporter,
       );
-    const first = await run(false);
-    expect(first[0]?.untrusted).toBe(true);
+    const first = await run();
+    expect(first[0]?.ran).toEqual(["echo branch > recipe.txt"]);
     expect(await Bun.file(join(fixture.worktree, ".env")).text()).toBe("FROM_TRUNK=1\n");
     expect((await listWorktreeSummaries(fixture.repo, fixture.repo.root))[1]?.setupState).toBe(
-      "pending",
+      "ready",
     );
-    await run(true);
+    await run();
     expect(await Bun.file(join(fixture.worktree, "recipe.txt")).text()).toBe("branch\n");
     expect((await listWorktreeSummaries(fixture.repo, fixture.repo.root))[1]?.setupState).toBe(
       "ready",
@@ -226,7 +211,7 @@ test("worktree recipes keep main as copy source, require approval, and report de
       "stale",
     );
     await Bun.write(join(fixture.worktree, ".grove.toml"), '[setup]\nrun = ["exit 7"]\n');
-    await run(true);
+    await run();
     expect((await listWorktreeSummaries(fixture.repo, fixture.repo.root))[1]?.setupState).toBe(
       "failed",
     );
@@ -296,7 +281,7 @@ test("forge-confirmed multi-commit squash merges are prune candidates only at th
   });
 });
 
-test("clone keeps main beside a requested branch and defers unapproved bootstrap commands", async () => {
+test("clone keeps main beside a requested branch and runs bootstrap commands in both", async () => {
   await withTempRepo(async (temp) => {
     const source = await managedRepo(temp);
     const main = join(source.root, "main");
@@ -311,18 +296,11 @@ test("clone keeps main beside a requested branch and defers unapproved bootstrap
         ),
       ),
     );
-    expect(clone.setup?.map((item) => item.untrusted)).toEqual([true, true]);
+    expect(clone.setup?.map((item) => item.ran)).toEqual([
+      ["echo bootstrapped > bootstrap.txt"],
+      ["echo bootstrapped > bootstrap.txt"],
+    ]);
     expect(await Bun.file(join(clone.root, "main", ".grove.toml")).exists()).toBe(true);
-    expect(await Bun.file(join(clone.root, "main", "bootstrap.txt")).exists()).toBe(false);
-    const repo = {
-      ...source,
-      root: clone.root,
-      gitDir: clone.gitDir,
-      gitFile: join(clone.root, ".git"),
-    };
-    succeeded(
-      await attempt((r) => setUpWorktrees(repo, clone.root, { all: true, trust: true }, r)),
-    );
     expect(await Bun.file(join(clone.root, "main", "bootstrap.txt")).text()).toBe("bootstrapped\n");
     expect(await Bun.file(join(clone.worktree, "bootstrap.txt")).text()).toBe("bootstrapped\n");
   });
@@ -335,12 +313,7 @@ test("explicit review contributions follow the current PR base and renamed revie
     await forge.propose("fix/crash", "one\n", "first");
     const review = succeeded(
       await attempt((r) =>
-        checkoutPullRequest(
-          forge.repo,
-          forge.repo.root,
-          { pr: "42", setup: false, trust: false },
-          r,
-        ),
+        checkoutPullRequest(forge.repo, forge.repo.root, { pr: "42", setup: false }, r),
       ),
     );
     const renamed = succeeded(
@@ -423,7 +396,7 @@ test("changing an existing checkout's recipe still carries --take changes before
             fetch: false,
             push: false,
             setup: true,
-            trust: true,
+
             take: true,
             configSource: "worktree",
           },

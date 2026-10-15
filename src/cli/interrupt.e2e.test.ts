@@ -252,7 +252,7 @@ describe("an interrupt, through a real signal", () => {
         `[setup]\nrun = ['sleep 300 & printf "%s %s" "$$" "$!" > ${pids}; wait']\n`,
       );
 
-      const live = startCli(["add", "feat/login", "--trust", "--headless"], { cwd: repo.root });
+      const live = startCli(["add", "feat/login", "--headless"], { cwd: repo.root });
 
       // The worktree is made first and the commands run on top of it, so this
       // line is also the proof that what gets interrupted below is the setup

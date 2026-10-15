@@ -185,7 +185,6 @@ export async function syncWorktrees(
           {
             pr: review?.url ?? String(reviewNumber),
             setup: false,
-            trust: false,
             open: false,
           },
           reporter,

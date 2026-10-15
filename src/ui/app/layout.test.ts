@@ -464,12 +464,6 @@ describe("hintsFor", () => {
       "remove",
       "keep",
     ]);
-    // Both halves, because the question is not "shall I" but "have you read
-    // this": what `y` agrees to and what it does next are two different facts.
-    expect(hintsFor("confirm", leaf, "trust-open").map((hint) => hint.action)).toEqual([
-      "trust and open",
-      "leave it",
-    ]);
   });
 
   test("`x` is offered on a worktree with something to throw away, and nowhere else", () => {

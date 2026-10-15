@@ -3,17 +3,9 @@ import type { Reporter } from "../report/reporter.ts";
 /**
  * One yes-or-no question, put to whoever is sitting at the terminal.
  *
- * The command line had no way to ask anything. `.grove.toml`'s commands wait
- * for `--trust`, and without it `grove add` printed them, said they had not
- * been trusted, and moved on — so the first thing a newcomer typed out of the
- * README made a worktree with no `.env` and no install in it, and the answer
- * was on a flag they had not read about yet. The screen has asked since 0.4.2.
- * A terminal with a person at it can be asked the same thing.
- *
- * `undefined` where there is nobody: a pipe, `--headless`, `--json`. Those runs
- * are scripts, and a script that hangs on a question is worse than one that
- * skips the commands and says so. `CommandContext.ask` carries the difference,
- * and the commands treat its absence as the answer they always had.
+ * `undefined` where there is nobody: a pipe, `--headless`, or `--json`.
+ * `CommandContext.ask` lets commands confirm destructive actions at a terminal
+ * and require explicit flags when running unattended.
  */
 export type Ask = (question: string) => Promise<boolean>;
 

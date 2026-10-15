@@ -49,7 +49,6 @@ import { useWorktreeSelection } from "./useWorktreeSelection.ts";
  */
 
 type Props = {
-  readonly initialSetup?: boolean;
   readonly service: WorktreeService;
   /** Shown in the header; the repository the keystrokes act on. */
   readonly repoRoot: string;
@@ -142,7 +141,6 @@ const GENERAL_TIPS: readonly Message[] = [
 ];
 
 export function App({
-  initialSetup = false,
   service,
   repoRoot,
   store,
@@ -337,34 +335,10 @@ export function App({
     [askThen, perform, service],
   );
 
-  /**
-   * `/open`: find out whether the line has been read here, then run it or show
-   * it to be read.
-   *
-   * The command line answers an untrusted `open` with a warning and the flag to
-   * pass next time, and it has to: `grove open` in a pipe has nobody to ask, and
-   * behaving one way there and another under a terminal would make it two
-   * commands. The screen is the surface that does have somebody sitting at it,
-   * and what trust wants is exactly that they saw the line before it ran — so
-   * here the refusal becomes the question, with the command on the row above the
-   * `y`.
-   *
-   * The read comes first and costs a second look at the file, the way `s`'s does:
-   * a prompt is only worth putting up where there is something to agree to, and
-   * every repository whose file is already trusted goes straight to opening.
-   */
   const beginOpen = useCallback(
     (summary: WorktreeSummary) =>
-      askThen(
-        `opening ${summary.dir}`,
-        async () => {
-          const waiting = await service.pendingOpen(summary.path);
-
-          return waiting === undefined ? undefined : { kind: "trust-open", summary, waiting };
-        },
-        () => void perform(`opening ${summary.dir}`, () => service.open(summary.path)),
-      ),
-    [askThen, perform, service],
+      perform(`opening ${summary.dir}`, () => service.open(summary.path)),
+    [perform, service],
   );
 
   /**
@@ -401,22 +375,6 @@ export function App({
       setMode({ kind: "list" });
     },
     [busy, service],
-  );
-
-  /** Offer unapproved commands after creating a development or review checkout. */
-  const runPendingCommands = useCallback(
-    async (branch: string) => {
-      try {
-        const commands = await service.pendingCommands(branch);
-        if (commands.length === 0) return;
-
-        setMode({ kind: "confirm", target: { kind: "trust-setup", branch, commands, open: true } });
-      } catch {
-        // The worktree is made and its files are in place; failing to work out
-        // whether there were commands to run is not worth a second red line.
-      }
-    },
-    [service],
   );
 
   /**
@@ -501,11 +459,6 @@ export function App({
         if (live) setMode({ kind: "list" });
       }
 
-      if (initialSetup && live) {
-        const worktrees = await service.list();
-        const main = worktrees.find((row) => row.isDefault);
-        if (main) await runPendingCommands(main.branch ?? main.path);
-      }
       const latest = await update;
       if (!live) return;
       // One slot, several claims: whatever already owns the line — an error,
@@ -528,7 +481,7 @@ export function App({
     return () => {
       live = false;
     };
-  }, [refresh, checkUpdate, initialSetup, service, runPendingCommands]);
+  }, [refresh, checkUpdate]);
 
   // Jumps the slot to a random tip in the pool, never the one just shown —
   // unless something else has claimed the slot since, in which case there is
@@ -660,16 +613,7 @@ export function App({
         // nothing to fill in about one.
         case "setup":
           if (!selected) return;
-          return void askThen(
-            "reading setup",
-            async () => {
-              const commands = await service.pendingCommands(selected.path);
-              return commands.length
-                ? { kind: "trust-setup", branch: selected.path, commands }
-                : undefined;
-            },
-            () => void perform(`filling in ${selected.dir}`, () => service.setup(selected.path)),
-          );
+          return void perform(`filling in ${selected.dir}`, () => service.setup(selected.path));
         // The third row-aimed command, and the one whose question has more
         // than two answers — so it opens a popup rather than a `confirm`.
         case "rebase":
@@ -699,7 +643,6 @@ export function App({
     [
       perform,
       beginOpen,
-      askThen,
       beginRebase,
       beginPropose,
       beginSyncAll,
@@ -754,9 +697,7 @@ export function App({
 
         return void perform(`checking out pull request ${pr.number}`, () =>
           service.checkoutPr(pr.number),
-        ).then((succeeded) => {
-          if (succeeded) return runPendingCommands(`pr/${pr.number}`);
-        });
+        );
       }
 
       return;
@@ -868,11 +809,7 @@ export function App({
         // "never mind" looks like from inside one.
         if (value.length === 0) return setMode({ kind: "list" });
 
-        // The file's commands run after, not instead: `perform` has drawn what
-        // the worktree got, and this runs the half it did not.
-        return void perform(`adding ${value}`, () => service.add(value, mode.from)).then(() =>
-          runPendingCommands(value),
-        );
+        return void perform(`adding ${value}`, () => service.add(value, mode.from));
       }
 
       // Applied to the mode inside the updater and not to the one this handler

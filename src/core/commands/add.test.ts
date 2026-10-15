@@ -51,7 +51,7 @@ type AddCall = {
    * nothing. The `.grove.toml` block passes it explicitly.
    */
   readonly setup?: boolean;
-  readonly trust?: boolean;
+
   readonly take?: boolean;
   /** Where the add is asked from. Defaults to the repository root. */
   readonly cwd?: string;
@@ -66,13 +66,13 @@ function attemptAdd(
     fetch = true,
     push = false,
     setup = false,
-    trust = false,
+
     take = false,
     cwd = repo.root,
   }: AddCall = {},
 ): Promise<Attempt<AddResult>> {
   return attempt((reporter) =>
-    addWorktree(repo, cwd, { branch, from, fetch, push, setup, trust, take }, reporter),
+    addWorktree(repo, cwd, { branch, from, fetch, push, setup, take }, reporter),
   );
 }
 
@@ -369,60 +369,43 @@ run = ["sh -c 'echo ok > ran.txt'"]
     });
   }, 60_000);
 
-  test("copy and link apply on sight, while run waits on --trust", async () => {
+  test("copies, links, and runs commands automatically", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
       await seedSetupFile(repo.root);
 
-      const untrusted = succeeded(await attemptAdd(repo, "feat/login", { setup: true }));
+      const first = succeeded(await attemptAdd(repo, "feat/login", { setup: true }));
 
       // The whole record, not the two fields a `--json` reader happened to look
       // at: what was planned, what landed, and the lists that stayed empty.
-      expect(untrusted.setup).toEqual({
+      expect(first.setup).toEqual({
         path: join(repo.root, "feat", "login"),
         dir: "feat/login",
         planned: 3,
         copied: [".env"],
         linked: ["node_modules"],
-        ran: [],
+        ran: ["sh -c 'echo ok > ran.txt'"],
         missing: [],
         kept: [],
         overwritten: [],
         failed: undefined,
-        // A `run` line is code that arrived with a pull, so it is reported and
-        // skipped until somebody says they have read it.
-        untrusted: true,
       });
-      expect(await Bun.file(join(untrusted.path, ".env")).text()).toBe("SECRET=1\n");
-      expect(await Bun.file(join(untrusted.path, "node_modules", "marker")).text()).toBe("dep\n");
-      expect(await pathExists(join(untrusted.path, "ran.txt"))).toBe(false);
+      expect(await Bun.file(join(first.path, ".env")).text()).toBe("SECRET=1\n");
+      expect(await Bun.file(join(first.path, "node_modules", "marker")).text()).toBe("dep\n");
+      expect(await pathExists(join(first.path, "ran.txt"))).toBe(true);
 
-      const trusted = succeeded(await attemptAdd(repo, "trusted", { setup: true, trust: true }));
+      const second = succeeded(await attemptAdd(repo, "second", { setup: true }));
 
-      expect(trusted.setup?.untrusted).toBe(false);
-      expect(trusted.setup?.ran).toEqual(["sh -c 'echo ok > ran.txt'"]);
-      expect(trusted.setup?.failed).toBeUndefined();
-      expect(await Bun.file(join(trusted.path, "ran.txt")).text()).toBe("ok\n");
+      expect(second.setup?.ran).toEqual(["sh -c 'echo ok > ran.txt'"]);
+      expect(second.setup?.failed).toBeUndefined();
+      expect(await Bun.file(join(second.path, "ran.txt")).text()).toBe("ok\n");
     });
   }, 60_000);
 
-  test("the warning names the file to read, and --no-setup skips the lot", async () => {
+  test("--no-setup skips files and commands", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
       await seedSetupFile(repo.root);
-
-      const warned = await attemptAdd(repo, "feat/login", { setup: true });
-      succeeded(warned);
-
-      // The trunk's file, by the path somebody can open — not the copy in the
-      // worktree that was just filled in, which nothing consults.
-      expect(warned.log.err.join("")).toContain("main/.grove.toml");
-      expect(warned.log.err.join("")).toContain("--trust");
-      // Said as a warning rather than narrated as a step: nothing went wrong,
-      // and something is waiting on a person.
-      expect(warned.log.err.some((line) => line.startsWith("! ") && line.includes("--trust"))).toBe(
-        true,
-      );
 
       const skipped = succeeded(await attemptAdd(repo, "quiet", { setup: false }));
 

@@ -32,7 +32,6 @@ export type GroveCommand =
   | {
       readonly name: "clone";
       readonly setup?: boolean;
-      readonly trust?: boolean;
       readonly url: string;
       readonly dir?: string;
       readonly branch?: string;
@@ -54,8 +53,6 @@ export type GroveCommand =
       readonly fetch: boolean;
       readonly push: boolean;
       readonly setup: boolean;
-      /** `--trust`: run `.grove.toml`'s commands, having read them. */
-      readonly trust: boolean;
       /** `--take`: move the current worktree's uncommitted changes into the new one. */
       readonly take: boolean;
     }
@@ -66,7 +63,6 @@ export type GroveCommand =
       /** As typed: a number, a URL, or a branch. `gh` resolves it, so we do not. */
       readonly pr: string;
       readonly setup: boolean;
-      readonly trust: boolean;
     }
   | {
       readonly name: "propose";
@@ -96,7 +92,6 @@ export type GroveCommand =
       /** Absent, and without `--all`, means the worktree the shell is standing in. */
       readonly target?: string;
       readonly all: boolean;
-      readonly trust: boolean;
     }
   | {
       readonly name: "exec";
@@ -128,7 +123,6 @@ export type GroveCommand =
       readonly name: "open";
       /** Absent means the worktree the shell is standing in. */
       readonly target?: string;
-      readonly trust: boolean;
     }
   | {
       readonly name: "reset";
@@ -254,7 +248,6 @@ function buildCommand(
       return {
         name: "clone",
         ...(bool(values, "no-setup") ? { setup: false } : {}),
-        ...(bool(values, "trust") ? { trust: true } : {}),
         url: first,
         dir: second,
         branch: str(values, "branch"),
@@ -287,7 +280,6 @@ function buildCommand(
         fetch: !bool(values, "no-fetch"),
         push: bool(values, "push"),
         setup: !bool(values, "no-setup"),
-        trust: bool(values, "trust"),
         take: bool(values, "take"),
       };
     }
@@ -299,7 +291,6 @@ function buildCommand(
         ...(bool(values, "replace") ? { replace: true } : {}),
         pr: first,
         setup: !bool(values, "no-setup"),
-        trust: bool(values, "trust"),
       };
     }
     case "propose": {
@@ -347,7 +338,6 @@ function buildCommand(
         ...(configSource === undefined ? {} : { configSource }),
         target: first,
         all: bool(values, "all"),
-        trust: bool(values, "trust"),
       };
     case "exec": {
       // Every positional, not just the first: the usage line ends in `...`, so
@@ -388,7 +378,7 @@ function buildCommand(
     case "path":
       return { name: "path", target: first };
     case "open":
-      return { name: "open", target: first, trust: bool(values, "trust") };
+      return { name: "open", target: first };
     case "reset": {
       if (first === undefined) return needs("a worktree to reset");
       return {
@@ -578,7 +568,13 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
     // stays reachable.
     ({ values, positionals } = parseArgs({
       args: [...rest],
-      options: optionsFor([...spec.flags, ...GLOBAL_FLAGS]),
+      options: {
+        ...optionsFor([...spec.flags, ...GLOBAL_FLAGS]),
+        // Older scripts may still pass --trust. Setup now runs automatically.
+        ...(["clone", "add", "pr", "setup", "open"].includes(spec.name)
+          ? { trust: { type: "boolean" as const } }
+          : {}),
+      },
       allowPositionals: true,
       strict: true,
     }));

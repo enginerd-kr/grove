@@ -29,7 +29,7 @@ async function branch(repo: Awaited<ReturnType<typeof managedRepo>>, name: strin
   const result = await addWorktree(
     repo,
     repo.root,
-    { branch: name, on, fetch: false, push: false, setup: false, trust: false, take: false },
+    { branch: name, on, fetch: false, push: false, setup: false, take: false },
     recorder().reporter,
   );
 

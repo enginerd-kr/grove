@@ -5,8 +5,8 @@ import { listWorktreeSummaries } from "../core/commands/list.ts";
 import { removeWorktree } from "../core/commands/remove.ts";
 import { seedGit } from "../core/test-utils.ts";
 import { appliedFingerprints, clearApplied, isStale, recordApplied } from "./applied.ts";
+import { fingerprintOf } from "./fingerprint.ts";
 import { setUp, withRepo } from "./test-utils.ts";
-import { fingerprintOf } from "./trust.ts";
 
 /**
  * Which version of the file each worktree was filled in from, and the badge
@@ -74,9 +74,7 @@ describe("what setup records", () => {
 
       await setUp(fixture);
 
-      // The same fingerprint `trust` is keyed on: one edit withdraws the trust
-      // and marks the worktree stale, and there is no second definition of
-      // "the file changed".
+      // The saved fingerprint is what marks the worktree stale after an edit.
       expect(await appliedFingerprints(repo.gitDir)).toEqual(
         new Map([[branch, fingerprintOf(FILE)]]),
       );
@@ -106,7 +104,7 @@ describe("what setup records", () => {
     });
   });
 
-  test("commands held back for trust leave the old record standing", async () => {
+  test("new commands run and update setup readiness", async () => {
     await withRepo(async (fixture) => {
       const { repo, branch } = fixture;
       await Bun.write(join(fixture.trunk, ".env"), "SECRET=1\n");
@@ -116,18 +114,14 @@ describe("what setup records", () => {
       const first = (await appliedFingerprints(repo.gitDir)).get(branch);
       expect(first).toBeDefined();
 
-      // A `run` line arrives with a pull. Untrusted, it does not run — and
-      // the worktree is not filled in from this version, so the record still
-      // names the version it was filled in from, and the row stays stale
-      // until somebody has read the file and the commands have run.
       const withRun = '[setup]\ncopy = [".env"]\nrun = ["sh -c \'echo ok > ran.txt\'"]\n';
       await fixture.configure(withRun);
       await fixture.commitTrunk();
 
-      const untrusted = await setUp(fixture);
-      expect(untrusted.untrusted).toBe(true);
-      expect((await appliedFingerprints(repo.gitDir)).get(branch)).toBe(first);
-      expect((await listWorktreeSummaries(repo, repo.root))[1]?.setupState).toBe("pending");
+      const result = await setUp(fixture);
+      expect(result.ran).toEqual(["sh -c 'echo ok > ran.txt'"]);
+      expect((await appliedFingerprints(repo.gitDir)).get(branch)).not.toBe(first);
+      expect((await listWorktreeSummaries(repo, repo.root))[1]?.setupState).toBe("ready");
     });
   });
 

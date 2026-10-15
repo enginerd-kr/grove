@@ -11,10 +11,7 @@ import { runGit } from "../core/git.ts";
  * completes, the fingerprint of the file it ran from is written down beside
  * the branch, and `list` compares that with the file as it is now.
  *
- * The fingerprint is `trust.ts`'s — the same hash of the same tracked text —
- * so one edit to the file withdraws the trust it was given *and* marks every
- * worktree filled in from the old version as stale. One fact, two records,
- * and no second definition of "the file changed".
+ * The project configuration fingerprint changes whenever its contents do.
  *
  * Kept in `branch.<name>`, the way `stack.ts` keeps a branch's parent: it is
  * where git keeps the rest of what is known about a branch, `git branch -m`

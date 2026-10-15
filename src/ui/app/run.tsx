@@ -73,7 +73,6 @@ type GroveProps = {
  * it came through.
  */
 function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: GroveProps) {
-  const [initialSetup, setInitialSetup] = useState(false);
   const [paths, setPaths] = useState<RepoPaths | undefined>(
     found.kind === "found" ? found.paths : undefined,
   );
@@ -116,10 +115,7 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: Grove
         folder={folder}
         inPlace={inPlace}
         store={store}
-        onReady={(ready) => {
-          setInitialSetup(true);
-          setPaths(ready);
-        }}
+        onReady={setPaths}
         onCancel={onCancel}
       />
     );
@@ -127,7 +123,6 @@ function Grove({ found, folder, inPlace, cwd, store, reporter, onCancel }: Grove
 
   return (
     <App
-      initialSetup={initialSetup}
       service={worktrees}
       repoRoot={paths.root}
       store={store}

@@ -159,6 +159,11 @@ describeUi("a bare `grove` on a real terminal", () => {
   test("-C chooses the folder for setup and can still select an existing repository", async () => {
     await withTempRepo(async (temp) => {
       const repo = await managedRepo(temp);
+      const main = join(repo.root, "main");
+      await Bun.write(join(main, ".grove.toml"), '[setup]\nrun = ["echo setup >> ran.txt"]\n');
+      await seedGit(main, ["add", ".grove.toml"]);
+      await seedGit(main, ["commit", "-m", "Configure setup"]);
+      await seedGit(main, ["push"]);
       const folder = join(repo.root, "new-project");
       await mkdir(folder);
       const setup = startUi({ cwd: repo.root, args: ["-C", "new-project"], cols: 160 });
@@ -171,7 +176,9 @@ describeUi("a bare `grove` on a real terminal", () => {
         setup.press(temp.originUrl);
         await setup.waitForFrame((value) => value.includes(temp.originUrl));
         setup.press(keys.enter);
-        await setup.waitForFrame((value) => value.includes("q quit"));
+        const ready = await setup.waitForFrame((value) => value.includes("q quit"));
+        expect(ready).not.toContain("approve:");
+        expect(await Bun.file(join(folder, "main", "ran.txt")).text()).toBe("setup\n");
         expect(await setup.pressUntilExit("q")).toBe(ExitCode.ok);
         expect(await readdir(folder)).toContain(".bare");
         expect((await seedGit(join(folder, "main"), ["rev-parse", "--show-toplevel"])).trim()).toBe(
@@ -316,7 +323,7 @@ describe("Ctrl-C", () => {
       // Spawned here rather than through `runCli` for the one thing `runCli`
       // cannot do: hold the child long enough to signal it.
       const child = Bun.spawn(
-        ["bun", `${import.meta.dir}/cli.tsx`, "add", "feat/slow", "--trust", "--headless"],
+        ["bun", `${import.meta.dir}/cli.tsx`, "add", "feat/slow", "--headless"],
         { cwd: root, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
       );
 

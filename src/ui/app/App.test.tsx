@@ -128,9 +128,8 @@ type Calls = {
   readonly rebased: { target: string; base: RebaseBase }[];
   readonly proposed: string[];
   pruned: number;
-  readonly opened: { target: string; trust: boolean }[];
+  readonly opened: { target: string }[];
   readonly filledIn: string[];
-  readonly trusted: string[];
   readonly followed: { url: string; force: boolean }[];
 };
 
@@ -155,7 +154,6 @@ function stub(overrides: Partial<WorktreeService> = {}): {
     pruned: 0,
     opened: [],
     filledIn: [],
-    trusted: [],
     followed: [],
   };
 
@@ -203,14 +201,10 @@ function stub(overrides: Partial<WorktreeService> = {}): {
         calls.discarded.push(target);
         return `discarded 2 changes in ${target}`;
       },
-      open: async (target, trust = false) => {
-        calls.opened.push({ target, trust });
+      open: async (target) => {
+        calls.opened.push({ target });
         return `opened ${target} with code .`;
       },
-      // Nothing waiting by default, the way `pendingCommands` answers nothing:
-      // a file already read here is every ordinary repository, and `/open`
-      // there opens rather than asking.
-      pendingOpen: async () => undefined,
       setup: async (target) => {
         calls.filledIn.push(target);
         return `2 copied, 1 run in ${target}`;
@@ -249,14 +243,6 @@ function stub(overrides: Partial<WorktreeService> = {}): {
       propose: async (target) => {
         calls.proposed.push(target);
         return `opened pull request 7 for ${target} onto main — https://forge/pull/7`;
-      },
-      // Nothing waiting by default, which is every repository with no
-      // `.grove.toml` and every one whose file is already trusted: nothing runs
-      // after `a`, and the other tests never see a second action.
-      pendingCommands: async () => [],
-      trustAndRun: async (branch) => {
-        calls.trusted.push(branch);
-        return `1 run in ${branch}`;
       },
       // Nothing finished by default, so `/prune` runs and says so without a
       // question; the test about the question hands over entries of its own.
@@ -514,27 +500,6 @@ describe("describePending", () => {
     // head before `y` is pressed and a `1 have` is a sentence you re-read.
     expect(under(2).text).toContain("2 have uncommitted changes");
     expect(under(2).colour).toBe(theme.danger);
-  });
-
-  /**
-   * The one question here that grants rather than takes, and the only one whose
-   * text is doing the work: `y` means "I have read this", so the thing read has
-   * to be the line itself rather than a description of it.
-   */
-  test("`/open` on an unread line quotes it, names the file, and asks in amber", () => {
-    const target = {
-      kind: "trust-open",
-      summary: summary({ dir: "feat/login" }),
-      waiting: { command: "code .", files: ["main/.grove.toml"] },
-    } as const;
-
-    expect(describePending(target)).toEqual({
-      text: "open feat/login with `code .`? nobody here has read main/.grove.toml",
-      colour: theme.warn,
-    });
-    // Amber, not red: nothing is being thrown away, and the red is what says
-    // "this keeps no copy" everywhere else on this prompt.
-    expect(describePending(target).colour).not.toBe(theme.danger);
   });
 
   test("`s` counts the commits it would rewrite, names where they go, and asks in amber", () => {
@@ -1154,38 +1119,7 @@ describe("the add prompt", () => {
     expect(calls.added).toEqual([{ branch: "feat/chat", from: undefined }]);
   });
 
-  /**
-   * The price of a configuration that travels with the project: `copy` and
-   * `link` move files already on the disk, and a command came in with a pull.
-   * `grove add` on the command line has to behave the same in a pipe as under a
-   * terminal, so it prints them and skips; the screen just made the worktree
-   * itself, so it runs them right after, the way `--trust` would.
-   */
-  test("`a` asks before running the new worktree setup", async () => {
-    const { service, calls } = stub({
-      pendingCommands: async () => ["bun install", "./scripts/postinstall.sh"],
-    });
-    const ui = await opened_with(service);
-
-    ui.stdin.write("a");
-    await settled(ui, (frame) => frame.includes("new branch"));
-    await press(ui, "feat/new");
-    await settled(ui, (frame) => frame.includes("feat/new"));
-    await press(ui, keys.enter);
-    await settled(ui, (frame) => frame.includes("approve:"));
-    expect(calls.trusted).toEqual([]);
-    await press(ui, "y");
-    await settled(ui, (frame) => frame.includes("1 run in"));
-
-    // The worktree was made, and the commands ran right after it — nothing
-    // asked, because the keystroke that made it was the asking.
-    expect(calls.added).toEqual([{ branch: "feat/new", from: undefined }]);
-    expect(calls.trusted).toEqual(["feat/new"]);
-  });
-
-  // Every ordinary repository: no file, or one whose commands already ran as
-  // part of `add` itself.
-  test("nothing runs a second time when nothing is waiting", async () => {
+  test("`a` finishes without a separate setup approval", async () => {
     const { service, calls } = stub();
     const ui = await opened_with(service);
 
@@ -1194,9 +1128,11 @@ describe("the add prompt", () => {
     await press(ui, "feat/new");
     await settled(ui, (frame) => frame.includes("feat/new"));
     await press(ui, keys.enter);
-    await settled(ui, (frame) => frame.includes("added feat/new"));
+    const frame = await settled(ui, (frame) => IN_LIST(frame) && frame.includes("added feat/new"));
 
-    expect(calls.trusted).toEqual([]);
+    expect(frame).not.toContain("approve:");
+    expect(calls.added).toEqual([{ branch: "feat/new", from: undefined }]);
+    expect(calls.filledIn).toEqual([]);
   });
 });
 
@@ -1421,8 +1357,6 @@ describe("the keys", () => {
         sync: refuse,
         checkoutPr: refuse,
         pullRequests: async () => [pullRequest(42)],
-        // This must not replace the discard question after a failed checkout.
-        pendingCommands: async () => ["bun install"],
       });
       const ui = await opened_with(service, { columns: 160 });
       await toLogin(ui);
@@ -1454,7 +1388,6 @@ describe("the keys", () => {
       await press(ui, "y");
       await settled(ui, (frame) => frame.includes("updated PR; local work backed up"));
       expect(calls.replacedReviews).toEqual([reviews]);
-      expect(calls.trusted).toEqual([]);
     },
   );
 
@@ -1510,7 +1443,7 @@ describe("the keys", () => {
     await run(ui, "open");
     await settled(ui, (frame) => IN_LIST(frame) && frame.includes("opened"));
 
-    expect(calls.opened).toEqual([{ target: "/repo/feat/login", trust: false }]);
+    expect(calls.opened).toEqual([{ target: "/repo/feat/login" }]);
 
     // One of the two commands behind the slash that are aimed at a row, so it
     // is also one of the two that can be aimed at something that is not one.
@@ -1519,55 +1452,7 @@ describe("the keys", () => {
     await run(ui, "open");
     await settled(ui, IN_LIST);
 
-    expect(calls.opened).toEqual([{ target: "/repo/feat/login", trust: false }]);
-  });
-
-  /**
-   * The gap this closes: a clone whose `.grove.toml` nobody has read here had
-   * no way to read it. `/open` reported the refusal the command line reports
-   * and stopped there, and the only way through was to leave for a terminal and
-   * type `grove open --trust` — on the one surface that could have shown the
-   * line and asked.
-   */
-  test("`/open` on a line nobody has read asks with the line, and `y` trusts it", async () => {
-    const { service, calls } = stub({
-      pendingOpen: async () => ({ command: "code .", files: ["main/.grove.toml"] }),
-    });
-    const ui = await opened_with(service);
-
-    await toLogin(ui);
-    await run(ui, "open");
-    const asked = await settled(ui, (frame) => frame.includes("nobody here has read"));
-
-    // The command itself, because that is what `y` agrees to: a prompt that
-    // said "an untrusted line" would be asking somebody to trust a description.
-    expect(asked).toContain("open feat/login with `code .`?");
-    expect(asked).toContain("main/.grove.toml");
-    expect(asked).toContain("y trust and open");
-    // Nothing has run yet — the question is asked before the line is.
-    expect(calls.opened).toEqual([]);
-
-    ui.stdin.write("y");
-    await settled(ui, (frame) => frame.includes("opened /repo/feat/login"));
-
-    expect(calls.opened).toEqual([{ target: "/repo/feat/login", trust: true }]);
-  });
-
-  test("`n` on that question leaves the line untrusted and nothing opened", async () => {
-    const { service, calls } = stub({
-      pendingOpen: async () => ({ command: "code .", files: ["main/.grove.toml"] }),
-    });
-    const ui = await opened_with(service);
-
-    await toLogin(ui);
-    await run(ui, "open");
-    await settled(ui, (frame) => frame.includes("nobody here has read"));
-
-    ui.stdin.write("n");
-    await settled(ui, IN_LIST);
-
-    // Not opened without trust either: an answer of `n` is not a quieter `y`.
-    expect(calls.opened).toEqual([]);
+    expect(calls.opened).toEqual([{ target: "/repo/feat/login" }]);
   });
 
   test("`/setup` fills the row under the cursor in again, and does nothing on a folder", async () => {
@@ -1817,7 +1702,6 @@ describe("the keys", () => {
   test("the picker moves with the arrows, stops at both ends, and enter checks one out", async () => {
     const { service, calls } = stub({
       pullRequests: async () => [pullRequest(12), pullRequest(34)],
-      pendingCommands: async () => ["bun install"],
     });
     const ui = await opened_with(service);
 
@@ -1834,15 +1718,11 @@ describe("the keys", () => {
     await settled(ui, (frame) => /▸ +34/.test(frame));
 
     await press(ui, keys.enter);
-    await settled(ui, (frame) => frame.includes("approve:"));
-    expect(calls.trusted).toEqual([]);
-    await press(ui, "y");
-    await settled(ui, (frame) => frame.includes("1 run in"));
+    const frame = await settled(ui, (frame) => IN_LIST(frame) && frame.includes("added pr/34"));
+    expect(frame).not.toContain("approve:");
 
     expect(calls.checkedOut).toEqual([34]);
-    // The file's commands run after the worktree exists, under the name the
-    // checkout gave it — `pr/<n>`, not the branch the pull request came from.
-    expect(calls.trusted).toEqual(["pr/34"]);
+    expect(calls.filledIn).toEqual([]);
   });
 
   /**

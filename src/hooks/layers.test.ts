@@ -1,20 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { entryExists } from "../core/fs.ts";
-import { pendingCommands } from "./command.ts";
+
 import { HOOKS_FILE, LOCAL_HOOKS_FILE, platformKeyFor } from "./config.ts";
-import { runSetup } from "./setup.ts";
+import { fingerprintOf } from "./fingerprint.ts";
 import { repoHooks } from "./source.ts";
 import { lines, refusalFromRun, setUp, withRepo } from "./test-utils.ts";
-import { fingerprintOf, trust } from "./trust.ts";
 
 /**
  * The three files, and what stacking them means.
  *
  * `config.test.ts` is about one file's contents; this is about which file a
- * line came from and what follows from that. Two things follow, and they are
- * the whole subject here: what the merged answer is, and which half of it the
- * trust gate is holding.
+ * line came from, which values win, and which commands run.
  */
 
 /** The `open` key for the machine this is running on — the only one that runs. */
@@ -34,7 +31,7 @@ describe("layers", () => {
       // not need to write.
       expect(hooks.copy).toEqual(["certs"]);
       expect(lines(hooks.commands)).toEqual(["false"]);
-      expect(hooks.layers.map((layer) => layer.gated)).toEqual([false, true, false]);
+      expect(hooks.layers.map((layer) => layer.tracked)).toEqual([false, true, false]);
     });
   });
 
@@ -168,124 +165,73 @@ describe("which file a command came from", () => {
   });
 });
 
-describe("the gate the layers answer to", () => {
-  test("a file of your own runs without being agreed to", async () => {
+describe("running layered configuration", () => {
+  test("combines project file copies with local commands", async () => {
     await withRepo(async (fixture) => {
-      await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
-
-      const result = await setUp(fixture);
-
-      expect(result.untrusted).toBe(false);
-      expect(result.ran).toEqual(["touch mine.txt"]);
-      expect(await entryExists(join(fixture.worktree, "mine.txt"))).toBe(true);
-      // Nothing to be shown and asked about, so the screen asks nothing.
-      expect(await pendingCommands(fixture.repo)).toEqual([]);
-    });
-  });
-
-  test("a project file that runs nothing does not gate the one that does", async () => {
-    await withRepo(async (fixture) => {
-      // The committed file exists and is untrusted; it just has no commands in
-      // it, so there is nothing for trust to be about.
       await fixture.configure('[setup]\ncopy = [".env"]\n');
       await Bun.write(join(fixture.trunk, ".env"), "SECRET=1\n");
       await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
 
       const result = await setUp(fixture);
 
-      expect(result.untrusted).toBe(false);
       expect(result.copied).toEqual([".env"]);
       expect(result.ran).toEqual(["touch mine.txt"]);
+      expect(await entryExists(join(fixture.worktree, "mine.txt"))).toBe(true);
     });
   });
 
-  test("a run of your own replaces the project's, and the gate goes with it", async () => {
+  test("a local run replaces the project's commands", async () => {
     await withRepo(async (fixture) => {
       await fixture.configure('[setup]\nrun = ["touch theirs.txt"]\n');
       await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
 
       const result = await setUp(fixture);
 
-      // Nothing that a pull could have written is left to run, so there is
-      // nothing to agree to: the project's line is not held back, it is gone.
-      expect(result.untrusted).toBe(false);
       expect(result.ran).toEqual(["touch mine.txt"]);
       expect(await entryExists(join(fixture.worktree, "theirs.txt"))).toBe(false);
-      expect(fixture.log.warnings.join("\n")).not.toContain("not been trusted");
+      expect(await entryExists(join(fixture.worktree, "mine.txt"))).toBe(true);
     });
   });
 
-  test("a run the project still owns waits, whatever else your file says", async () => {
+  test("runs project commands when local configuration overrides another key", async () => {
     await withRepo(async (fixture) => {
       await fixture.configure('[setup]\nrun = ["touch theirs.txt"]\n');
-      // Speaks for `copy` and not for `run`, so the project's command is still
-      // the one that would run, and still the one to be read first.
       await fixture.configureLocal("[setup]\ncopy = []\n");
 
       const result = await setUp(fixture);
 
-      expect(result.untrusted).toBe(true);
-      expect(result.ran).toEqual([]);
-      expect(fixture.log.warnings.join("\n")).toContain(`1 command in main/${HOOKS_FILE}`);
+      expect(result.ran).toEqual(["touch theirs.txt"]);
+      expect(await entryExists(join(fixture.worktree, "theirs.txt"))).toBe(true);
+      expect(fixture.log.warnings).toEqual([]);
     });
   });
 
-  test("a committed local file is gated like any other file git could hand you", async () => {
-    await withRepo(async (fixture) => {
-      await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
-      await fixture.commitTrunk();
-
-      const result = await setUp(fixture);
-
-      expect(result.untrusted).toBe(true);
-      expect(fixture.log.warnings.join("\n")).toContain(`1 command in main/${LOCAL_HOOKS_FILE}`);
-    });
-  });
-
-  test("one trust covers both gated files, and an edit to either withdraws it", async () => {
+  test("committed local commands and subsequent edits run immediately", async () => {
     await withRepo(async (fixture) => {
       await fixture.configure('[setup]\nrun = ["touch theirs.txt"]\n');
       await fixture.configureLocal('[setup]\nrun = ["touch mine.txt"]\n');
       await fixture.commitTrunk();
+      const before = await repoHooks(fixture.repo);
 
-      const hooks = await repoHooks(fixture.repo);
-      await trust(fixture.repo.gitDir, hooks.fingerprint ?? "");
+      expect((await setUp(fixture)).ran).toEqual(["touch mine.txt"]);
 
-      const ran = await setUp(fixture);
-      // Both files are gated and both are covered, and the higher one is still
-      // the one that says what runs.
-      expect(ran.ran).toEqual(["touch mine.txt"]);
+      await fixture.configureLocal('[setup]\nrun = ["touch changed.txt"]\n');
+      const again = await setUp(fixture);
 
-      // What a `git pull` does to the second file rather than the first.
-      await fixture.configureLocal('[setup]\nrun = ["touch surprise.txt"]\n');
-      const again = await runSetup(
-        fixture.repo,
-        { path: fixture.worktree },
-        {},
-        fixture.log.reporter,
-      );
-
-      expect(again.untrusted).toBe(true);
-      expect(await entryExists(join(fixture.worktree, "surprise.txt"))).toBe(false);
+      expect(again.ran).toEqual(["touch changed.txt"]);
+      expect(await entryExists(join(fixture.worktree, "changed.txt"))).toBe(true);
+      expect((await repoHooks(fixture.repo)).fingerprint).not.toBe(before.fingerprint);
     });
   });
 
-  test("one gated file still fingerprints its own text, so an old record stands", async () => {
+  test("a single tracked layer keeps its existing setup fingerprint", async () => {
     await withRepo(async (fixture) => {
       const text = '[setup]\nrun = ["touch theirs.txt"]\n';
       await fixture.configure(text);
-      // Written before layers existed, and about the committed file alone.
-      await trust(fixture.repo.gitDir, fingerprintOf(text));
-
-      // The machine's own layer joins in without disturbing that: it is not
-      // gated, so it is not part of what the record covers — and it is under
-      // the project's file, which is why its `run` is the one that gives way.
       await fixture.configureGlobal('[setup]\nrun = ["touch mine.txt"]\n');
 
-      const result = await setUp(fixture);
-
-      expect(result.untrusted).toBe(false);
-      expect(result.ran).toEqual(["touch theirs.txt"]);
+      expect((await repoHooks(fixture.repo)).fingerprint).toBe(fingerprintOf(text));
+      expect((await setUp(fixture)).ran).toEqual(["touch theirs.txt"]);
     });
   });
 });

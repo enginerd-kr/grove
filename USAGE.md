@@ -35,9 +35,9 @@ grove clone https://github.com/org/repo.git
 cd repo
 ```
 
-This creates the default branch's worktree and applies project setup. When setup
-commands appear for the first time, read them and press `y` to approve. To prepare
-the environment later, leave them unapproved and run `grove setup main` when ready.
+This creates the default branch's worktree and runs project setup automatically.
+To prepare the environment later, clone with `--no-setup` and run
+`grove setup main` when ready.
 
 This guide uses a repository whose default branch is `main`. Substitute `master`
 or your repository's actual name where needed. The word `trunk` in the docs and
@@ -239,9 +239,8 @@ background fetch and any failure. `/refresh` rereads local worktrees immediately
 
 ## Project setup
 
-If the project already has `.grove.toml`, read and approve the commands it asks
-to run. This section is for the person configuring the project's preparation
-steps.
+If the project already has `.grove.toml`, its setup runs automatically. This
+section explains how to configure the project's preparation steps.
 
 ### Start with a minimal configuration
 
@@ -279,16 +278,17 @@ Install dependencies separately in each worktree. Branches may have different
 lockfiles; use your package manager's download cache instead of sharing
 `node_modules`.
 
-### Approving commands
+### Running commands
 
-New project commands are shown for approval. Press `y` in the terminal or the
-interactive screen to save approval for this repository. The same content will
-not prompt again. If the project configuration changes to content you have not
-approved, grove asks again. `copy` and `link` apply before command approval.
+`clone`, `add`, and `pr` apply setup automatically, including configured commands.
+The terminal, interactive screen, pipes, `--json`, and `--headless` use the same
+behavior without approval prompts. Edits to the configuration apply on the next
+setup run. Configured `open` and teardown commands also run without approval.
 
-If you deferred setup, run `grove setup feat/login` to try again. `--trust` skips
-the approval question when you have already read the commands. In a pipe or with
-`--json` or `--headless`, grove does not ask and skips unapproved commands.
+Use `--no-setup` to skip setup when creating a worktree, then run
+`grove setup feat/login` when ready. Use `--no-teardown` to skip cleanup commands
+when removing a worktree. The legacy `--trust` flag is accepted for compatibility
+and has no effect.
 
 ### Setup status and retries
 
@@ -304,7 +304,7 @@ grove setup --all
 
 | State | Meaning and next step |
 | --- | --- |
-| `pending` | Setup was skipped, commands lack approval, or a copy source is missing. Read the report and run `grove setup <branch>` |
+| `pending` | Setup was skipped or a copy source is missing. Read the report and run `grove setup <branch>` |
 | `running` | Setup is in progress |
 | `failed` | Setup failed. Fix the cause and run it again |
 | `ready` | Setup completed. No separate badge appears in the list |
@@ -354,8 +354,7 @@ By default, both project files are read from `main/`. A branch with
 When several files set the same key, the higher-priority file wins. Lists such as
 `run`, `copy`, and `link` are replaced, not combined; `env` is overridden per
 variable. For example, `run = []` under `[setup]` in `.grove.local.toml` disables
-the project's setup commands. Global settings and local settings not tracked by
-Git apply without separate approval.
+the project's setup commands.
 
 Set your editor in `~/.config/grove/config.toml`:
 
@@ -547,7 +546,7 @@ In the CLI, enter the repository or use `-C <path>` to select it.
 
 | Situation | Next step |
 | --- | --- |
-| A worktree exists but installation did not run | Run `grove setup <branch>` and approve commands or inspect the failure |
+| A worktree exists but installation did not run | Run `grove setup <branch>` and inspect any command failure |
 | `.env` is reported missing | Prepare the source file in the default branch's worktree, then rerun setup |
 | Changes to a branch's `.grove.toml` are not applied | Use `grove setup <branch> --config-source worktree` |
 | `setup stale` appears | Configuration or dependency files changed. Run `grove setup <branch>` |
@@ -697,7 +696,7 @@ regardless of messages printed to stderr.
 | Command | Useful fields |
 | --- | --- |
 | `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `base`, `baseSha`, `setup` |
-| `add` setup | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
+| `add` setup | `copied`, `linked`, `ran`, `missing`, `failed` |
 | `list` | One entry per worktree: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale`, `setupState`, `review` |
 | `propose` | `url`, `number`, `base`, `created` (false if it already existed), `pushed`; with `--stack`, an array in parent-first order |
 | `stack` | `trunk` and ordered `rows[]`: `branch`, `parent`, `depth`, `dir` (absent without a worktree), `ahead`/`behind` against the parent, `exists`, `current` |
@@ -705,21 +704,16 @@ regardless of messages printed to stderr.
 | `sync` | Per-target results. Exit code `4` means a push or sync was refused because of changes or another condition; read the error too |
 | `prune -n` | `entries[]`, each with `dir`, `reason`, and `skipped` when kept |
 
-`setup.untrusted: true` means `.grove.toml` commands were shown but not run because
-that version has not been approved on this machine. `setup.failed` is set when
-a command exits nonzero. The worktree exists in either case. Skipping unapproved
-commands alone does not cause a failure exit code, so check `setup.untrusted` too.
-Setup command failures in `clone`, `add`, `pr`, and `setup` produce exit code `9`.
+`setup.failed` is set when a command exits nonzero. The worktree remains available
+so you can fix the cause and retry. Setup command failures in `clone`, `add`,
+`pr`, and `setup` produce exit code `9`.
 
-### Approval is a user's decision
+### Automating setup
 
-Before automating, have the user read and approve the project commands. Answer
-`y` in the screen or run `grove setup main --trust` after reading them. Approved
-configuration with the same content also applies when an agent creates a
-worktree. Your task instructions can prohibit an agent from adding `--trust`
-on its own to run unapproved commands.
+Setup runs automatically when an agent creates a worktree, including with
+`--json` or `--headless`. Use `--no-setup` when the task needs to defer setup.
 
-A typical agent loop after approval:
+A typical agent loop:
 
 ```bash
 grove add agents/refactor --json         # Create; read `path` from stdout
@@ -738,8 +732,7 @@ An example policy to paste into `AGENTS.md` or `CLAUDE.md`:
 - Create a worktree for each task with `grove add agents/<task> --json` and work
   only inside the returned `path`.
 - Treat a nonzero exit code as failure. Do not infer success from log messages.
-- Report `setup.untrusted` in the result. Never add `--trust`; approval of setup
-  files is the user's decision.
+- Report setup failures and retry with `grove setup <branch>` after fixing the cause.
 - Do not run `grove remove`, `grove prune`, `--delete-branch`, `--force`, or
   `grove reset` unless the user requested that cleanup.
 ```

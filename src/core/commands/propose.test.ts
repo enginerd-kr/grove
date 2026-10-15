@@ -41,7 +41,7 @@ async function branch(forge: Forge, name: string, on?: string): Promise<string> 
   const result = await addWorktree(
     forge.repo,
     forge.repo.root,
-    { branch: name, on, fetch: false, push: false, setup: false, trust: false, take: false },
+    { branch: name, on, fetch: false, push: false, setup: false, take: false },
     recorder().reporter,
   );
 

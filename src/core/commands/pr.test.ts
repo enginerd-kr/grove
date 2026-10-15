@@ -72,17 +72,16 @@ type PrCall = {
    * passes it explicitly.
    */
   readonly setup?: boolean;
-  readonly trust?: boolean;
 };
 
 /** Checks a pull request out, and hands back whichever of the two outcomes happened. */
 function attemptPr(
   forge: Forge,
   pr: string,
-  { setup = false, trust = false }: PrCall = {},
+  { setup = false }: PrCall = {},
 ): Promise<Attempt<PrResult>> {
   return attempt((reporter) =>
-    checkoutPullRequest(forge.repo, forge.repo.root, { pr, setup, trust }, reporter),
+    checkoutPullRequest(forge.repo, forge.repo.root, { pr, setup }, reporter),
   );
 }
 
@@ -650,7 +649,7 @@ describe.skipIf(!POSIX)("running it again", () => {
             checkoutPullRequest(
               forge.repo,
               forge.repo.root,
-              { pr: "42", setup: false, trust: false, replace },
+              { pr: "42", setup: false, replace },
               reporter,
             ),
           ),
@@ -735,32 +734,28 @@ run = ["sh -c 'echo ok > ran.txt'"]
     await seedGit(main, ["-c", "commit.gpgsign=false", "commit", "-m", "Add a setup file"]);
   }
 
-  test("fills the worktree in like add does — run waits on --trust, --no-setup skips the lot", async () => {
+  test("sets up pull request worktrees automatically unless --no-setup is given", async () => {
     await withForge(async (forge) => {
       await seedSetupFile(forge.repo.root);
       await forge.answer();
       await forge.propose("fix/crash", "one\n", "Fix the crash");
 
-      const untrusted = await pr(forge, "42", { setup: true });
+      const first = await pr(forge, "42", { setup: true });
 
-      expect(untrusted.setup?.copied).toEqual([".env"]);
-      expect(untrusted.setup?.linked).toEqual(["node_modules"]);
-      expect(untrusted.setup?.planned).toBe(3);
-      expect(await Bun.file(join(untrusted.path, ".env")).text()).toBe("SECRET=1\n");
-      // A `run` line in somebody else's pull request is code that arrived with
-      // a fetch, which is exactly the case the trust gate is there for.
-      expect(untrusted.setup?.untrusted).toBe(true);
-      expect(untrusted.setup?.ran).toEqual([]);
-      expect(await pathExists(join(untrusted.path, "ran.txt"))).toBe(false);
+      expect(first.setup?.copied).toEqual([".env"]);
+      expect(first.setup?.linked).toEqual(["node_modules"]);
+      expect(first.setup?.planned).toBe(3);
+      expect(await Bun.file(join(first.path, ".env")).text()).toBe("SECRET=1\n");
+      expect(first.setup?.ran).toEqual(["sh -c 'echo ok > ran.txt'"]);
+      expect(await pathExists(join(first.path, "ran.txt"))).toBe(true);
 
       await forge.answer({ number: 43, headRefName: "fix/other" });
       await forge.propose("fix/other", "other\n", "Something else");
-      const trusted = await pr(forge, "43", { setup: true, trust: true });
+      const second = await pr(forge, "43", { setup: true });
 
-      expect(trusted.setup?.untrusted).toBe(false);
-      expect(trusted.setup?.ran).toEqual(["sh -c 'echo ok > ran.txt'"]);
-      expect(trusted.setup?.failed).toBeUndefined();
-      expect(await Bun.file(join(trusted.path, "ran.txt")).text()).toBe("ok\n");
+      expect(second.setup?.ran).toEqual(["sh -c 'echo ok > ran.txt'"]);
+      expect(second.setup?.failed).toBeUndefined();
+      expect(await Bun.file(join(second.path, "ran.txt")).text()).toBe("ok\n");
 
       await forge.answer({ number: 44, headRefName: "fix/third" });
       await forge.propose("fix/third", "third\n", "A third thing");

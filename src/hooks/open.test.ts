@@ -1,13 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { failureFor, pendingCommands } from "./command.ts";
+import { failureFor } from "./command.ts";
 import { HOOKS_FILE, platformKeyFor } from "./config.ts";
-import { pendingOpen } from "./open.ts";
-import { describeSetup, runSetup, trustAndRun } from "./setup.ts";
-import { repoHooks } from "./source.ts";
+
+import { describeSetup, runSetup } from "./setup.ts";
 import { NOT_OPENED, setUp, waitForEntry, withRepo } from "./test-utils.ts";
-import { trust } from "./trust.ts";
 
 /**
  * `[setup] open`, which is the one key here grove starts and then forgets.
@@ -32,9 +30,10 @@ describe("open", () => {
           `open = 'printf "%s|%s|%s" "$GREETING" "$(pwd)" "$GROVE_BRANCH" > opened.txt'\n`,
       );
 
-      const result = await trustAndRun(
+      const result = await runSetup(
         fixture.repo,
         { path: fixture.worktree, branch: fixture.branch },
+        {},
         fixture.log.reporter,
       );
 
@@ -59,9 +58,10 @@ describe("open", () => {
       // typo look exactly like an editor that opened.
       await fixture.configure('[setup]\nopen = "exit 4"\n');
 
-      const result = await trustAndRun(
+      const result = await runSetup(
         fixture.repo,
         { path: fixture.worktree },
+        {},
         fixture.log.reporter,
       );
 
@@ -77,9 +77,10 @@ describe("open", () => {
       await fixture.configure('[setup]\nopen = "sleep 30"\n');
 
       const startedAt = Date.now();
-      const result = await trustAndRun(
+      const result = await runSetup(
         fixture.repo,
         { path: fixture.worktree },
+        {},
         fixture.log.reporter,
       );
 
@@ -91,76 +92,14 @@ describe("open", () => {
     });
   });
 
-  test("waits for the same trust the commands wait for", async () => {
-    await withRepo(async (fixture) => {
-      await fixture.configure(OPENS);
-
-      const result = await setUp(fixture);
-
-      // No `run` in this file at all: the gate has to be counting `open`, or
-      // an editor would launch out of a file nobody had read.
-      expect(result.untrusted).toBe(true);
-      expect(result.opened).toBeUndefined();
-      expect(await waitForEntry(join(fixture.worktree, "opened.txt"), NOT_OPENED)).toBe(false);
-      expect(fixture.log.warnings.join("\n")).toContain("1 command in");
-      expect(fixture.log.warnings.join("\n")).toContain("--trust");
-    });
-  });
-
-  /**
-   * The same gate, asked rather than enforced — which is what a screen needs.
-   *
-   * `pendingCommands` covers the file's whole ask, at the moment `add` has just
-   * made a worktree. This is the one line, for the key that is aimed at one
-   * worktree on a day nothing was added: the screen has to be able to put the
-   * command in front of somebody before it runs, because reading it is the
-   * whole of what trust ever wanted.
-   */
-  test("the line waiting to be read is offered on its own, for a screen to show", async () => {
-    await withRepo(async (fixture) => {
-      await fixture.configure(OPENS);
-
-      const waiting = await pendingOpen(fixture.repo, { path: fixture.worktree });
-
-      expect(waiting?.command).toBe("touch opened.txt");
-      // Where to go and read it: the trunk's copy, which is the one that
-      // governs — there is a copy of that name in every worktree.
-      expect(waiting?.files).toEqual([`main/${HOOKS_FILE}`]);
-
-      const hooks = await repoHooks(fixture.repo);
-      await trust(fixture.repo.gitDir, hooks.fingerprint ?? "");
-
-      // Read here now, so there is nothing left to put a question in front of.
-      expect(await pendingOpen(fixture.repo, { path: fixture.worktree })).toBeUndefined();
-    });
-  });
-
-  test("a line out of your own file is not a thing to be asked about", async () => {
-    await withRepo(async (fixture) => {
-      // `.grove.local.toml` is untracked, so no pull could have written it and
-      // the gate is not in the way — asking here would be asking somebody to
-      // agree to what they typed themselves.
-      await fixture.configureLocal(OPENS);
-
-      expect(await pendingOpen(fixture.repo, { path: fixture.worktree })).toBeUndefined();
-    });
-  });
-
-  test("is offered with the commands, so the file's whole ask is on the screen", async () => {
-    await withRepo(async (fixture) => {
-      await fixture.configure('[setup]\nrun = ["bun install"]\nopen = "code ."\n');
-
-      expect(await pendingCommands(fixture.repo)).toEqual(["bun install", "code ."]);
-    });
-  });
-
   test("does not open onto a worktree whose setup failed", async () => {
     await withRepo(async (fixture) => {
       await fixture.configure('[setup]\nrun = ["exit 3"]\nopen = "touch opened.txt"\n');
 
-      const result = await trustAndRun(
+      const result = await runSetup(
         fixture.repo,
         { path: fixture.worktree },
+        {},
         fixture.log.reporter,
       );
 
@@ -174,8 +113,6 @@ describe("open", () => {
   test("says so rather than opening nothing quietly when there is no terminal", async () => {
     await withRepo(async (fixture) => {
       await fixture.configure(OPENS);
-      const hooks = await repoHooks(fixture.repo);
-      await trust(fixture.repo.gitDir, hooks.fingerprint ?? "");
 
       const result = await setUp(fixture, { open: false });
 
@@ -188,8 +125,6 @@ describe("open", () => {
   test("a worktree that vanished is a warning, not a failed add", async () => {
     await withRepo(async (fixture) => {
       await fixture.configure(OPENS);
-      const hooks = await repoHooks(fixture.repo);
-      await trust(fixture.repo.gitDir, hooks.fingerprint ?? "");
 
       // The failure that happens before the line runs at all: there is no
       // directory to run it in.
@@ -213,9 +148,10 @@ describe("open", () => {
       const elsewhere = process.platform === "win32" ? "macos" : "windows";
       await fixture.configure(`[setup.open]\n${elsewhere} = "touch opened.txt"\n`);
 
-      const result = await trustAndRun(
+      const result = await runSetup(
         fixture.repo,
         { path: fixture.worktree },
+        {},
         fixture.log.reporter,
       );
 
@@ -229,7 +165,7 @@ describe("open", () => {
     });
   });
 
-  test("the platform's own line is the one that is offered and the one that runs", async () => {
+  test("runs only the current platform's open command", async () => {
     await withRepo(async (fixture) => {
       const here = platformKeyFor(process.platform);
       const elsewhere = here === "macos" ? "linux" : "macos";
@@ -237,12 +173,10 @@ describe("open", () => {
         `[setup.open]\n${here} = "touch mine.txt"\n${elsewhere} = "touch theirs.txt"\n`,
       );
 
-      // One line read once: what is offered for trust is what will start.
-      expect(await pendingCommands(fixture.repo)).toEqual(["touch mine.txt"]);
-
-      const result = await trustAndRun(
+      const result = await runSetup(
         fixture.repo,
         { path: fixture.worktree },
+        {},
         fixture.log.reporter,
       );
 

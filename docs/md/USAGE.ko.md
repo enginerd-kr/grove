@@ -34,9 +34,8 @@ grove clone https://github.com/org/repo.git
 cd repo
 ```
 
-기본 브랜치 워크트리를 만들고 프로젝트 셋업을 적용합니다. 실행할 셋업 명령이
-처음 나타나면 내용을 확인하고 `y`로 승인하세요. 나중에 준비하려면 이 단계에서
-승인하지 않고 `grove setup main`으로 다시 실행할 수 있습니다.
+기본 브랜치 워크트리를 만들고 프로젝트 셋업을 자동으로 실행합니다. 나중에
+준비하려면 `--no-setup`으로 클론한 뒤 `grove setup main`을 실행하세요.
 
 이 설명서는 기본 브랜치가 `main`인 저장소를 예로 듭니다. `master` 등 다른
 이름을 쓰는 저장소에서는 `main`을 실제 이름으로 바꾸세요. 문서와 명령 옵션의
@@ -234,9 +233,8 @@ abort하며, 오류에 표시된 상태와 안내를 확인하세요. 기본 브
 
 ## 프로젝트 셋업
 
-이미 `.grove.toml`이 있는 프로젝트를 사용한다면 실행할 명령을 확인하고
-승인하면 됩니다. 프로젝트의 준비 과정을 자동화하려는 사람이 이 절의 설정을
-작성합니다.
+이미 `.grove.toml`이 있는 프로젝트는 설정된 셋업을 자동으로 실행합니다.
+이 절에서는 프로젝트의 준비 과정을 설정하는 방법을 설명합니다.
 
 ### 최소 설정부터 시작하기
 
@@ -272,16 +270,17 @@ run = ["bun install"]
 의존성은 워크트리별로 설치하세요. 브랜치마다 lockfile이 다를 수 있으므로
 `node_modules`를 공유하는 대신 패키지 관리자의 다운로드 캐시를 활용합니다.
 
-### 실행 승인
+### 명령 실행
 
-처음 보는 프로젝트 명령은 내용을 보여 주고 승인을 받습니다. 터미널이나
-대화형 화면에서 `y`를 누르면 이 저장소에 승인이 저장되고, 같은 내용은 다음부터
-묻지 않습니다. 프로젝트 설정이 바뀌어 아직 승인하지 않은 내용이 되면 다시
-확인합니다. `copy`와 `link`는 명령 승인 전에도 적용됩니다.
+`clone`, `add`, `pr`은 설정된 명령을 포함한 셋업을 자동으로 실행합니다.
+터미널, 대화형 화면, 파이프, `--json`, `--headless`에서 모두 승인 질문 없이
+동일하게 실행됩니다. 설정을 수정하면 다음 셋업에 적용됩니다.
+설정된 `open`과 teardown 명령도 별도 승인 없이 실행합니다.
 
-셋업을 미뤘다면 `grove setup feat/login`으로 다시 실행하세요.
-`--trust`는 명령 내용을 이미 확인했을 때 승인 질문을 생략하는 옵션입니다.
-파이프, `--json`, `--headless`에서는 질문하지 않고 미승인 명령을 건너뜁니다.
+워크트리를 만들 때 셋업을 미루려면 `--no-setup`을 사용하고, 준비됐을 때
+`grove setup feat/login`을 실행하세요. 워크트리를 제거할 때 정리 명령을
+건너뛰려면 `--no-teardown`을 사용합니다. 기존 `--trust` 옵션은 호환성을 위해
+받아들이지만 동작에는 영향을 주지 않습니다.
 
 ### 셋업 상태와 재실행
 
@@ -296,7 +295,7 @@ grove setup --all
 
 | 상태 | 의미와 할 일 |
 | --- | --- |
-| `pending` | 셋업 생략, 미승인 명령 또는 복사 원본 누락. 안내를 확인하고 `grove setup <branch>` 실행 |
+| `pending` | 셋업 생략 또는 복사 원본 누락. 안내를 확인하고 `grove setup <branch>` 실행 |
 | `running` | 셋업 진행 중 |
 | `failed` | 셋업 실패. 오류 원인을 해결하고 다시 실행 |
 | `ready` | 셋업 완료. 목록에는 별도 배지를 붙이지 않음 |
@@ -345,8 +344,7 @@ grove setup --all
 같은 키가 여러 파일에 있으면 우선순위가 높은 파일의 값을 사용합니다.
 `run`, `copy`, `link` 목록은 합치지 않고 교체하며, `env`는 변수별로 덮어씁니다.
 예를 들어 `.grove.local.toml`의 `[setup]`에 `run = []`을 쓰면 프로젝트의
-셋업 명령을 끕니다. 전역 설정과 Git에서 추적하지 않는 로컬 설정은 별도
-승인 없이 적용됩니다.
+셋업 명령을 끕니다.
 
 개인 에디터는 `~/.config/grove/config.toml`에 설정할 수 있습니다.
 
@@ -535,7 +533,7 @@ grove clone git@github.com:you/repo.git --upstream git@github.com:them/repo.git
 
 | 상황 | 다음에 할 일 |
 | --- | --- |
-| 워크트리는 생겼는데 설치가 안 됨 | `grove setup <branch>` 실행 후 명령 승인 또는 실패 원인 확인 |
+| 워크트리는 생겼는데 설치가 안 됨 | `grove setup <branch>` 실행 후 명령 실패 원인 확인 |
 | `.env`를 찾을 수 없다고 나옴 | 기본 브랜치 워크트리에 복사 원본 파일 준비 후 `setup` 재실행 |
 | 브랜치에서 바꾼 `.grove.toml`이 적용되지 않음 | `grove setup <branch> --config-source worktree` 사용 |
 | `setup stale` 표시 | 설정이나 의존성 파일이 바뀜. `grove setup <branch>` 실행 |
@@ -685,7 +683,7 @@ push하지 않습니다. 원격보다 뒤처졌다면 먼저 `sync`로 동기화
 | 명령 | 읽을 만한 필드 |
 | --- | --- |
 | `add` | `path`, `dir`, `branch`, `source` (`existing`/`remote`/`new`), `alreadyPresent`, `base`, `baseSha`, `setup` |
-| `add`의 `setup` | `copied`, `linked`, `ran`, `missing`, `untrusted`, `failed` |
+| `add`의 `setup` | `copied`, `linked`, `ran`, `missing`, `failed` |
 | `list` | 워크트리마다 한 줄: `dir`, `branch`, `dirty`, `ahead`, `behind`, `finished`, `setupStale`, `setupState`, `review` |
 | `propose` | `url`, `number`, `base`, `created` (이미 있었으면 false), `pushed`; `--stack`이면 이것들의 배열, 아래에서 위로 |
 | `stack` | `trunk`, 그리고 위에서 아래로 `rows[]`, 각각 `branch`, `parent`, `depth`, `dir` (워크트리가 없으면 없음), 부모 대비 `ahead`/`behind`, `exists`, `current` |
@@ -693,22 +691,17 @@ push하지 않습니다. 원격보다 뒤처졌다면 먼저 `sync`로 동기화
 | `sync` | 대상별 결과. 종료 코드 `4`는 push 거부 또는 변경 등으로 동기화를 거부한 경우이므로 오류 내용도 확인 |
 | `prune -n` | `entries[]`, 각각 `dir`, `reason`, 그리고 남는 경우 `skipped` |
 
-`setup.untrusted: true`는 `.grove.toml`의 명령이 출력만 되고 실행되지
-않았다는 뜻입니다. 이 머신에서 아무도 그 버전의 파일을 승인하지 않았기
-때문입니다. `setup.failed`는 명령이 0이 아닌 코드로 끝났을 때 설정되며,
-워크트리는 어느 쪽이든 존재합니다. 미승인 명령을 건너뛴 것만으로는 실패 코드가
-되지 않으므로 `setup.untrusted`도 확인하세요. `clone`, `add`, `pr`, `setup`의
-셋업 명령이 실패하면 종료 코드 `9`로 알립니다.
+`setup.failed`는 명령이 0이 아닌 코드로 끝났을 때 설정됩니다. 워크트리는
+남아 있으므로 원인을 해결한 뒤 셋업을 다시 실행할 수 있습니다.
+`clone`, `add`, `pr`, `setup`의 셋업 명령이 실패하면 종료 코드 `9`로 알립니다.
 
-### 신뢰는 사람의 결정입니다
+### 셋업 자동화
 
-자동화 전에 사용자가 프로젝트 명령을 확인하고 승인하세요. 화면의 질문에
-`y`로 답하거나, 내용을 확인한 뒤 `grove setup main --trust`를 실행합니다.
-같은 내용으로 승인된 설정은 에이전트가 워크트리를 만들 때도 적용됩니다.
-에이전트가 임의로 `--trust`를 붙여 미승인 명령을 실행하지 않도록 작업 지침에
-명시할 수 있습니다.
+에이전트가 워크트리를 만들 때도 셋업은 자동으로 실행됩니다.
+`--json`과 `--headless`에서도 동일합니다. 셋업을 미루는 작업에는
+`--no-setup`을 사용하세요.
 
-파일이 승인된 뒤의 전형적인 에이전트 루프:
+전형적인 에이전트 작업 흐름:
 
 ```bash
 grove add agents/refactor --json         # 생성; stdout에서 `path` 읽기
@@ -727,8 +720,7 @@ grove remove agents/refactor --delete-branch
 - 작업마다 `grove add agents/<task> --json`으로 워크트리를 만들고, 반환된
   `path` 안에서만 작업한다.
 - 0이 아닌 종료 코드는 실패다. 로그에서 성공을 읽어내지 않는다.
-- 결과에 `setup.untrusted`가 있으면 보고한다. `--trust`는 절대 넘기지
-  않는다. 셋업 파일의 승인은 사용자의 결정이다.
+- 셋업 실패를 보고하고, 원인을 해결한 뒤 `grove setup <branch>`로 다시 실행한다.
 - 사용자가 그 정리를 요청하지 않았다면 `grove remove`, `grove prune`,
   `--delete-branch`, `--force`, `grove reset`을 실행하지 않는다.
 ```
