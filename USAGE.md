@@ -538,9 +538,10 @@ New worktrees then appear beside the repository with names such as
 `myapp-feat-login`. Use `grove path feat/login` to get the path.
 
 Running `grove` in an empty folder asks for a URL and makes that folder the
-workspace. In a non-empty folder it clones into a subfolder. When several
-repositories are available, a selection screen appears. In the CLI, enter the
-repository or use `-C <path>` to select it.
+workspace, even when a repository exists above or beside it. With `-C <path>`,
+this applies to the specified folder. In a non-empty folder it clones into a
+subfolder. When several repositories are available, a selection screen appears.
+In the CLI, enter the repository or use `-C <path>` to select it.
 
 ## Troubleshooting
 
