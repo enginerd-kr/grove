@@ -4,6 +4,12 @@ The newest entry is what the app's banner shows as "What's new", and what a
 release ships as its notes. Entries begin `## <version>`; only `- ` bullets
 directly under one are read.
 
+## 0.6.0 — 2026-10-22
+
+- Setup commands now run automatically in the terminal, interactive screen, pipes, `--json`, and `--headless`, without approval prompts. Configured `open` and teardown commands also run without approval. Use `--no-setup` when creating a worktree to defer setup, and `--no-teardown` when removing one to skip cleanup. The legacy `--trust` flag is accepted but has no effect; JSON setup reports no longer include `untrusted`.
+- Sync and rebase preserve the actual cause of Git failures: unreadable checkouts, locks, hook failures, and push failures are no longer mistaken for divergence or content conflicts. Existing Git operations are left alone, and failed rollback reports the remaining state and recovery instructions. Sync stops publishing if a rebase hook leaves changes; `sync --all` continues independent worktrees and skips children whose parent could not sync. Fetch failures warn when available refs may be stale.
+- Starting the interactive screen in an empty folder now offers to create a workspace there, even when a repository exists above or beside it. The same behavior applies to a folder selected with `-C`.
+
 ## 0.5.6 — 2026-10-07
 
 - PR review sync verifies the fetched commit against the PR's current head, so a stale branch ref after a force-push can no longer report a successful update while leaving local files unchanged. Fetches use a private temporary ref and fall back to the PR's canonical head; a mismatched revision is reported instead of accepted.
